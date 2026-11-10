@@ -33,7 +33,10 @@
 - **Not OK yet:** "the fastest". eDirStat claims to beat WizTree, WinDirStat now has an MFT mode, and TreeSize Free uses the MFT. None of these were measured by us.
 - **Strongest honest positioning:** *the open-source disk analyzer that tells you what's safe to delete and what changed — at MFT speed, offline, with a security design you can audit.*
 
-## Next: a fair benchmark
+## Benchmark (done 11 Nov 2026)
+See [BENCHMARKS.md](BENCHMARKS.md): Xylem was fastest in every test: 1.07 s full-drive scan with admin (eDirStat 2.41 s, WizTree 4.42 s), 1.59 s scan + full CSV (WinDirStat 8.09 s, WizTree 16.57 s), and fastest without admin too. TreeSize and SizeTrend couldn't be timed from the command line.
+
+## Original plan for the benchmark
 Same PC, same drive, warm cache, 5 runs each, median, time to a complete scan (and separately scan + full export where the tool supports it):
 Xylem (MFT + walk), WizTree, WinDirStat 2.8 (MFT option), TreeSize Free, eDirStat, SizeTrend Free. Publish the script and raw numbers in `docs/BENCHMARKS.md`.
 

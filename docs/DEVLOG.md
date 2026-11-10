@@ -448,3 +448,17 @@ User asked: "go for next step and also add the security measures ... and think o
   - Outputs: `docs/logo/xylem-logo-master.png` (1024) and `xylem-logo-512.png`; `crates/native/assets/icon.ico` (16/20/24/32/40/48/64/128/256), `icon-256.png`, `icon-64.rgba` (window icon), `logo-128.rgba` (in-app); `installer/welcome.bmp` (164×314 NSIS welcome/finish image).
 - Used in: the exe icon (Explorer, taskbar, Start menu, right-click entry), the window title bar, the start screen (72 px), Help → About, the installer icon and welcome/finish pages, the README header, the GitHub release notes.
 - Checked: the 16 px icon is still recognizable (green leaf + amber slice); the exe's embedded icon extracted via System.Drawing.
+
+### 11 Nov: competitor benchmark
+- Installed via winget (hash-verified): WinDirStat 2.9.3, TreeSize 9.9.1, SizeTrend 4.0 (Store). Built eDirStat 2.0.0 from crates.io source (nightly). WizTree 4.33 was already installed.
+- `tools/bench-competitors.ps1` (user and admin modes): 1 warm-up + 3 runs, round-robin, wall-clock process time.
+- **Results (medians):**
+  - Admin scan: Xylem 1.07 s · eDirStat 2.41 · WizTree 4.42.
+  - Admin scan + CSV: Xylem 1.59 · WinDirStat 8.09 · WizTree 16.57.
+  - User scan: Xylem 4.29 · eDirStat 5.28 · WizTree 20.83.
+  - User scan + CSV: Xylem 4.85 · WinDirStat 21.13 · WizTree 34.74.
+- Completeness checked: item counts agree (eDirStat vs Xylem within a few dozen files; WinDirStat CSV 2.06M rows).
+- **TreeSize's "3 s" was invalid:** `/NOGUI` produced no output and exited, and `/CSV` hung for 5 min even on a small folder (a hidden first-run/trial dialog?). Its rows were removed and it was excluded.
+- SizeTrend: no CLI, not timed.
+- Caveat: 6 fuzzer processes were running (6/24 threads).
+- Written up in `docs/BENCHMARKS.md` and linked from the README and COMPETITORS.

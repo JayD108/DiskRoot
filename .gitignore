@@ -10,3 +10,5 @@
 /fuzz/coverage
 /fuzz/logs
 /test-evidence
+/bench-results
+/bench-results
