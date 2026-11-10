@@ -31,7 +31,11 @@
 
   <nav class="crumbbar">
     <ol class="crumbs" id="crumbs"></ol>
-    <div class="seg" role="group" aria-label="Diagram type">
+    <div class="seg" id="cmodeSeg" role="group" aria-label="Group by">
+      <button type="button" data-cmode="location">By location</button>
+      <button type="button" data-cmode="category">By category</button>
+    </div>
+    <div class="seg" id="modeSeg" role="group" aria-label="Diagram type">
       <button type="button" data-mode="sunburst">Sunburst</button>
       <button type="button" data-mode="treemap">Treemap</button>
     </div>
@@ -59,10 +63,22 @@
       <div class="side-head">
         <div class="side-title" id="sideTitle">Nothing scanned yet</div>
         <div class="side-sub" id="sideSub"></div>
+        <div class="legend" id="legend"></div>
       </div>
       <ol class="list" id="list"></ol>
     </aside>
   </main>
+
+  <div class="modal hidden" id="modal">
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="mTitle">
+      <h2 id="mTitle"></h2>
+      <div id="mBody"></div>
+      <div class="mActions">
+        <button type="button" class="btn" id="mCancel">Cancel</button>
+        <button type="button" class="btn danger" id="mOk">Move to Recycle Bin</button>
+      </div>
+    </div>
+  </div>
 
   <div class="tip hidden" id="tip" role="tooltip"></div>
   <div class="toast hidden" id="toast" role="status"></div>

@@ -317,3 +317,67 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block
   main { grid-template-columns: minmax(0, 1fr) 300px; }
   .scan input { width: 180px; }
 }
+
+/* Category legend (side panel) */
+.legend { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.legend:empty { display: none; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 11px;
+  cursor: pointer;
+}
+.chip:hover { border-color: var(--muted); }
+.chip b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.dot { width: 9px; height: 9px; border-radius: 50%; flex: none; display: inline-block; }
+
+/* Safety badges */
+.badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 4px; margin-left: 6px; vertical-align: 1px; }
+.badge.green { background: color-mix(in srgb, #2fa86b 22%, transparent); color: #2fa86b; }
+.badge.yellow { background: color-mix(in srgb, #d99a1e 22%, transparent); color: #c98a10; }
+.badge.red { background: color-mix(in srgb, var(--danger) 20%, transparent); color: var(--danger); }
+.tip .tc { display: flex; align-items: center; gap: 6px; margin: -2px 0 6px; color: var(--muted); }
+.tip .note { margin-top: 6px; color: var(--text); font-size: 12px; line-height: 1.4; }
+
+/* List row tweaks for categories + delete */
+.list li { grid-template-columns: 18px minmax(0, 1fr) auto 26px 26px; }
+.list .cdot { position: relative; }
+.list .cdot .dot { position: absolute; left: -4px; top: -2px; width: 7px; height: 7px; box-shadow: 0 0 0 2px var(--surface); }
+.list .rm:hover { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+.list li:hover .rm { opacity: 1; }
+.list .rm[disabled] { visibility: hidden; }
+
+/* Delete dialog */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.45);
+}
+.dialog {
+  width: min(560px, 100%);
+  padding: 20px 22px 16px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  user-select: text;
+}
+.dialog h2 { margin: 0 0 10px; font-size: 16px; font-weight: 600; word-break: break-all; }
+.dialog .path { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; color: var(--muted); word-break: break-all; margin-bottom: 12px; }
+.dialog .facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin-bottom: 12px; }
+.dialog .facts span { color: var(--muted); }
+.dialog .note { padding: 10px 12px; border-radius: 8px; background: var(--surface-2); margin-bottom: 10px; line-height: 1.45; }
+.dialog .warn { padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--text); margin-bottom: 10px; }
+.mActions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600; }
+.btn.danger:hover { filter: brightness(1.08); }

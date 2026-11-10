@@ -7,6 +7,7 @@
 //! Invariant: a node's parent always has a smaller id than the node itself.
 //! Folder totals can therefore be rolled up with a single reverse pass.
 
+pub mod classify;
 pub mod format;
 pub mod report;
 pub mod store;
@@ -46,6 +47,8 @@ pub mod flags {
     pub const UNREADABLE: u8 = 1 << 3;
     pub const COMPRESSED: u8 = 1 << 4;
     pub const SPARSE: u8 = 1 << 5;
+    /// Deleted from disk through Drishti; excluded from totals and views.
+    pub const DELETED: u8 = 1 << 6;
 }
 
 /// Raw columns for [`Index::from_columns`]. Index `i` describes node `i`.

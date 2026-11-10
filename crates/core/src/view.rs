@@ -39,9 +39,15 @@ impl Children {
         Self { start, kids }
     }
 
+    /// All children, including ones deleted through Drishti.
     pub fn of(&self, id: u32) -> &[u32] {
         let i = id as usize;
         &self.kids[self.start[i] as usize..self.start[i + 1] as usize]
+    }
+
+    /// Children still present (not deleted), biggest first.
+    pub fn live<'a>(&'a self, idx: &'a Index, id: u32) -> impl Iterator<Item = u32> + 'a {
+        self.of(id).iter().copied().filter(|&c| idx.flags(c) & flags::DELETED == 0)
     }
 }
 
@@ -60,6 +66,42 @@ pub struct ViewNode {
     pub depth: u8,
     /// For groups: how many items were merged.
     pub merged: u32,
+    /// Colour category (dominant category for folders); 255 = none.
+    pub cat: u8,
+    /// The node's own category and sub-type (255 / u16::MAX = none).
+    pub own_cat: u8,
+    pub sub: u16,
+    /// Rule in effect, for notes and safety (u16::MAX = none).
+    pub rule: u16,
+    /// Category-view key ("cat:3", "sub:12"); empty for real items.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub key: String,
+    /// Extra text for the tooltip (e.g. the full path of a place).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub hint: String,
+}
+
+impl ViewNode {
+    /// A node with no category data yet.
+    pub fn plain(id: i64, parent: i32, name: String, size: u64, files: u32, dir: bool, depth: u8) -> Self {
+        Self {
+            id,
+            parent,
+            name,
+            size,
+            files,
+            dir,
+            flags: 0,
+            depth,
+            merged: 0,
+            cat: u8::MAX,
+            own_cat: u8::MAX,
+            sub: u16::MAX,
+            rule: u16::MAX,
+            key: String::new(),
+            hint: String::new(),
+        }
+    }
 }
 
 pub struct ViewLimits {
@@ -87,7 +129,7 @@ pub fn build_view(idx: &Index, ch: &Children, root: u32, lim: &ViewLimits) -> Ve
         if depth >= lim.max_depth || !idx.is_dir(id) {
             continue;
         }
-        let kids = ch.of(id);
+        let kids: Vec<u32> = ch.live(idx, id).collect();
         let shown = kids
             .iter()
             .take(lim.max_children)
@@ -100,34 +142,27 @@ pub fn build_view(idx: &Index, ch: &Children, root: u32, lim: &ViewLimits) -> Ve
         let rest = &kids[shown..];
         let rest_size: u64 = rest.iter().map(|&c| idx.alloc(c)).sum();
         if rest_size > 0 {
-            out.push(ViewNode {
-                id: -1,
-                parent: at as i32,
-                name: format!("{} small items", rest.len()),
-                size: rest_size,
-                files: rest.iter().map(|&c| idx.files(c)).sum(),
-                dir: false,
-                flags: 0,
-                depth: depth + 1,
-                merged: rest.len() as u32,
-            });
+            let files = rest.iter().map(|&c| idx.files(c)).sum();
+            let mut g = ViewNode::plain(-1, at as i32, format!("{} small items", rest.len()), rest_size, files, false, depth + 1);
+            g.merged = rest.len() as u32;
+            out.push(g);
         }
     }
     out
 }
 
 fn node(idx: &Index, id: u32, parent: i32, depth: u8) -> ViewNode {
-    ViewNode {
-        id: i64::from(id),
+    let mut n = ViewNode::plain(
+        i64::from(id),
         parent,
-        name: idx.name(id).to_owned(),
-        size: idx.alloc(id),
-        files: idx.files(id),
-        dir: idx.flags(id) & flags::DIR != 0,
-        flags: idx.flags(id),
+        idx.name(id).to_owned(),
+        idx.alloc(id),
+        idx.files(id),
+        idx.is_dir(id),
         depth,
-        merged: 0,
-    }
+    );
+    n.flags = idx.flags(id);
+    n
 }
 
 /// (id, name) from the index root down to `id`, for breadcrumbs.

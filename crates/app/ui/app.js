@@ -28,6 +28,12 @@ const state = {
   list: [],
   listTotal: 0,
   mode: store.get('mode') === 'treemap' ? 'treemap' : 'sunburst',
+  cmode: store.get('cmode') === 'category' ? 'category' : 'location', // group by
+  catKey: '',       // by-category view root ('' = everything)
+  catCrumbs: [],
+  breakdown: [],    // [category, bytes] inside the current folder
+  tax: null,        // category / sub-type / rule names from the backend
+  hoverKey: null,   // category key hovered in the side list
   hover: -1,        // view index under the mouse, -2 = centre, -1 = none
   hoverId: null,    // index id hovered in the side list
   geo: null,
@@ -77,17 +83,28 @@ function readTheme() {
   };
 }
 
+// One fixed hue per category, so colours mean the same thing everywhere.
+// Order matches the backend's CATEGORIES list.
+const CAT_HUES = [212, 312, 174, 138, 266, 222, 28, 48, 194, 220];
+const CAT_SAT = [62, 58, 52, 52, 58, 12, 70, 72, 60, 8];
+
+function catSwatch(cat) {
+  if (cat === undefined || cat === null || cat === 255) return theme.dark ? 'hsl(220 8% 40%)' : 'hsl(220 10% 72%)';
+  return `hsl(${CAT_HUES[cat]} ${CAT_SAT[cat]}% ${theme.dark ? 58 : 50}%)`;
+}
+
 function colorOf(i) {
   const n = state.view[i];
-  if (n.id < 0) return theme.dark ? 'hsl(220 8% 33%)' : 'hsl(220 12% 82%)';
+  if (n.id === -1 && n.cat === 255) return theme.dark ? 'hsl(220 8% 33%)' : 'hsl(220 12% 82%)';
   const d = Math.max(1, n.depth);
-  // Branch picks the base hue; siblings deeper down get small hue and
-  // lightness shifts so neighbours stay distinguishable inside one branch.
   const sib = state.sib[i];
-  const hue = (state.branch[i] * 137.508 + 212 + (d > 1 ? ((sib % 5) - 2) * 9 : 0) + 360) % 360;
-  const sat = Math.max(30, 64 - d * 5);
-  const base = theme.dark ? 47 + d * 5 : 48 + d * 6;
-  const light = Math.min(theme.dark ? 78 : 86, base + (d > 1 ? (sib % 3) * 3 : 0));
+  const cat = n.cat === undefined || n.cat === 255 ? 9 : n.cat;
+  // Category picks the hue; depth and siblings shift shade slightly so
+  // neighbours stay distinguishable. Groups are drawn muted.
+  const hue = (CAT_HUES[cat] + ((sib % 5) - 2) * 5 + 360) % 360;
+  const sat = Math.max(6, CAT_SAT[cat] - d * 4 - (n.id === -1 ? 30 : 0));
+  const base = theme.dark ? 44 + d * 5 : 46 + d * 6;
+  const light = Math.min(theme.dark ? 78 : 86, base + (sib % 3) * 3);
   return `hsl(${hue.toFixed(1)} ${sat}% ${light}%)`;
 }
 
@@ -125,7 +142,13 @@ function prepareView(nodes) {
   state.hover = -1;
 }
 
-const isHot = (i) => i === state.hover || (state.hoverId !== null && state.view[i] && state.view[i].id === state.hoverId);
+const isHot = (i) => {
+  if (i === state.hover) return true;
+  const n = state.view[i];
+  if (!n) return false;
+  if (state.hoverKey) return n.key === state.hoverKey;
+  return state.hoverId !== null && !n.key && n.id === state.hoverId;
+};
 
 // ---------------------------------------------------------------------------
 // Sunburst
@@ -221,7 +244,7 @@ function drawSunburst(g) {
   const root = nodes[0];
   ctx.beginPath();
   ctx.arc(g.cx, g.cy, g.r0 - 4, 0, TAU);
-  ctx.fillStyle = state.hover === -2 && state.crumbs.length > 1 ? theme.surface2 : theme.surface;
+  ctx.fillStyle = state.hover === -2 && canGoUp() ? theme.surface2 : theme.surface;
   ctx.fill();
   ctx.lineWidth = 1;
   ctx.strokeStyle = theme.border;
@@ -235,7 +258,7 @@ function drawSunburst(g) {
   ctx.font = `11px ${theme.font}`;
   ctx.fillStyle = theme.muted;
   ctx.fillText(`${fmtCount(root.files)} files`, g.cx, g.cy + 24);
-  if (state.crumbs.length > 1) ctx.fillText('↑ up', g.cx, g.cy + 40);
+  if (canGoUp()) ctx.fillText('↑ up', g.cx, g.cy + 40);
 }
 
 function hitSunburst(g, x, y) {
@@ -425,11 +448,47 @@ function draw() {
 }
 
 // ---------------------------------------------------------------------------
-// Side list, breadcrumbs, stats
+// Side list, legend, breadcrumbs, stats
 // ---------------------------------------------------------------------------
 const ICON_DIR = '<svg class="ico dir" viewBox="0 0 16 16"><path fill="currentColor" d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3.2l1.6 1.6H13A1.5 1.5 0 0 1 14.5 5v7.5A1.5 1.5 0 0 1 13 14H3a1.5 1.5 0 0 1-1.5-1.5z"/></svg>';
 const ICON_FILE = '<svg class="ico" viewBox="0 0 16 16"><path fill="currentColor" d="M4 1.5h5l3.5 3.5v8.5A1.5 1.5 0 0 1 11 15H4a1.5 1.5 0 0 1-1.5-1.5v-10A1.5 1.5 0 0 1 4 1.5zm4.5.9V5.5h3.1z"/></svg>';
+const ICON_CAT = '<svg class="ico" viewBox="0 0 16 16"><path fill="currentColor" d="M2 2h5v5H2zm7 0h5v5H9zM2 9h5v5H2zm7 0h5v5H9z"/></svg>';
 const ICON_REVEAL = '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M9 2h5v5h-1.5V4.6L7.3 9.8 6.2 8.7l5.2-5.2H9zM3 4h4v1.5H3.5v7h7V9H12v4a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/></svg>';
+const ICON_TRASH = '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M6 1.5h4l.5 1H14V4H2V2.5h3.5zM3 5h10l-.8 9.1a1 1 0 0 1-1 .9H4.8a1 1 0 0 1-1-.9zm3 1.5v6.5h1.2V6.5zm2.8 0v6.5H10V6.5z"/></svg>';
+
+function catDot(cat) {
+  return `<span class="dot" style="background:${catSwatch(cat)}"></span>`;
+}
+
+function catLabel(cat, sub) {
+  const c = state.tax && state.tax.cats[cat];
+  const s = state.tax && state.tax.subs[sub];
+  if (!c) return '';
+  return s && s.name !== c.name ? `${c.name} › ${s.name}` : c.name;
+}
+
+function ruleOf(r) {
+  return state.tax && r !== undefined && r !== 65535 ? state.tax.rules[r] : null;
+}
+
+const SAFETY = { green: 'Safe to clear', yellow: 'Check first', red: "Don't delete by hand" };
+function safetyBadge(r) {
+  const rule = ruleOf(r);
+  return rule && rule.safety ? `<span class="badge ${rule.safety}">${SAFETY[rule.safety]}</span>` : '';
+}
+
+/** Rows for the side list: real items (location) or view nodes (category). */
+function listRows() {
+  if (state.cmode === 'location') return state.list;
+  return state.view
+    .map((n, i) => ({ n, i }))
+    .filter(({ n }) => n.depth === 1)
+    .map(({ n }) => ({
+      id: n.id, key: n.key || '', name: n.name, on_disk: n.size, size: n.size, files: n.files,
+      dir: n.dir, cat: n.cat, sub: n.sub, rule: n.rule, group: n.id === -1, hint: n.hint || '',
+      protected: true, // decided by the backend when the dialog opens
+    }));
+}
 
 function renderList() {
   const root = state.view[0];
@@ -439,43 +498,70 @@ function renderList() {
   const ol = $('list');
   ol.replaceChildren();
   ol.scrollTop = 0; // new folder: start at its biggest items
-  for (const it of state.list) {
+  const rows = listRows();
+  for (const it of rows) {
     const li = document.createElement('li');
-    li.dataset.id = it.id;
-    li.className = it.dir ? 'dir' : '';
+    if (it.key) li.dataset.key = it.key; else if (it.id >= 0) li.dataset.id = it.id;
+    const opens = it.key || it.dir || state.cmode === 'category';
+    li.className = opens && !it.group ? 'dir' : '';
     const tags = (it.link ? '<span class="tag">link</span>' : '') + (it.cloud ? '<span class="tag">cloud</span>' : '');
+    const icon = it.key ? ICON_CAT : it.dir ? ICON_DIR : ICON_FILE;
+    const sub = state.cmode === 'category' && it.hint ? escapeHtml(it.hint) : `${fmtPct(it.on_disk, total)}${it.dir || it.key ? ` · ${fmtCount(it.files)} files` : ''}`;
+    const canDelete = it.id >= 0 && !it.key && !it.group && (state.cmode === 'category' || !it.protected);
     li.innerHTML =
-      `${it.dir ? ICON_DIR : ICON_FILE}` +
-      `<div class="nm"><div class="t" title="${escapeHtml(it.name)}">${escapeHtml(it.name)}${tags}</div>` +
-      `<div class="barw"><i style="width:${total ? Math.max(0.5, (it.on_disk / total) * 100).toFixed(2) : 0}%"></i></div></div>` +
-      `<div class="sz">${fmtBytes(it.on_disk)}<small>${fmtPct(it.on_disk, total)}${it.dir ? ` · ${fmtCount(it.files)} files` : ''}</small></div>` +
-      `<button class="rv" title="Show in Explorer" aria-label="Show ${escapeHtml(it.name)} in Explorer">${ICON_REVEAL}</button>`;
+      `<span class="cdot">${icon}${it.cat !== undefined && it.cat !== 255 ? catDot(it.cat) : ''}</span>` +
+      `<div class="nm"><div class="t" title="${escapeHtml(it.hint || it.name)}">${escapeHtml(it.name)}${tags}</div>` +
+      `<div class="barw"><i style="width:${total ? Math.max(0.5, (it.on_disk / total) * 100).toFixed(2) : 0}%;background:${catSwatch(it.cat)}"></i></div></div>` +
+      `<div class="sz">${fmtBytes(it.on_disk)}<small title="${sub}">${sub.length > 46 ? '…' + sub.slice(-45) : sub}</small></div>` +
+      (it.id >= 0 && !it.group ? `<button class="rv" title="Show in Explorer" aria-label="Show ${escapeHtml(it.name)} in Explorer">${ICON_REVEAL}</button>` : '<span></span>') +
+      (canDelete ? `<button class="rv rm" title="Move to Recycle Bin…" aria-label="Move ${escapeHtml(it.name)} to the Recycle Bin">${ICON_TRASH}</button>` : '<span></span>');
     ol.append(li);
   }
-  if (state.listTotal > state.list.length) {
+  if (state.cmode === 'location' && state.listTotal > state.list.length) {
     const li = document.createElement('li');
     li.className = 'more';
     li.textContent = `+ ${fmtCount(state.listTotal - state.list.length)} smaller items not listed`;
     ol.append(li);
   }
-  if (root && root.dir && state.list.length === 0) {
+  if (root && rows.length === 0) {
     const li = document.createElement('li');
     li.className = 'more';
-    li.textContent = 'This folder is empty.';
+    li.textContent = state.cmode === 'location' ? 'This folder is empty.' : 'Nothing here.';
     ol.append(li);
+  }
+  renderLegend();
+}
+
+function renderLegend() {
+  const el = $('legend');
+  el.replaceChildren();
+  if (state.cmode !== 'location' || !state.tax || !state.breakdown.length) return;
+  const total = state.breakdown.reduce((s, [, v]) => s + v, 0);
+  for (const [cat, bytes] of state.breakdown) {
+    if (bytes / total < 0.005) continue;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip';
+    b.title = `${state.tax.cats[cat].name}: ${fmtBytes(bytes)} here. Click to see it by category.`;
+    b.innerHTML = `${catDot(cat)}${escapeHtml(state.tax.cats[cat].name)} <b>${fmtPct(bytes, total)}</b>`;
+    b.onclick = () => { setCmode('category'); navigateCat(`cat:${cat}`); };
+    el.append(b);
   }
 }
 
 function renderCrumbs() {
   const ol = $('crumbs');
   ol.replaceChildren();
-  for (const c of state.crumbs) {
+  const items = state.cmode === 'category'
+    ? state.catCrumbs.map((c) => ({ label: c.name, go: () => navigateCat(c.key) }))
+    : state.crumbs.map((c) => ({ label: c.name, go: () => navigate(c.id) }));
+  for (const c of items) {
     const li = document.createElement('li');
     const b = document.createElement('button');
     b.type = 'button';
-    b.textContent = c.name;
-    b.title = c.name;
-    b.onclick = () => navigate(c.id);
+    b.textContent = c.label;
+    b.title = c.label;
+    b.onclick = c.go;
     li.append(b);
     ol.append(li);
   }
@@ -487,7 +573,7 @@ function renderStats() {
   const secs = s.elapsed_ms >= 10000 ? (s.elapsed_ms / 1000).toFixed(0) : (s.elapsed_ms / 1000).toFixed(2);
   let html =
     `<div><b>${fmtBytes(s.on_disk)}</b> on disk · <b>${fmtCount(s.files)}</b> files · <b>${fmtCount(s.dirs)}</b> folders</div>` +
-    `<div>Scanned in <b>${secs} s</b> · ${escapeHtml(s.mode)}</div>`;
+    `<div>Scanned in <b>${secs} s</b> · ${escapeHtml(s.mode)} · <b>${Math.round(s.categorized * 100)}%</b> categorized</div>`;
   if (s.unreadable > 0) {
     html += `<div class="hint">${fmtCount(s.unreadable)} folders couldn't be read${s.admin_hint ? ' · try Fast scan (admin)' : ''}</div>`;
   }
@@ -495,8 +581,11 @@ function renderStats() {
 }
 
 function renderMode() {
-  for (const b of document.querySelectorAll('.seg button')) {
+  for (const b of document.querySelectorAll('#modeSeg button')) {
     b.setAttribute('aria-pressed', String(b.dataset.mode === state.mode));
+  }
+  for (const b of document.querySelectorAll('#cmodeSeg button')) {
+    b.setAttribute('aria-pressed', String(b.dataset.cmode === state.cmode));
   }
 }
 
@@ -505,18 +594,27 @@ function renderMode() {
 // ---------------------------------------------------------------------------
 function showTip(i, x, y) {
   const tip = $('tip');
-  if (i === -1 || (i === -2 && state.crumbs.length < 2)) { tip.classList.add('hidden'); return; }
+  if (i === -1 || (i === -2 && !canGoUp())) { tip.classList.add('hidden'); return; }
   const root = state.view[0];
   if (i === -2) {
-    tip.innerHTML = `<div class="tn">${escapeHtml(state.crumbs[state.crumbs.length - 2].name)}</div><div class="tk">Click to go up one level</div>`;
+    tip.innerHTML = `<div class="tn">${escapeHtml(upLabel())}</div><div class="tk">Click to go up one level</div>`;
   } else {
     const n = state.view[i];
-    const kind = n.id < 0 ? `${fmtCount(n.merged)} items too small to draw separately` : n.dir ? 'Folder · click to open' : 'File · double-click to show in Explorer';
+    let kind;
+    if (n.key) kind = 'Click to open';
+    else if (n.id === -1) kind = `${fmtCount(n.merged)} items too small to draw separately`;
+    else if (state.cmode === 'category') kind = 'Click to open this place by location';
+    else kind = n.dir ? 'Folder · click to open' : 'File · double-click to show in Explorer';
+    const cat = n.own_cat !== undefined && n.own_cat !== 255 && !n.key ? n.own_cat : n.cat;
+    const rule = ruleOf(n.rule);
     tip.innerHTML =
       `<div class="tn">${escapeHtml(n.name)}</div>` +
+      (cat !== undefined && cat !== 255 ? `<div class="tc">${catDot(cat)}${escapeHtml(catLabel(cat, n.sub))}${safetyBadge(n.rule)}</div>` : '') +
       `<div class="tr"><span>On disk</span><b>${fmtBytes(n.size)}</b></div>` +
       `<div class="tr"><span>Share of ${escapeHtml(root.name)}</span><b>${fmtPct(n.size, root.size)}</b></div>` +
-      (n.dir || n.id < 0 ? `<div class="tr"><span>Files</span><b>${fmtCount(n.files)}</b></div>` : '') +
+      (n.dir || n.id < 0 || n.key ? `<div class="tr"><span>Files</span><b>${fmtCount(n.files)}</b></div>` : '') +
+      (n.hint ? `<div class="tk">${escapeHtml(n.hint)}</div>` : '') +
+      (rule && rule.note && !n.key ? `<div class="note">${escapeHtml(rule.note)}</div>` : '') +
       `<div class="tk">${kind}</div>`;
   }
   tip.classList.remove('hidden');
@@ -534,13 +632,22 @@ function toast(msg, ok = false) {
   t.classList.toggle('ok', ok);
   t.classList.remove('hidden');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.add('hidden'), ok ? 3500 : 7000);
+  toastTimer = setTimeout(() => t.classList.add('hidden'), ok ? 4000 : 7000);
 }
 
 // ---------------------------------------------------------------------------
-// Actions
+// Navigation
 // ---------------------------------------------------------------------------
 let navSeq = 0;
+
+function afterViewLoaded() {
+  state.geo = null;
+  $('tip').classList.add('hidden');
+  renderCrumbs();
+  renderList();
+  requestDraw();
+}
+
 async function navigate(id) {
   const seq = ++navSeq;
   try {
@@ -555,21 +662,75 @@ async function navigate(id) {
     state.crumbs = crumbs;
     state.list = list.items;
     state.listTotal = list.total;
+    state.breakdown = list.breakdown;
     prepareView(view);
-    state.geo = null;
-    $('tip').classList.add('hidden');
-    renderCrumbs();
-    renderList();
-    requestDraw();
+    afterViewLoaded();
   } catch (e) {
     toast(String(e));
   }
 }
 
-function goUp() {
-  if (state.crumbs.length > 1) navigate(state.crumbs[state.crumbs.length - 2].id);
+async function navigateCat(key) {
+  const seq = ++navSeq;
+  try {
+    const out = await invoke('category_view', { key });
+    if (seq !== navSeq) return;
+    state.catKey = key;
+    state.catCrumbs = out.crumbs;
+    prepareView(out.nodes);
+    afterViewLoaded();
+  } catch (e) {
+    toast(String(e));
+  }
 }
 
+function refresh() {
+  return state.cmode === 'category' ? navigateCat(state.catKey) : navigate(state.root);
+}
+
+function canGoUp() {
+  return state.cmode === 'category' ? state.catCrumbs.length > 1 : state.crumbs.length > 1;
+}
+
+function upLabel() {
+  const c = state.cmode === 'category' ? state.catCrumbs : state.crumbs;
+  return c.length > 1 ? c[c.length - 2].name : '';
+}
+
+function goUp() {
+  if (!canGoUp()) return;
+  if (state.cmode === 'category') navigateCat(state.catCrumbs[state.catCrumbs.length - 2].key);
+  else navigate(state.crumbs[state.crumbs.length - 2].id);
+}
+
+function setCmode(m) {
+  if (state.cmode === m) return;
+  state.cmode = m;
+  store.set('cmode', m);
+  renderMode();
+}
+
+/** Opens a real item (from the category view) in the location view. */
+async function openPlace(id) {
+  try {
+    const info = await invoke('info', { node: id });
+    setCmode('location');
+    await navigate(info.folder);
+  } catch (e) {
+    toast(String(e));
+  }
+}
+
+function openViewNode(n) {
+  if (n.key) { navigateCat(n.key); return; }
+  if (n.id < 0) return;
+  if (state.cmode === 'category') openPlace(n.id);
+  else if (n.dir) navigate(n.id);
+}
+
+// ---------------------------------------------------------------------------
+// Scanning
+// ---------------------------------------------------------------------------
 function setBusy(on, label = '') {
   state.busy = on;
   $('busy').classList.toggle('hidden', !on);
@@ -592,7 +753,9 @@ async function runScan(kind) {
   try {
     state.summary = kind === 'admin' ? await invoke('scan_admin', { drive: path }) : await invoke('scan', { path });
     renderStats();
-    await navigate(0);
+    state.root = 0;
+    state.catKey = '';
+    await refresh();
   } catch (e) {
     toast(String(e));
     if (!state.view.length) $('empty').classList.remove('hidden');
@@ -600,6 +763,70 @@ async function runScan(kind) {
     setBusy(false);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Safe delete
+// ---------------------------------------------------------------------------
+let pendingDelete = null;
+
+async function askDelete(id) {
+  let info;
+  try {
+    info = await invoke('info', { node: id });
+  } catch (e) {
+    toast(String(e));
+    return;
+  }
+  pendingDelete = info.protected ? null : id;
+  const rule = ruleOf(info.rule);
+  $('mTitle').textContent = `Move "${info.name}" to the Recycle Bin?`;
+  $('mBody').innerHTML =
+    `<div class="path">${escapeHtml(info.path)}</div>` +
+    `<div class="facts">` +
+    `<span>Frees</span><b>${fmtBytes(info.on_disk)}</b>` +
+    (info.dir ? `<span>Contains</span><b>${fmtCount(info.files)} files</b>` : '') +
+    `<span>What it is</span><b>${catDot(info.cat)} ${escapeHtml(catLabel(info.cat, info.sub))}${safetyBadge(info.rule)}</b>` +
+    `</div>` +
+    (rule && rule.note ? `<div class="note">${escapeHtml(rule.note)}</div>` : '') +
+    (info.protected
+      ? `<div class="warn">Drishti won't delete this. ${escapeHtml(info.protected)}</div>`
+      : `<div class="note">It goes to the Recycle Bin, so you can restore it. If Windows can't recycle it (too big for the bin), Windows will ask before deleting it permanently.</div>`);
+  $('mOk').classList.toggle('hidden', !!info.protected);
+  $('mCancel').textContent = info.protected ? 'Close' : 'Cancel';
+  $('modal').classList.remove('hidden');
+  (info.protected ? $('mCancel') : $('mOk')).focus();
+}
+
+function closeModal() {
+  $('modal').classList.add('hidden');
+  pendingDelete = null;
+}
+
+async function confirmDelete() {
+  const id = pendingDelete;
+  closeModal();
+  if (id === null) return;
+  setBusy(true, 'Moving to the Recycle Bin');
+  try {
+    const out = await invoke('delete', { node: id });
+    if (out.cancelled) {
+      toast('Cancelled. Nothing was deleted.', true);
+    } else {
+      toast(`Moved "${out.name}" to the Recycle Bin · ${fmtBytes(out.freed)} freed`, true);
+      state.summary = await invoke('summary_now');
+      renderStats();
+      await refresh();
+    }
+  } catch (e) {
+    toast(String(e));
+  } finally {
+    setBusy(false);
+  }
+}
+
+$('mCancel').addEventListener('click', closeModal);
+$('mOk').addEventListener('click', confirmDelete);
+$('modal').addEventListener('click', (ev) => { if (ev.target === $('modal')) closeModal(); });
 
 // ---------------------------------------------------------------------------
 // Events
@@ -612,16 +839,24 @@ function pointerHit(ev) {
   return state.geo.kind === 'sun' ? hitSunburst(state.geo, x, y) : hitTreemap(state.geo, x, y);
 }
 
+function rowMatches(li, n) {
+  if (!n) return false;
+  if (n.key) return li.dataset.key === n.key;
+  return n.id >= 0 && li.dataset.id !== undefined && Number(li.dataset.id) === n.id;
+}
+
 function syncListHot() {
-  const id = state.hover >= 0 ? state.view[state.hover].id : null;
-  for (const li of $('list').children) li.classList.toggle('hot', id !== null && Number(li.dataset.id) === id);
+  const n = state.hover >= 0 ? state.view[state.hover] : null;
+  for (const li of $('list').children) li.classList.toggle('hot', rowMatches(li, n));
 }
 
 canvas.addEventListener('mousemove', (ev) => {
   const i = pointerHit(ev);
   if (i !== state.hover) {
     state.hover = i;
-    canvas.style.cursor = (i === -2 && state.crumbs.length > 1) || (i >= 0 && state.view[i].dir && i !== 0) ? 'pointer' : 'default';
+    const n = i > 0 ? state.view[i] : null;
+    const clickable = (i === -2 && canGoUp()) || (n && (n.key || (n.id >= 0 && (n.dir || state.cmode === 'category'))));
+    canvas.style.cursor = clickable ? 'pointer' : 'default';
     syncListHot();
     requestDraw();
   }
@@ -638,49 +873,73 @@ canvas.addEventListener('mouseleave', () => {
 canvas.addEventListener('click', (ev) => {
   const i = pointerHit(ev);
   if (i === -2) { goUp(); return; }
-  if (i > 0 && state.view[i].dir && state.view[i].id >= 0) navigate(state.view[i].id);
+  if (i > 0) openViewNode(state.view[i]);
 });
 
 canvas.addEventListener('dblclick', (ev) => {
   const i = pointerHit(ev);
-  if (i > 0 && !state.view[i].dir && state.view[i].id >= 0) {
-    invoke('reveal', { node: state.view[i].id }).catch((e) => toast(String(e)));
+  const n = i > 0 ? state.view[i] : null;
+  if (n && !n.key && n.id >= 0 && !n.dir && state.cmode === 'location') {
+    invoke('reveal', { node: n.id }).catch((e) => toast(String(e)));
   }
 });
 
+canvas.addEventListener('contextmenu', (ev) => {
+  const i = pointerHit(ev);
+  const n = i > 0 ? state.view[i] : null;
+  if (n && !n.key && n.id >= 0) { ev.preventDefault(); askDelete(n.id); }
+});
+
 $('list').addEventListener('click', (ev) => {
-  const li = ev.target.closest('li[data-id]');
-  if (!li) return;
+  const li = ev.target.closest('li');
+  if (!li || (!li.dataset.id && !li.dataset.key)) return;
+  if (li.dataset.key) { navigateCat(li.dataset.key); return; }
   const id = Number(li.dataset.id);
-  if (ev.target.closest('.rv')) {
-    invoke('reveal', { node: id }).catch((e) => toast(String(e)));
-    return;
-  }
+  if (ev.target.closest('.rm')) { askDelete(id); return; }
+  if (ev.target.closest('.rv')) { invoke('reveal', { node: id }).catch((e) => toast(String(e))); return; }
+  if (state.cmode === 'category') { openPlace(id); return; }
   const item = state.list.find((it) => it.id === id);
   if (item && item.dir) navigate(id);
 });
 
 $('list').addEventListener('mouseover', (ev) => {
-  const li = ev.target.closest('li[data-id]');
-  const id = li ? Number(li.dataset.id) : null;
-  if (id !== state.hoverId) { state.hoverId = id; requestDraw(); }
+  const li = ev.target.closest('li');
+  const key = li ? li.dataset.key || null : null;
+  const id = li && li.dataset.id !== undefined ? Number(li.dataset.id) : null;
+  if (id !== state.hoverId || key !== state.hoverKey) {
+    state.hoverId = id;
+    state.hoverKey = key;
+    requestDraw();
+  }
 });
-$('list').addEventListener('mouseleave', () => { state.hoverId = null; requestDraw(); });
+$('list').addEventListener('mouseleave', () => { state.hoverId = null; state.hoverKey = null; requestDraw(); });
 
 $('scanForm').addEventListener('submit', (ev) => { ev.preventDefault(); runScan('normal'); });
 $('adminBtn').addEventListener('click', () => runScan('admin'));
 
-for (const b of document.querySelectorAll('.seg button')) {
+for (const b of document.querySelectorAll('#modeSeg button')) {
   b.addEventListener('click', () => {
     if (state.mode === b.dataset.mode) return;
     state.mode = b.dataset.mode;
     store.set('mode', state.mode);
     renderMode();
-    if (state.summary) navigate(state.root);
+    if (state.summary) refresh();
+  });
+}
+
+for (const b of document.querySelectorAll('#cmodeSeg button')) {
+  b.addEventListener('click', () => {
+    if (state.cmode === b.dataset.cmode) return;
+    setCmode(b.dataset.cmode);
+    if (state.summary) refresh();
   });
 }
 
 window.addEventListener('keydown', (ev) => {
+  if (!$('modal').classList.contains('hidden')) {
+    if (ev.key === 'Escape') closeModal();
+    return;
+  }
   if (ev.target instanceof HTMLInputElement) return;
   if (ev.key === 'Backspace' || (ev.altKey && ev.key === 'ArrowLeft')) { ev.preventDefault(); goUp(); }
 });
@@ -695,6 +954,7 @@ darkQuery.addEventListener('change', () => { readTheme(); requestDraw(); });
   readTheme();
   renderMode();
   try {
+    state.tax = await invoke('taxonomy');
     const drives = await invoke('list_drives');
     $('drives').replaceChildren(...drives.map((d) => Object.assign(document.createElement('option'), { value: d })));
     $('path').value = drives.includes('C:\\') ? 'C:\\' : drives[0] || '';
