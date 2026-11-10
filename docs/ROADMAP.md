@@ -42,7 +42,7 @@ Risks: the USN journal needs admin (reuse the helper, which then also returns ch
 
 ## Phase 7: breadth (features WizTree users expect)
 
-**Status (11 Nov 2026):** done: 2 (file types), 3 (largest files + search), 5 (CSV export in the app), 6 (Explorer right-click). Left: 1 (multi-select delete), 4 (duplicates), 7 (hardlink names).
+**Status (11 Nov 2026): all done.** 1 multi-select delete (Ctrl+click / Space, one confirmation, per-item checks), 2 file types, 3 largest files + search, 4 duplicate finder (opt-in, BLAKE3, hardlink-aware), 5 CSV export in the app, 6 Explorer right-click, 7 hardlink names (FindFirstFileNameW, shown in details).
 
 1. **Multi-select delete** (Ctrl/Shift-click), with one combined confirmation and the same warnings.
 2. **File-type view**: bytes by extension, with drill-down to the files.

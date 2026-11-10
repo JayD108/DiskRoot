@@ -24,9 +24,11 @@ Most tools only answer the first one, and the friendly ones are slow on big driv
 - **Fast:** maps a whole NTFS drive in about 1–2 seconds by reading its file table directly (read-only). Without admin it still works, by walking folders.
 - **Meaning, not just sizes:** every file is sorted into categories such as *Apps & Games, Dev stuff, AI & data, Media, System, Temp & caches*. You can browse by location or by category.
 - **Plain-English advice:** known folders come with a note and a label: *safe to delete*, *check first* or *don't delete by hand*.
-- **Instant reopen and "what changed":** your last scan opens in under a second (a whole 1.5 TB drive in ~0.4 s). After a rescan, Xylem points at the exact folders that grew or shrank.
+- **Your drive at a glance:** a strip at the bottom shows used and free space and your 5 biggest space users. The start screen shows every drive with a fill bar.
+- **Instant reopen and "what changed":** your last scan opens in under a second (a whole 1.5 TB drive in ~0.4 s). After a rescan, Xylem points at the exact folders that grew or shrank, both in a list and in a Change column right in the tree.
 - **Clear pictures:** a tree-table with size bars, next to a sunburst or a treemap. Light and dark themes, full keyboard navigation.
-- **Careful deleting:** only to the Recycle Bin, only after you confirm. Windows and system folders are locked. You get warnings for OneDrive folders, Git repositories and very large deletes, and a history of everything you deleted.
+- **Find what to clean:** the largest files (with search), sizes by file type, and an opt-in duplicate finder that keeps the original-looking copy.
+- **Careful deleting:** only to the Recycle Bin, only after you confirm. Windows and system folders are locked. You get warnings for OneDrive folders, Git repositories and very large deletes, and a history of everything you deleted. Mark several items (Ctrl+click) to remove them in one go. Hardlinked files are flagged, because deleting one name frees nothing.
 - **Private:** no network connections, no accounts, no telemetry. One small program (~6 MB).
 
 ![Dark theme, treemap grouped by category](docs/screenshots/xylem-category.png)
@@ -59,7 +61,7 @@ There's also a command-line tool, `xylem-cli.exe`. See [docs/DEVELOPMENT.md](doc
 
 ## Safety and privacy
 
-Xylem only reads your disk; it never opens the contents of your files and never goes online. Deleting is the only change it can make, and only after you confirm. The shield button in the app shows exactly what it does. Full details: [docs/SECURITY-AND-PRIVACY.md](docs/SECURITY-AND-PRIVACY.md). To report a problem privately, see [SECURITY.md](SECURITY.md).
+Xylem only reads your disk and never goes online. It doesn't open your files' contents, except when you start the duplicate finder, which compares files on your PC. Deleting is the only change it can make, and only after you confirm. The shield button in the app shows exactly what it does. Full details: [docs/SECURITY-AND-PRIVACY.md](docs/SECURITY-AND-PRIVACY.md). To report a problem privately, see [SECURITY.md](SECURITY.md).
 
 ## Code signing policy
 

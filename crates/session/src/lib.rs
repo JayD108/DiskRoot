@@ -892,6 +892,32 @@ mod tests {
         println!("{:<16} {:>7.1} MB  {:>5.1} B/node  ({n} nodes)", "TOTAL", total as f64 / 1048576.0, total as f64 / n as f64);
     }
 
+    /// DEL-06/07 on real files: decoys Windows would silently rewrite
+    /// ("report." → "report") must be refused, never hitting the real file.
+    #[test]
+    fn decoy_names_are_refused_on_real_files() {
+        let dir = std::env::temp_dir().join(format!("xylem-decoys-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let verbatim = |name: &str| PathBuf::from(format!(r"\\?\{}\{name}", dir.display()));
+        std::fs::write(dir.join("report"), b"the real one").unwrap();
+        for decoy in ["report.", "report ", "CON.txt", "nul"] {
+            std::fs::write(verbatim(decoy), b"decoy").unwrap();
+        }
+        let s = scan(&dir.to_string_lossy()).unwrap();
+        for decoy in ["report.", "report ", "CON.txt", "nul"] {
+            let n = s.find_rel(decoy).unwrap_or_else(|| panic!("scan found {decoy:?}"));
+            assert!(s.prepare_delete(n).is_err(), "{decoy:?} must be refused");
+        }
+        let real = s.find_rel("report").unwrap();
+        assert!(s.prepare_delete(real).is_ok());
+        assert_eq!(std::fs::read(dir.join("report")).unwrap(), b"the real one");
+        for decoy in ["report.", "report ", "CON.txt", "nul"] {
+            let _ = std::fs::remove_file(verbatim(decoy));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn largest_files_and_types() {
         let s = demo();

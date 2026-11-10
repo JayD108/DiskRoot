@@ -429,3 +429,13 @@ User asked: "go for next step and also add the security measures ... and think o
   - Verified end to end: 3 identical 12 MB files + a 1-byte-different decoy → 1 set found, 2 copies recycled, decoy and original kept, both logged.
 - **Hardlink names:** `safety::hardlink_names` (FindFirstFileNameW, no admin, any scan mode). The details pane shows "· 3 names (hardlinks)" with the other names on hover and a note that deleting one frees nothing.
 - New dependency: `blake3` (Apache-2.0); cargo-deny licences ok.
+- **Full local test** (`tools/full-test.ps1`, report in `docs/TEST-REPORT.md`): **19/19 pass**.
+  - Build, 67 tests in debug and release, clippy, cargo-deny, cargo-audit, no HTTP/TLS crates.
+  - 2M-round built-in fuzz.
+  - Speed: tree 0.157 s, classify 0.175 s, walk of C: 4.0–4.7 s.
+  - Exact match vs std::fs.
+  - Security: EL-01 (10 bad helper command lines), IN-06 (9 planted DLLs), BP-01 (planted explorer.exe), F-02, PV-01 (0 sockets), PA-06 (hostile settings), RO-01.
+  - The two first-run failures were test bugs:
+    - F-02 counted the user's installed Xylem; later the script's ⚡ was garbled (BOM-less script read as ANSI by PowerShell 5.1).
+    - RO-01 compared folder timestamps, which Windows updates on any listing (proved with `dir`).
+- New real-file test: decoys `report.`, `report `, `CON.txt`, `nul` (created via `\?\`) are refused; the real `report` is untouched.

@@ -3,7 +3,7 @@
 [← Back to README](../README.md) · To report a vulnerability, see [SECURITY.md](../SECURITY.md).
 
 ## What Xylem reads and doesn't do
-- It reads **file names, sizes and attributes** only. It never opens or reads what's inside your files.
+- It reads **file names, sizes and attributes** only. It doesn't read what's inside your files, **except the duplicate finder**, which you start yourself (View → Find duplicate files). It compares files of the same size by their contents, on your PC only. It skips online-only cloud files (reading them would download them) and treats hardlinks as one file.
 - It has **no network code**: no HTTP client and no browser engine anywhere in its dependencies. It was measured with 0 network connections.
 - It changes nothing on your computer except when **you** delete something, and that goes to the Recycle Bin.
 
