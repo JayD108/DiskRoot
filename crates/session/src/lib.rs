@@ -230,8 +230,9 @@ pub struct Scanned {
 }
 
 impl Scanned {
-    pub fn new(index: Index, stats: ScanStats, mode: String) -> Self {
+    pub fn new(mut index: Index, stats: ScanStats, mode: String) -> Self {
         let t = Instant::now();
+        index.shrink_to_fit();
         let children = Children::build(&index);
         let cls = Classification::run(&index, &RULES);
         let cats = CatStats::compute(&index, &cls, RULES.subs.len());
@@ -518,6 +519,15 @@ impl Scanned {
         self.cats = CatStats::compute(&self.index, &self.cls, RULES.subs.len());
     }
 
+    /// Heap bytes per data structure (for memory work).
+    pub fn memory_report(&self) -> Vec<(&'static str, usize)> {
+        let mut v = self.index.heap_columns();
+        v.push(("children", self.children.heap_bytes()));
+        v.extend(self.cls.heap_bytes());
+        v.extend(self.cats.heap_bytes());
+        v
+    }
+
     /// What the background "remember" step needs: the shared index, the
     /// scan stats and the mode label.
     pub fn remember_parts(&self) -> (Arc<Index>, ScanStats, String) {
@@ -737,6 +747,20 @@ mod tests {
         assert!(safety::unusual_name(std::path::Path::new("C:\\x\\console.txt")).is_none());
         assert!(safety::unusual_name(std::path::Path::new(&format!("C:\\{}", "a".repeat(300)))).is_some());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `cargo test --release -p xylem-session memory_of_a_real_scan -- --ignored --nocapture`
+    #[test]
+    #[ignore = "scans all of C: (slow); run by hand for memory work"]
+    fn memory_of_a_real_scan() {
+        let s = scan("C:\\").unwrap();
+        let rep = s.memory_report();
+        let n = s.summary().files + s.summary().dirs;
+        let total: usize = rep.iter().map(|r| r.1).sum();
+        for (name, b) in &rep {
+            println!("{name:<16} {:>7.1} MB  {:>5.1} B/node", *b as f64 / 1048576.0, *b as f64 / n as f64);
+        }
+        println!("{:<16} {:>7.1} MB  {:>5.1} B/node  ({n} nodes)", "TOTAL", total as f64 / 1048576.0, total as f64 / n as f64);
     }
 
     #[test]

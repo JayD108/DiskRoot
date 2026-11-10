@@ -357,3 +357,14 @@ User asked: "go for next step and also add the security measures ... and think o
 - **F-13:** `visible()` also in the Deletion history. The log is JSON and the CSV quoted. OUT-02 (CSV formula injection) passes by design.
 - **cargo-deny:** `deny.toml` (OSI licence allow-list, advisories, crates.io only) passes locally: advisories, bans, licenses and sources all ok. Added as a CI job.
 - All findings F-01…F-16 are now fixed or decided (`docs/SECURITY-STATUS.md`). Remaining before 1.0: the VM clearance test run, 24 h cargo-fuzz, signing.
+
+### Same day, later: Phase 6 memory (5.2 skipped)
+- The user offered admin rights for 5.2 (USN catch-up). Not needed: every *user* would need admin for it, so it stays deferred.
+- **Measured first.** New `Scanned::memory_report` (per-structure heap bytes; `Index::heap_columns`, `Children/Classification/CatStats::heap_bytes`) and an ignored test `memory_of_a_real_scan` (scans C:). Before: **204.3 MB for 1,909,532 nodes (112 B/node)**. The biggest items were `cats.dir_cats` 40 MB (a dense [u64; 10] per folder, Vec doubling) and `index.names` 60 MB reserved (doubling during the walk).
+- **Fixes:**
+  - `CatStats` keeps dense sums only while computing (exact capacity), then stores just the non-zero categories per folder in CSR form (`dc_start/dc_cat/dc_bytes`); `breakdown()` rebuilds the array.
+  - `Index::shrink_to_fit`, called in `Scanned::new`.
+- **After: 142.6 MB (78 B/node, −30%).** dir_cats 3.3 MB, names 40.5 MB.
+- Speed: classify 0.15–0.20 s (unchanged), stats 0.10–0.12 s (was 0.12–0.15).
+- Real app: **213 MB private after a fresh scan of C:** (was 278), **211 MB reopened** (was 248).
+- 63 tests, clippy clean.

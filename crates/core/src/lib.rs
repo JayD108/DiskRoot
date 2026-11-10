@@ -81,6 +81,34 @@ pub struct Index {
 }
 
 impl Index {
+    /// Frees spare capacity left from growing the columns (the folder walk
+    /// grows them as it goes; names alone could hold ~20 MB of slack on a
+    /// full drive). One copy, a few ms.
+    pub fn shrink_to_fit(&mut self) {
+        self.parent.shrink_to_fit();
+        self.size.shrink_to_fit();
+        self.alloc.shrink_to_fit();
+        self.files.shrink_to_fit();
+        self.flags.shrink_to_fit();
+        self.name_off.shrink_to_fit();
+        self.name_len.shrink_to_fit();
+        self.names.shrink_to_fit();
+    }
+
+    /// Heap bytes held, per column (for memory work).
+    pub fn heap_columns(&self) -> Vec<(&'static str, usize)> {
+        vec![
+            ("index.parent", self.parent.capacity() * 4),
+            ("index.size", self.size.capacity() * 8),
+            ("index.alloc", self.alloc.capacity() * 8),
+            ("index.files", self.files.capacity() * 4),
+            ("index.flags", self.flags.capacity()),
+            ("index.name_off", self.name_off.capacity() * 4),
+            ("index.name_len", self.name_len.capacity() * 2),
+            ("index.names", self.names.capacity()),
+        ]
+    }
+
     /// Creates an index whose root node (id 0) is a folder named `root_name`.
     pub fn new(root_name: &str) -> Self {
         Self::with_capacity(root_name, 0, 0)

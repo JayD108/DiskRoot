@@ -16,6 +16,10 @@ pub struct Children {
 }
 
 impl Children {
+    pub fn heap_bytes(&self) -> usize {
+        (self.start.capacity() + self.kids.capacity()) * 4
+    }
+
     pub fn build(idx: &Index) -> Self {
         let n = idx.len();
         let mut start = vec![0u32; n + 1];

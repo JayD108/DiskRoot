@@ -405,6 +405,16 @@ impl Classification {
         self.bits[i] = MATCHED_HERE | if rule.weak { WEAK } else { 0 };
     }
 
+    pub fn heap_bytes(&self) -> Vec<(&'static str, usize)> {
+        vec![
+            ("cls.cat", self.cat.capacity()),
+            ("cls.sub", self.sub.capacity() * 2),
+            ("cls.anchor", self.anchor.capacity() * 4),
+            ("cls.rule", self.rule.capacity() * 2),
+            ("cls.bits", self.bits.capacity()),
+        ]
+    }
+
     /// Why `id` must not be deleted from Xylem, if it mustn't.
     /// The protected place that starts exactly at `id` (its sub-type name),
     /// if a protecting rule matched this very node. Used to refuse deleting
@@ -459,10 +469,26 @@ pub struct CatStats {
     /// The category with the most bytes inside each node (its colour).
     pub dominant: Vec<u8>,
     dir_slot: Vec<u32>,
-    dir_cats: Vec<[u64; NCAT]>,
+    /// Per folder, only its non-zero categories (most folders hold one or
+    /// two of the ten): folder `slot` owns `dc_cat/dc_bytes[dc_start[slot]..
+    /// dc_start[slot + 1]]`. A dense [u64; 10] per folder was ~24-40 MB on
+    /// a full drive; this is a few MB.
+    dc_start: Vec<u32>,
+    dc_cat: Vec<u8>,
+    dc_bytes: Vec<u64>,
 }
 
 impl CatStats {
+    pub fn heap_bytes(&self) -> Vec<(&'static str, usize)> {
+        let places: usize = self.places_by_sub.iter().map(|v| v.capacity() * size_of::<Place>()).sum();
+        vec![
+            ("cats.places", places + self.places_by_sub.capacity() * size_of::<Vec<Place>>()),
+            ("cats.dominant", self.dominant.capacity()),
+            ("cats.dir_slot", self.dir_slot.capacity() * 4),
+            ("cats.dir_cats", self.dc_start.capacity() * 4 + self.dc_cat.capacity() + self.dc_bytes.capacity() * 8),
+        ]
+    }
+
     pub fn compute(idx: &Index, cls: &Classification, nsubs: usize) -> Self {
         let n = idx.len();
         let mut s = Self {
@@ -473,8 +499,13 @@ impl CatStats {
             places_by_sub: vec![Vec::new(); nsubs],
             dominant: cls.cat.clone(),
             dir_slot: vec![u32::MAX; n],
-            dir_cats: Vec::new(),
+            dc_start: Vec::new(),
+            dc_cat: Vec::new(),
+            dc_bytes: Vec::new(),
         };
+        // Dense per-folder sums while computing (exact size), made sparse at the end.
+        let ndirs = (0..n as u32).filter(|&id| idx.is_dir(id) && idx.flags(id) & flags::DELETED == 0).count();
+        let mut dir_cats: Vec<[u64; NCAT]> = Vec::with_capacity(ndirs);
         // Bytes/files per (sub-type, anchor). Almost always the file's
         // sub-type equals its anchor's own sub-type, so that case uses plain
         // arrays; the rare mixed case (videos found by extension inside a
@@ -484,8 +515,8 @@ impl CatStats {
         let mut mixed: HashMap<(u16, u32), (u64, u32)> = HashMap::new();
         for id in 0..n as u32 {
             if idx.is_dir(id) && idx.flags(id) & flags::DELETED == 0 {
-                s.dir_slot[id as usize] = s.dir_cats.len() as u32;
-                s.dir_cats.push([0; NCAT]);
+                s.dir_slot[id as usize] = dir_cats.len() as u32;
+                dir_cats.push([0; NCAT]);
             }
         }
         // Files first, then fold folders into parents (children have higher
@@ -514,11 +545,11 @@ impl CatStats {
                     e.1 += 1;
                 }
                 if p != NO_PARENT {
-                    let dc = &mut s.dir_cats[s.dir_slot[p as usize] as usize][cat];
+                    let dc = &mut dir_cats[s.dir_slot[p as usize] as usize][cat];
                     *dc = dc.saturating_add(a);
                 }
             } else {
-                let mine = s.dir_cats[s.dir_slot[i] as usize];
+                let mine = dir_cats[s.dir_slot[i] as usize];
                 s.dominant[i] = mine
                     .iter()
                     .enumerate()
@@ -527,7 +558,7 @@ impl CatStats {
                     .map_or(cls.cat[i], |(c, _)| c as u8);
                 if p != NO_PARENT {
                     let ps = s.dir_slot[p as usize] as usize;
-                    for (t, v) in s.dir_cats[ps].iter_mut().zip(mine) {
+                    for (t, v) in dir_cats[ps].iter_mut().zip(mine) {
                         *t = t.saturating_add(v);
                     }
                 }
@@ -547,15 +578,33 @@ impl CatStats {
         for v in &mut s.places_by_sub {
             v.sort_unstable_by_key(|p| (std::cmp::Reverse(p.bytes), p.node));
         }
+        let nonzero: usize = dir_cats.iter().map(|d| d.iter().filter(|&&v| v > 0).count()).sum();
+        s.dc_start.reserve_exact(dir_cats.len() + 1);
+        s.dc_cat.reserve_exact(nonzero);
+        s.dc_bytes.reserve_exact(nonzero);
+        s.dc_start.push(0);
+        for d in &dir_cats {
+            for (c, &v) in d.iter().enumerate().filter(|(_, v)| **v > 0) {
+                s.dc_cat.push(c as u8);
+                s.dc_bytes.push(v);
+            }
+            s.dc_start.push(s.dc_cat.len() as u32);
+        }
         s
     }
 
     /// Bytes per category inside folder `id` (all zeros for files).
     pub fn breakdown(&self, id: u32) -> [u64; NCAT] {
-        match self.dir_slot.get(id as usize) {
-            Some(&slot) if slot != u32::MAX => self.dir_cats[slot as usize],
-            _ => [0; NCAT],
+        let mut out = [0; NCAT];
+        if let Some(&slot) = self.dir_slot.get(id as usize)
+            && slot != u32::MAX
+        {
+            let (a, b) = (self.dc_start[slot as usize] as usize, self.dc_start[slot as usize + 1] as usize);
+            for (&c, &v) in self.dc_cat[a..b].iter().zip(&self.dc_bytes[a..b]) {
+                out[c as usize] = v;
+            }
         }
+        out
     }
 }
 
