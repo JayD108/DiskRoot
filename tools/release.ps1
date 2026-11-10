@@ -103,7 +103,7 @@ $sums = Join-Path $dist "SHA256SUMS.txt"
 $files = @($setup, $zip) + ($bins | ForEach-Object { Join-Path $StageDir $_ })
 $files | ForEach-Object {
   "{0}  {1}" -f (Get-FileHash $_ -Algorithm SHA256).Hash.ToLower(), (Split-Path $_ -Leaf)
-} | Set-Content -Encoding ascii $sums
+} | ForEach-Object { $_ + "`n" } | Out-String -NoNewline | ForEach-Object { [IO.File]::WriteAllText($sums, $_) }
 Write-Host "== Done"
 Get-ChildItem $dist -File | ForEach-Object { "{0}  {1:N2} MB" -f $_.Name, ($_.Length / 1MB) }
 Get-Content $sums

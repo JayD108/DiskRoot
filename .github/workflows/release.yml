@@ -132,7 +132,7 @@ jobs:
           Copy-Item $setup, "dist\xylem-$v-portable.zip", "$exes\xylem.exe", "$exes\xylem-cli.exe" out
           Get-ChildItem out -File | ForEach-Object {
             "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
-          } | Set-Content -Encoding ascii out\SHA256SUMS.txt
+          } | Join-String -Separator "`n" -OutputSuffix "`n" | ForEach-Object { [IO.File]::WriteAllText("$PWD\out\SHA256SUMS.txt", $_) }
           Get-Content out\SHA256SUMS.txt
 
       - name: Upload release files
