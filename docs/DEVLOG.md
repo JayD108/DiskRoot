@@ -78,3 +78,56 @@ Accuracy vs WizTree: 279/309 top-level folders exact. The 12 GB gap was System V
   - A navigation sequence token, so stale responses can't overwrite newer ones.
   - The list says "+ N smaller items not listed" when cut at 400.
 - Test scripts moved from the session scratchpad into `tools/`. The project is now a git repo, and `docs/` holds the PRD, tech stack, this log and HANDOFF.
+
+## 2026-11-10: Session 2 (Phase 4 finish, rename, audit, UI prototype)
+
+### Phase 4 finished
+- Extension-classified files are now grouped **by folder**. Datasets showed "1014 more places"; it now shows real folders.
+- File counts for categories and sub-types.
+- Stats keep plain arrays for the common case, plus a map only for mixed places: 0.18 s → ~0.09 s.
+- Verified in the app on a throwaway `%TEMP%\xylem-demo` project:
+  - The delete dialog shows the path, size, *Dev stuff › node_modules*, a 🟢 badge and the note.
+  - Confirming moved `node_modules` to the Recycle Bin and left `notes.txt` untouched.
+- Fixed:
+  - The header counts weren't live after a delete.
+  - "1 files" plural.
+  - Short `MRITTU~1` roots (now expanded with `canonicalize`).
+
+### Renamed Drishti → Xylem
+- Folder `Storage/xylem`, crates `xylem-*`.
+- Exes `xylem.exe`, `xylem-app.exe`, `xylem-bench.exe`.
+- Tauri identifier `com.xylem.app`.
+- Helper files `xylem-*.idx`, env vars `XYLEM_TRACE` / `XYLEM_HELPER`, index magic `XYLMIDX1`.
+- 35 tests pass.
+
+### Re-verified end to end under the new name
+- Walk: C: median 3.26 s; `verify` exact on Program Files.
+- MFT in the app via UAC:
+  - All of C: in category view, 95% classified.
+  - The helper exited, and no `xylem-*.idx` was left behind.
+- MFT timing (5 runs): median **1.48 s**. Read+parse 0.53 s (unchanged), build 0.11–0.25 s (faster), peak RAM **255 MB** (was 290), index 90 MB (was 126).
+  - "extents" (the first raw read) is 0.71–0.80 s, up from 0.36. That code is unchanged; it's likely the NTFS metadata flush, which depends on how busy the disk is.
+  - One in-app run showed 5.04 s right after a build. **Open question:** can that flush cost be reduced?
+
+### Security audit facts (for the Security.md discussion)
+- The volume is opened `read(true)` + NO_BUFFERING + OVERLAPPED. The MFT code has no write APIs.
+- `unsafe` blocks: core 0, scan-walk 5, scan-mft 7, app 3 (all FFI).
+- `reqwest` and `hyper` are in Cargo.lock as **non-Windows-only** Tauri dependencies. `cargo tree --target x86_64-pc-windows-msvc` shows nothing, so they aren't compiled on Windows.
+- **Runtime network measurement:** the WebView2 browser process keeps **2 HTTPS connections to Microsoft** (2603:1046::/32, Azure). They stay even with `--disable-background-networking --disable-component-update`, which are confirmed in its command line. Xylem's code makes none.
+- **WebView2 memory:** ~248 MB private across 6 processes; xylem-app itself ~9 MB.
+
+### UI prototype (design.md)
+- `xylem-ui-prototype/` (index.html, styles.css, app.js): standalone, no build, no network.
+- The plant-tissue theme:
+  - Stem cross-section sunburst with a pith and growth rings.
+  - Unfurl animation once, and a "sap rising" scan bar.
+  - Vessel texture done in pure CSS.
+  - Inspector panel; consent and shield modals with corrected (honest) copy.
+- Switches: `?nowelcome`, `?still`. Rendered with headless Edge to verify.
+
+### README
+- Rewritten to merge the naming story with the real architecture.
+- Inaccurate claims from naming_and_understanding.md corrected: WebGL → Canvas 2D; FSCTL volume data → boot sector; Aho-Corasick → hashed rule lookup; "zero-allocation"; USN instant reopen is planned, not built; "1.7 s" was scan+export.
+
+### Tooling note
+- A screen-region capture once grabbed the user's browser. `ui-screenshot.ps1` now uses PrintWindow (app pixels only, no focus steal).

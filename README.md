@@ -1,209 +1,195 @@
-# Xylem: a fast, visual disk analyzer for Windows
+<div align="center">
 
-*(Xylem is a working name.)* Xylem answers the questions people ask when their drive is full: **where** is the space going, **what** is it, and *(soon)* **what changed**. It scans a whole drive in about a second and draws the result as an interactive sunburst or treemap.
+# xylem
 
-| On the author's laptop (C:, 1.56 TB used, 1.77M files) | Xylem | WizTree 4.33 |
-|---|---|---|
-| Full scan + CSV export, as admin | **1.7–1.8 s** | 12.5–15.8 s |
-| Peak RAM | **290 MB** | 844 MB |
-| Scan without admin | **~3.6 s** | 26–30 s |
-| Total vs Windows' own "used space" (1,558.2 GB) | **1,558.0 GB** | 1,583 GB (counts hardlinks repeatedly) |
+**WizTree-class speed. Something nicer to look at. It tells you what things *are*.**
 
-WizTree was used only as a black box: run normally and timed. Its license forbids reverse engineering, and none was done.
+A Rust + Tauri disk analyzer for Windows. It reads the NTFS Master File Table directly, maps a 1.5 TB drive in about a second and a half, sorts every file into categories that mean something, and tells you what's safe to clean.
+
+*Local only. No accounts, no telemetry, no uploads.*
+
+</div>
 
 ---
 
-## 1. Quick start
+| Measured on the author's laptop (C:, 1.53 TB used, ~1.8M MFT records) | Xylem | WizTree 4.33 |
+|---|---|---|
+| Full-drive scan, admin (MFT) | **1.2–1.5 s** | n/a (only measured with export) |
+| Scan + export a CSV of every file, admin | **1.7–1.8 s** | 12.5–15.8 s |
+| Scan without admin | **~3.3 s** | 26–30 s |
+| Peak RAM, MFT scan | **~255 MB** | 844 MB |
+| Total vs Windows' own "used space" (≈1,558 GB) | **1,558 GB** | 1,583 GB (counts hardlinks once per name) |
+| Bytes sorted into a real category | **95%** | n/a |
+
+WizTree was used only as a black box: run normally and timed. Its license forbids reverse engineering, and none was done.
+
+## Why Xylem?
+
+When an SSD fills up, you need three answers:
+1. **Where** is the space going?
+2. **What** is it: a game, `node_modules`, a model cache, Windows itself?
+3. **What changed** since last week?
+
+Today's tools answer the first question well and the others barely:
+- **WinDirStat / TreeSize Free** are friendly and open (WinDirStat), but they walk every folder, which takes minutes on a big drive.
+- **WizTree** is very fast, but it's closed source, needs a paid license for work use, and shows *where* the big files are, not *what* they are.
+- **DaisyDisk** is beautiful, but Mac-only.
+- None of them tells you plainly **"this is safe to delete"**, and none of them shows you what changed.
+
+Xylem's answer:
+- **Raw speed:** a short-lived admin helper reads the MFT directly (4 MB chunks, parallel parsing, one shared overlapped handle) and exits.
+- **A small memory model:** 1.8M files stored as a flat struct of arrays (~50 bytes per file, no per-file objects).
+- **Meaning, not just sizes:** a data-driven rule set sorts files into *Dev stuff, AI & data, Apps & Games, System, Temp & caches…* and explains what each place is.
+- **Safe cleanup:** delete goes to the Recycle Bin. Windows, program folders and your profile's own folders are locked.
+- **Next:** instant reopen through the USN journal, and "what changed since last scan" (see the roadmap).
+
+## The name
+
+> In botany, **xylem** is the vascular tissue that pulls water up from the deepest roots to the canopy, a one-way highway that keeps a tree alive.
+
+Xylem's architecture follows the same path:
+
+| Botany | Xylem |
+|---|---|
+| **Roots** reach into the soil | The helper drops straight into the drive: the **boot sector**, then the raw **Master File Table**, not the folder APIs. |
+| **Vessels** carry sap upward | Every file is one row in flat arrays. Sizes **roll up** from children to parents in a single backwards loop, like sap rising. |
+| **Growth rings** record structure | The sunburst *is* a stem cross-section: the pith in the middle is the current folder, and each ring is one level deeper. |
+| **The canopy** opens to the light | Only what's visible reaches the UI: a pruned view of a few thousand shapes, never millions. |
+
+## Quick start
 
 ```powershell
-cd "C:\Users\Mrittunjay Dubey\Storage\xylem"
-cargo build --release --workspace
+git clone <repo> xylem
+cd xylem
+cargo build --release --workspace          # Rust 1.88+, MSVC build tools
 
-.\target\release\xylem-app.exe                  # the desktop app
-.\target\release\xylem.exe scan C: --top 20     # command line
+.\target\release\xylem-app.exe             # desktop app
+.\target\release\xylem.exe scan C: --top 20   # command line (MFT mode when run as admin)
 ```
 
-In the app, pick a drive and press **Scan**. For a whole NTFS drive, press **Fast scan (admin)**: Windows asks for permission once, then the scan takes about a second.
+In the app, pick a drive and press **Scan**, or **Fast scan (admin)** for whole NTFS drives. Switch between **By location** and **By category**, and between **Sunburst** and **Treemap**. Click to zoom in; the center, Backspace or the breadcrumbs go back up. Use 🗑 or right-click to move something to the Recycle Bin.
 
-The command line also offers:
-- `--mode auto|mft|walk`
-- `--by disk|size`
-- `--json`
-- `--export all.csv`
-- `--threads N`
+CLI options: `--mode auto|mft|walk`, `--by disk|size`, `--json`, `--export all.csv`, `--threads N`.
 
-## 2. The big picture
+*Screenshots: add `docs/screenshots/sunburst.png`, `category.png` and `delete.png` before the first public release.*
+
+## How it works
 
 ```
-                    ┌──────────────── xylem-app.exe (normal user) ────────────────┐
- You ── clicks ───► │  UI (HTML/JS, Canvas)  ◄── small JSON views ──  Rust backend   │
-                    │   sunburst · treemap · list                    holds the Index │
+                    ┌──────────────── xylem-app.exe (normal user) ──────────────────┐
+ You ── clicks ───► │  UI (HTML/JS, Canvas 2D)  ◄── small JSON views ──  Rust backend│
+                    │   sunburst · treemap · list · delete dialog       Index + rules│
                     └───────────────▲────────────────────────────────────┬──────────┘
-                                    │ loads index file                   │ "Fast scan"
+                                    │ loads + validates index file       │ Fast scan
                                     │                                    ▼ (UAC prompt)
-                    ┌───────────────┴─── xylem.exe (admin, short-lived) ──────────┐
-                    │  MFT reader: raw disk ─► parse records ─► tree ─► save index   │
+                    ┌───────────────┴──── xylem.exe (admin, short-lived) ───────────┐
+                    │  boot sector ─► $MFT runs ─► read + parse ─► tree ─► save, exit│
                     └────────────────────────────────────────────────────────────────┘
- Without admin:  the app itself runs the folder-walk scanner (no prompt).
+ Without admin: the app runs the folder-walk scanner itself (no prompt).
 ```
 
-There are three steps, each in its own crate:
-1. **Scan:** read the file system as fast as possible into a compact tree (`scan-walk`, `scan-mft`).
-2. **Model:** store the tree flat and small, with sizes rolled up into every folder (`core`).
-3. **Show:** send the UI only what's visible right now, and draw it (`core::view` plus `app`).
+### 1. Roots: two scanners
+**MFT reader (`crates/scan-mft`)**, for admin on NTFS:
+1. Read the **boot sector**: cluster size, record size, where the MFT starts.
+2. Read **record 0** (the MFT's own entry). Its run list says where each MFT fragment lives; very fragmented MFTs are followed through extension records.
+3. Read the MFT in **4 MB unbuffered chunks** on several threads through **one shared overlapped handle**. A handle per thread cost ~0.35 s *each*.
+4. **Parse** each 1 KB record with bounds checks. The fixup (torn-write check) is verified, and corrupt records are skipped, never trusted.
+5. **Fold** extension records into their base record, **link** each file to its parent (checking sequence numbers, so stale links are rejected), and build the tree breadth-first.
 
-## 3. How scanning works
+Each file record becomes exactly one entry, so a hardlinked file is counted **once**. That's why the total matches Windows' used space.
 
-### 3a. Folder walk (`crates/scan-walk`): works everywhere, no admin needed
-This is the classic approach: list a folder, then list each of its subfolders.
+**Folder walk (`crates/scan-walk`)**, the no-admin path, works on any drive:
+- `NtQueryDirectoryFile` returns hundreds of entries with sizes per call.
+- Each folder is opened *relative to its parent's handle*, so Windows never re-parses the full path.
+- 8 workers share a depth-first stack (more threads were measured to be slower).
+- Symlinks and junctions are never followed.
 
-Three tricks make it fast:
-- **Big batches:** `NtQueryDirectoryFile` returns hundreds of entries per call, with size and size on disk included, so there's no extra call per file. It uses the info class without legacy 8.3 short names, which are slow to look up.
-- **Relative opens:** each subfolder is opened *relative to its parent's already-open handle* (`NtOpenFile` + `RootDirectory`), so Windows never re-parses the full path from `C:\`.
-- **8 worker threads with a depth-first work stack.** More threads were measured to be *slower* on this CPU (8 fast + 16 efficiency cores, plus NTFS lock contention).
+`--mode auto` uses the MFT when it can, and otherwise walks folders and says why.
 
-Only workers touch the disk. A single builder thread owns the tree, so it needs no locks. Symlinks and junctions are never followed, so there are no loops or double counting. OneDrive folders are still scanned.
+### 2. Vessels: the data model (`crates/core`)
+`Index` is a struct of arrays indexed by a `u32` id: `parent[] size[] alloc[] files[] flags[] name_off[] name_len[]` plus one string arena.
+- The rule **parent id < child id** makes the size roll-up one backwards loop.
+- `from_columns` builds in bulk and **validates** the tree.
+- `store.rs` saves and loads it, checking the length against the header, the UTF-8, and the invariants.
+- `view.rs` sends the UI a **pruned view**: about 6 levels, with items under 0.2% merged into "N small items".
 
-### 3b. MFT reader (`crates/scan-mft`): the fast path, needs admin and NTFS
-NTFS keeps a table called the **Master File Table (MFT)**: one 1 KB record per file, holding its name, parent folder and sizes. Reading that table front to back is much faster than asking Windows about each folder.
+### 3. Meaning: classification (`crates/core/src/classify.rs` + `rules.json`)
+- **Rules are data, not code.** A folder or file pattern (`node_modules`, `/Windows/WinSxS`, `AppData/Local/Temp`, `/Users/*/Downloads`) gives a category, a sub-type, a plain-English note, a safety level (🟢/🟡/🔴) and a protection level.
+- **One pass in id order:** a match decides a node, everything inside inherits it, and deeper matches win. Rules are found by a hash of the lowercased name, and anchored rules are skipped at the wrong depth. **~0.1–0.2 s for 1.8M files.**
+- **Extension rules** (`.mp4`, `.npy`, `.gguf`…) refine files only inside "weak" places (Desktop, Documents, unclassified folders), or anywhere if marked strong (model files).
+- **By-category view:** Category → Sub-type → **places** (the folders holding those bytes). Sizes add up exactly.
 
-1. **Boot sector** (first 512 bytes of the drive): cluster size, record size, and where the MFT starts.
-2. **Record 0 is the MFT's own entry.** Its *run list* says where every fragment of the MFT sits on disk. If the MFT is very fragmented, extra fragments are listed in "extension records", and those are followed too.
-3. **Read** the MFT in 4 MB chunks with several threads through **one** shared overlapped volume handle, bypassing the system cache.
-   - A handle per thread cost ~0.35 s *each*, which was the biggest lesson of Phase 2.
-4. **Parse** each record, all bounds-checked; corrupt or torn records are skipped, never trusted:
-   - Apply the *fixup*: NTFS stamps a check value at the end of every 512 bytes.
-   - `$FILE_NAME`: name and parent. When there are several names, the Win32 name wins over the DOS 8.3 one.
-   - `$DATA`: size, and size on disk, including compressed, sparse and CompactOS (`WofCompressedData`) files.
-   - `$STANDARD_INFORMATION`: attributes. `$REPARSE_POINT`: links and cloud placeholders.
-5. **Fold extension records** into their base record. Big files can spread their attributes over several records.
-6. **Link children to parents.** A link is accepted only if the parent is a folder *and* its sequence number matches, so stale links to deleted folders are rejected.
-7. **Build the tree breadth-first from record 5** (the root): first a pass over compact integer arrays to assign ids, then a sequential fill of the columns.
+### 4. Canopy: the app (`crates/app`)
+- **Backend:** Tauri commands (`scan`, `scan_admin`, `view`, `list`, `crumbs`, `category_view`, `info`, `delete`, `reveal`). The UI never holds the full tree.
+- **Frontend:** plain HTML/CSS/JS with no build step: a Canvas 2D sunburst and squarified treemap, a ranked list, tooltips with notes and safety badges, and a delete dialog.
+- **Safe delete:** `SHFileOperationW` with *allow undo*, so things go to the Recycle Bin, and Windows itself warns if something is too big to recycle. Protected items are refused **in the backend**, not just hidden in the UI.
 
-Each file record becomes exactly one entry, so a **hardlinked file is counted once**. That's why the total matches Windows' used space exactly, while tools that list every name count those files twice.
-
-`--mode auto` uses the MFT for whole NTFS drives when it has admin rights, and otherwise falls back to the folder walk and says why.
-
-## 4. The data model (`crates/core`)
-
-`Index` is a **struct of arrays**, one array per field, indexed by a `u32` node id:
-
-```
-parent[]  size[]  alloc[]  files[]  flags[]  name_off[]  name_len[]   + one big names string
-```
-
-- **Far smaller than a tree of objects.** There are no per-node allocations or pointers: about 40–60 bytes per file.
-- **One rule makes everything simple: a parent's id is always smaller than its children's.** Rolling sizes up into folders is then a single backwards loop (`compute_totals`).
-- `size` is the logical size; `alloc` is the size on disk. The UI ranks by size on disk, because that's what deleting frees.
-- `flags`: folder, link, cloud placeholder, compressed, sparse, unreadable.
-
-Other pieces in `core`:
-- `Index::from_columns` builds an index in bulk and **validates** the parent and name invariants instead of trusting them.
-- `store.rs` saves and loads the index (binary). This is how the admin helper hands its result to the app. Loading is fully validated: it checks the header against the file length, the UTF-8 names, and the tree invariants.
-- `view.rs`:
-  - `Children` holds sorted child lists.
-  - `build_view` is the **pruned view**: a few levels deep, with items under 0.2% merged into "N small items". The UI draws thousands of shapes, never millions.
-- `report.rs` produces the top-N lists; `format.rs` turns numbers into "1.52 TB" and "1,234".
-
-## 5. The app (`crates/app`)
-
-**Backend (`src/main.rs`):** Tauri commands the UI calls:
-
-| Command | What it does |
-|---|---|
-| `scan` | Scans a path |
-| `scan_admin` | Runs the elevated helper |
-| `view` | Returns the pruned diagram data |
-| `list` | Returns ranked children, plus the total count |
-| `crumbs` | Returns breadcrumbs |
-| `reveal` | Shows an item in Explorer |
-| `list_drives`, `initial_path` | Support start-up |
-
-**Frontend (`ui/`):** plain HTML, CSS and JS with no build step and no external downloads.
-- **Sunburst:** the center is the current folder; each ring is one level deeper. Angles are proportional to size on disk.
-- **Treemap:** squarified layout (rectangles kept close to square), nested, with a header bar per folder.
-- Hit-testing turns the mouse position into the item under it, which drives the hover highlight, tooltip, click-to-zoom and list sync.
-- Colors: each top-level branch gets a hue, and deeper levels and siblings get small shade shifts.
-
-**Admin helper flow (`src/elevate.rs`):**
-1. The app picks a random name `%TEMP%\xylem-<pid>-<time>.idx`.
-2. It runs `xylem.exe scan C: --mode mft --save-index <that file>` through `ShellExecuteExW("runas")`, which shows the UAC prompt, and waits.
-3. It loads the file, checking its length against the header, then deletes it.
-
-## 6. Accuracy rules
+## Accuracy rules
 
 | Situation | What Xylem does |
 |---|---|
-| Hardlinks (one file, several names) | MFT mode counts it once. The folder walk can't tell, so it counts each name (like other tools). |
-| Compressed / sparse / CompactOS files | Size on disk = bytes actually used |
-| OneDrive "online-only" files | Size on disk ≈ 0; flagged `cloud` |
-| Symlinks / junctions | Shown with a `link` badge, never followed |
-| Tiny files stored inside the MFT | Size on disk = 0 |
-| `pagefile.sys`, `hiberfil.sys`, `$MFT`, System Volume Information | Included (MFT mode); they are real space |
+| Hardlinks | MFT mode counts once. The folder walk can't tell, so it counts each name (like other tools). |
+| Compressed / sparse / CompactOS files | Size on disk = bytes actually used (including the `WofCompressedData` stream) |
+| OneDrive online-only files | Size on disk ≈ 0, tagged `cloud` |
+| Symlinks / junctions | Tagged `link`, never followed |
+| `pagefile.sys`, `hiberfil.sys`, `$MFT`, System Volume Information | Included in MFT mode; they're real space |
 
-## 7. Security model
-- **The app never runs as admin.** Only the short-lived helper does, and only after you approve the UAC prompt.
-- **The helper writes only where it should:**
-  - `--save-index` accepts only a `xylem-*.idx` file directly in your temp folder.
-  - It creates the file *new* (`create_new`), so a planted file or link makes it fail rather than overwrite something.
-- **The helper's location can't be redirected.** It's always `xylem.exe` next to the app; the `XYLEM_HELPER` override exists only in debug builds.
-  - Remaining gap: if the app folder is writable by normal users, someone could swap the helper. The fix is an installer into Program Files plus code signing.
-- **All parsing of disk data and index files is bounds-checked** and validated in safe Rust, and corrupt input is rejected.
-- **The UI:**
-  - Escapes every file name before inserting it as HTML.
-  - Runs under a strict Content Security Policy that only allows the app's own files.
-  - Tauri exposes only the commands listed above.
+## Security & privacy
 
-## 8. Project layout
+- **Read-only disk access.** The volume is opened with read access only (`GENERIC_READ`, unbuffered, overlapped). The MFT code contains no write calls.
+- **Admin only when asked, only briefly.** `xylem-app.exe` never runs elevated. "Fast scan" starts `xylem.exe` through the Windows UAC prompt; it scans, writes its result, and exits (measured: no elevated process left behind).
+- **Hardened handoff:**
+  - The helper only writes a *new* file (`create_new`, so a planted file or link makes it fail rather than overwrite) named `xylem-*.idx`, directly in your temp folder.
+  - The app loads it with full validation and deletes it.
+  - The helper's location can't be redirected in release builds.
+- **Untrusted input is parsed safely.** MFT records and index files are bounds-checked in safe Rust; `unsafe` is limited to small, commented Windows calls.
+- **UI:** file names are escaped before display, and a Content Security Policy allows only the app's own files.
+- **Network:**
+  - Xylem's code contains **no network code**. No HTTP client is compiled for Windows; Tauri's optional HTTP crates are for other platforms only.
+  - *Honest note:* the window is drawn by Microsoft **WebView2**, which was measured opening HTTPS connections to Microsoft for its own services. Your file data never goes there. See `docs/DEVLOG.md` for the measurements and the options being considered.
+
+## Project layout
 
 ```
 xylem/
 ├─ crates/
-│  ├─ core/        Index, store (save/load), view (pruning), report, format, win (attribute flags)
-│  ├─ scan-walk/   folder-walk scanner (Windows FFI in ffi.rs, logic in walker.rs)
-│  ├─ scan-mft/    MFT reader: volume.rs (disk), record.rs (parsing), scan.rs (pipeline + tree)
+│  ├─ core/        Index, store, view, classify (+ rules.json), report, format
+│  ├─ scan-walk/   folder-walk scanner (Windows FFI in ffi.rs)
+│  ├─ scan-mft/    MFT reader: volume.rs, record.rs, scan.rs
 │  ├─ cli/         xylem.exe (also the admin helper)
 │  ├─ bench/       xylem-bench.exe: gen | run | time | verify | modes
-│  └─ app/         Tauri app: src/ (Rust backend), ui/ (HTML/CSS/JS), icons/
-├─ tools/          benchmark + UI-test scripts (see below)
-└─ docs/           PRD.md, TECHSTACK.md, DEVLOG.md (history), HANDOFF.md (start here)
+│  └─ app/         Tauri app: src/ (Rust) + ui/ (HTML/CSS/JS)
+├─ xylem-ui-prototype/   standalone design prototype for the next UI (open index.html)
+├─ tools/          benchmark + UI-test scripts
+└─ docs/           PRD, TECHSTACK, DEVLOG (history), HANDOFF (start here)
 ```
 
-## 9. Testing and benchmarking
+## Testing
 
 ```powershell
 cargo test --workspace                     # unit + integration tests
-cargo clippy --workspace --all-targets     # lint (kept at zero warnings)
-cargo test --release -p xylem-scan-mft -- --ignored --nocapture   # tree-build speed benchmark
-
+cargo clippy --workspace --all-targets     # kept at zero warnings
 .\target\release\xylem-bench.exe verify "C:\Program Files"   # exact match vs a plain std::fs walk
-.\target\release\xylem-bench.exe run C: --runs 5             # timing
-.\target\release\xylem-bench.exe modes C:                    # MFT vs walk, folder by folder (admin)
-.\tools\admin-bench.ps1                                        # all admin benchmarks + WizTree (admin shell)
+.\tools\admin-timing.ps1                   # MFT timing with per-phase trace (admin shell)
+.\tools\admin-bench.ps1                    # full admin benchmark incl. WizTree (admin shell)
 ```
 
-**What the tests cover:**
-- Torn, junk and malicious MFT records; run lists; boot sectors.
-- Hardlinks, orphans, stale parents, extension records.
-- Junction loops and Unicode names on a real temp folder.
-- Index save/load and corruption rejection; the view-pruning math.
+The tests cover:
+- Torn, junk and hostile MFT records; run lists; boot sectors.
+- Hardlinks, orphans, stale parents.
+- Junction loops and Unicode names on real folders.
+- Index save/load and corruption rejection.
+- Classification, protection and category totals.
 - The admin helper's path guard.
+- Recycle-Bin delete (an opt-in test).
 
-**UI checks without touching the mouse:**
-- `tools/ui-screenshot.ps1` launches the app and captures only its window.
-- `tools/ui-click.ps1` and `tools/ui-setpath.ps1` press buttons and type paths through Windows UI Automation.
+## Roadmap
 
-## 10. Roadmap
-
-| Phase | Status |
+| | |
 |---|---|
-| 1. Fast folder walk + bench harness | Done |
-| 2. MFT reader | Done |
-| 3. Desktop app (sunburst, treemap, list, admin helper) | Done |
-| 4. Categories (Dev, AI models, Games, System…), "by category" view, safe delete | In progress |
-| 5. Instant reopen (USN journal), "what changed" snapshots, safety badges | Planned |
+| ✅ 1–3 | Folder walk, MFT reader, desktop app with sunburst, treemap and admin helper |
+| ✅ 4 | Categories, by-category view, notes and safety badges, Recycle-Bin delete |
+| ⏭ 5 | Instant reopen (index cache + USN journal), "what changed" snapshots |
+| Later | Show every name of hardlinked files; installer into Program Files + code signing; Explorer context menu; new UI (see `xylem-ui-prototype/`) |
 
-Known limits:
-- In MFT mode, the other names of a hardlinked file aren't listed yet.
-- MFT-mode RAM is 290 MB.
-- No installer or code signing yet.
+*Xylem was called "Drishti" until 10 Nov 2026.*

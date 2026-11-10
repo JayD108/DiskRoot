@@ -1,0 +1,387 @@
+/* ==========================================================================
+   Xylem — design DNA
+   Xylem is the plant tissue that carries water up from the roots to the
+   canopy. The app pulls raw file-table data up from the disk and lets it
+   open out at the surface: the sunburst is a stem cross-section, the rings
+   are growth rings, the centre is the pith.
+   ========================================================================== */
+
+:root {
+  /* Surfaces */
+  --canvas: #09090b;          /* the stage behind the diagram */
+  --side: #131316;            /* sidebars and bars */
+  --raised: #1b1b20;          /* cards, inputs */
+  --line: #26262d;            /* hairlines, used sparingly */
+  --hover: rgba(255, 255, 255, 0.05);
+
+  /* Text */
+  --text: #ececf1;
+  --muted: #8b8b97;
+  --faint: #5d5d68;
+
+  /* Category palette (one hue = one meaning, everywhere) */
+  --c-dev: #22d3ee;      /* electric cyan   — Dev stuff */
+  --c-media: #2dd4bf;    /* soft teal       — Media */
+  --c-temp: #f59e0b;     /* warm amber      — Temp & caches */
+  --c-ai: #a855f7;       /* neon purple     — AI & data */
+  --c-system: #f43f5e;   /* rose red        — System */
+  --c-apps: #3b82f6;     /* vascular blue   — Apps & Games */
+  --c-docs: #84cc16;     /* chlorophyll     — Documents */
+  --c-down: #fde047;     /* pollen          — Downloads */
+  --c-cloud: #94a3b8;    /* overcast        — Cloud-synced */
+  --c-other: #52525b;    /* bark            — Other */
+
+  /* Accent = the sap: the primary action */
+  --sap: #22d3ee;
+  --sap-ink: #031418;
+
+  --font: system-ui, "Inter", "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  --mono: "Cascadia Mono", "JetBrains Mono", ui-monospace, Consolas, monospace;
+  --radius: 10px;
+  --shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;              /* fixed desktop window: nothing scrolls but the list */
+  background: var(--canvas);
+  color: var(--text);
+  font: 13px/1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  display: grid;
+  grid-template-rows: 56px 46px minmax(0, 1fr) 28px;
+}
+
+button, select { font: inherit; color: inherit; }
+.num, .num * { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.hidden { display: none !important; }
+
+/* ---------------- Header ---------------- */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 16px;
+  background: var(--side);
+  box-shadow: 0 1px 0 var(--canvas);
+}
+
+.brand { display: flex; align-items: center; gap: 9px; min-width: 120px; }
+.logo { width: 26px; height: 26px; }
+.wordmark { font-size: 18px; font-weight: 650; letter-spacing: 0.04em; }
+
+.drive {
+  display: grid;
+  grid-template-columns: auto 90px auto;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px 5px 6px;
+  border-radius: 9px;
+  background: var(--raised);
+}
+.drive select {
+  border: 0;
+  background: transparent;
+  padding: 4px 6px;
+  outline: none;
+  cursor: pointer;
+}
+.drive select option { background: var(--raised); }
+.drive-meter { height: 5px; border-radius: 3px; background: var(--canvas); overflow: hidden; }
+.drive-meter i { display: block; height: 100%; background: linear-gradient(90deg, var(--c-dev), var(--c-ai)); }
+.drive-meta { color: var(--muted); font-size: 11.5px; }
+
+.actions { display: flex; gap: 8px; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: filter 0.15s, background-color 0.15s;
+}
+.btn svg { width: 14px; height: 14px; }
+.btn.ghost { background: var(--raised); }
+.btn.ghost:hover { background: #24242b; }
+.btn.primary {
+  background: var(--sap);
+  color: var(--sap-ink);
+  font-weight: 650;
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.35), 0 6px 22px rgba(34, 211, 238, 0.22);
+}
+.btn.primary:hover { filter: brightness(1.08); }
+.btn .tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(3, 20, 24, 0.18);
+}
+.btn:focus-visible, .icon-btn:focus-visible, .seg button:focus-visible { outline: 2px solid var(--sap); outline-offset: 2px; }
+
+.header-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.icon-btn {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--c-dev);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--hover); }
+.icon-btn svg { width: 20px; height: 20px; }
+
+/* ---------------- Toolbar ---------------- */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 16px;
+  background: var(--canvas);
+}
+
+.crumbs { display: flex; align-items: center; gap: 2px; list-style: none; margin: 0; padding: 0; min-width: 0; flex: 1; }
+.crumbs li { display: flex; align-items: center; color: var(--muted); white-space: nowrap; }
+.crumbs li + li::before { content: "›"; margin: 0 7px; color: var(--faint); }
+.crumbs button {
+  border: 0;
+  background: none;
+  padding: 3px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: inherit;
+}
+.crumbs button:hover { background: var(--hover); color: var(--text); }
+.crumbs li:last-child button { color: var(--text); font-weight: 600; }
+
+.toggles { display: flex; gap: 10px; }
+.seg { display: flex; gap: 2px; padding: 3px; border-radius: 9px; background: var(--side); }
+.seg button {
+  border: 0;
+  background: transparent;
+  padding: 4px 12px;
+  border-radius: 7px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.seg button:hover { color: var(--text); }
+.seg button[aria-pressed="true"] { background: var(--raised); color: var(--text); }
+
+/* ---------------- Stage (diagram) ---------------- */
+.main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  min-height: 0;
+}
+
+.stage { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+
+/* Faint xylem vessels: vertical tubes with pits, rising behind the canopy.
+   Pure CSS gradients, drawn once; costs nothing while idle. */
+.vessels {
+  position: absolute;
+  inset: 0;
+  opacity: 0.55;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(34, 211, 238, 0.06), transparent 60%),
+    repeating-linear-gradient(90deg, transparent 0 46px, rgba(255, 255, 255, 0.022) 46px 48px, transparent 48px 94px),
+    repeating-radial-gradient(circle at 47px 0, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 18px);
+  -webkit-mask-image: radial-gradient(ellipse at center, #000 30%, transparent 78%);
+  mask-image: radial-gradient(ellipse at center, #000 30%, transparent 78%);
+  pointer-events: none;
+}
+
+#dummy-sunburst { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+/* Scan overlay: a capillary filling from the bottom (sap rising) */
+.scan-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  background: rgba(9, 9, 11, 0.78);
+  backdrop-filter: blur(3px);
+}
+.capillary {
+  position: relative;
+  width: 14px;
+  height: 140px;
+  border-radius: 8px;
+  background: var(--raised);
+  overflow: hidden;
+}
+.capillary i {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 0%;
+  border-radius: 8px;
+  background: linear-gradient(0deg, var(--c-ai), var(--c-dev));
+  box-shadow: 0 0 18px rgba(34, 211, 238, 0.6);
+}
+.scan-title { font-size: 16px; font-weight: 600; }
+.scan-sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+
+/* ---------------- Sidebar ---------------- */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--side);
+}
+
+.side-head { padding: 16px 18px 12px; }
+.side-title { font-size: 15px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side-sub { color: var(--muted); font-size: 12px; margin-top: 3px; }
+
+/* Stacked "tissue" strip: share of each category, separated by negative space */
+.tissue { display: flex; gap: 2px; height: 8px; margin-top: 12px; border-radius: 4px; overflow: hidden; }
+.tissue i { display: block; height: 100%; min-width: 2px; }
+
+.rank { list-style: none; margin: 0; padding: 4px 8px; overflow-y: auto; flex: 1; min-height: 0; }
+.rank li {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.rank li:hover, .rank li.hot { background-color: rgba(255, 255, 255, 0.05); }
+.rank li.sel { background-color: rgba(34, 211, 238, 0.08); }
+.rank .dot { width: 9px; height: 9px; border-radius: 50%; }
+.rank .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rank .size { text-align: right; font-size: 12.5px; }
+.rank .bar { grid-column: 2 / 4; height: 3px; border-radius: 2px; background: var(--raised); overflow: hidden; }
+.rank .bar i { display: block; height: 100%; border-radius: 2px; }
+.rank .pct { color: var(--muted); font-size: 11px; margin-left: 8px; }
+
+/* Inspector: "what is this, and is it safe?" */
+.inspector {
+  margin: 8px 10px 12px;
+  padding: 14px;
+  border-radius: var(--radius);
+  background: var(--raised);
+  min-height: 132px;
+}
+.insp-empty { color: var(--faint); font-size: 12px; }
+.insp-title { display: flex; align-items: center; gap: 8px; font-weight: 650; }
+.insp-title .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.insp-kind { color: var(--muted); font-size: 12px; margin: 2px 0 8px 17px; }
+.insp-note { font-size: 12.5px; color: #cfcfd8; line-height: 1.5; }
+.insp-row { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; gap: 8px; }
+.badge { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; letter-spacing: 0.02em; }
+.badge.green { color: #4ade80; background: rgba(74, 222, 128, 0.12); }
+.badge.yellow { color: var(--c-temp); background: rgba(245, 158, 11, 0.12); }
+.badge.red { color: var(--c-system); background: rgba(244, 63, 94, 0.12); }
+.mini { height: 28px; padding: 0 10px; font-size: 12px; }
+.mini.danger { background: rgba(244, 63, 94, 0.14); color: #ff8fa3; }
+.mini.danger:hover { background: rgba(244, 63, 94, 0.24); }
+.mini[disabled] { opacity: 0.35; cursor: not-allowed; }
+
+/* ---------------- Status bar ---------------- */
+.status {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 16px;
+  background: var(--side);
+  color: var(--muted);
+  font-size: 11px;
+}
+.status b { color: var(--text); font-weight: 500; }
+.status .local { display: inline-flex; align-items: center; gap: 6px; color: #9be7b5; }
+.status .local i { width: 6px; height: 6px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 8px #4ade80; }
+.linkish { margin-left: auto; border: 0; background: none; color: var(--faint); cursor: pointer; font-family: var(--font); font-size: 11px; }
+.linkish:hover { color: var(--text); }
+
+/* ---------------- Tooltip ---------------- */
+.tip {
+  position: fixed;
+  z-index: 20;
+  pointer-events: none;
+  min-width: 200px;
+  max-width: 340px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(19, 19, 22, 0.96);
+  box-shadow: var(--shadow);
+}
+.tip .t1 { display: flex; align-items: center; gap: 7px; font-weight: 650; }
+.tip .t1 .dot { width: 8px; height: 8px; border-radius: 50%; }
+.tip .t2 { color: var(--muted); font-size: 11.5px; margin: 1px 0 6px 15px; }
+.tip .row { display: flex; justify-content: space-between; gap: 18px; font-size: 12px; color: var(--muted); }
+.tip .row b { color: var(--text); font-weight: 500; }
+
+/* ---------------- Modals ---------------- */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(4, 4, 6, 0.72);
+  backdrop-filter: blur(4px);
+}
+.dialog {
+  position: relative;
+  width: min(540px, 100%);
+  padding: 26px 26px 20px;
+  border-radius: 16px;
+  background: var(--side);
+  box-shadow: var(--shadow), 0 0 0 1px var(--line);
+  overflow: hidden;
+}
+.dialog-art {
+  position: absolute;
+  inset: -40% -20% auto auto;
+  width: 260px;
+  height: 260px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, transparent 38%, rgba(168, 85, 247, 0.18) 39% 41%, transparent 42%),
+    radial-gradient(circle, transparent 52%, rgba(34, 211, 238, 0.16) 53% 55%, transparent 56%),
+    radial-gradient(circle, transparent 66%, rgba(34, 211, 238, 0.08) 67% 69%, transparent 70%);
+  pointer-events: none;
+}
+.dialog h2 { margin: 0 0 14px; font-size: 18px; }
+.points { margin: 0; padding: 0; list-style: none; display: grid; gap: 12px; }
+.points li { padding-left: 18px; position: relative; color: #cfcfd8; }
+.points li::before { content: ""; position: absolute; left: 0; top: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--c-dev); box-shadow: 0 0 8px var(--c-dev); }
+.points b { color: var(--text); }
+.facts { display: grid; grid-template-columns: 150px 1fr; gap: 10px 16px; margin: 0; }
+.facts dt { color: var(--c-dev); font-weight: 600; }
+.facts dd { margin: 0; color: #cfcfd8; }
+.dialog-actions { display: flex; justify-content: flex-end; margin-top: 22px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}
+
+@media (max-width: 1100px) {
+  .main { grid-template-columns: minmax(0, 1fr) 320px; }
+  .drive-meta { display: none; }
+}
