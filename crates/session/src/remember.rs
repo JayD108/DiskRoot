@@ -447,7 +447,7 @@ mod tests {
             rng ^= rng << 17;
             let at = (rng as usize) % b.len();
             b[at] = (rng >> 32) as u8;
-            if rng % 3 == 0 {
+            if rng.is_multiple_of(3) {
                 b.truncate((rng as usize >> 8) % (b.len() + 1));
             }
             let _ = Snapshot::load(&mut b.as_slice());
