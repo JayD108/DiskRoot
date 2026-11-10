@@ -81,6 +81,7 @@ Free code signing provided by [SignPath.io](https://about.signpath.io/), certifi
 | [Security and privacy](docs/SECURITY-AND-PRIVACY.md) | What Xylem reads, admin rights, safe delete, testing |
 | [Development](docs/DEVELOPMENT.md) | Build from source, command line, tests, project layout, releases |
 | [Roadmap](docs/ROADMAP.md) | What's next |
+| [Competitors](docs/COMPETITORS.md) | How Xylem compares with other disk analyzers |
 
 ## Acknowledgements
 
