@@ -337,3 +337,10 @@ User asked: "go for next step and also add the security measures ... and think o
 - **Open:** F-09 (TEMP by handle), F-11 (helper timeout/cancel), F-15 (OTS UAC decision), F-13 for the log/CSV, cargo-deny, then the VM test run.
 - 61 tests, clippy clean.
 - **Git:** at the user's request there is no Claude attribution. The `Co-Authored-By` trailers were stripped from all commits (local backup branch `backup-before-rewrite`). The user will delete the GitHub repo and push to a new one themselves.
+
+### Same day, later: new repo, first release
+- The user deleted the old GitHub repo and pushed the cleaned history to a new https://github.com/JayD108/Xylem (no Claude contributor).
+- README: added an Acknowledgements section (Claude used as an AI assistant), as the user asked.
+- **v0.1.0 published** by the release workflow from tag `v0.1.0` → commit 7d3097e: installer 2.50 MB, portable zip 3.28 MB, SHA256SUMS. Unsigned (signing after all phases). The workflow's real install/uninstall test passed; CI on main is green.
+- An old local `v0.1.0` tag (pre-cleanup commit, never pushed) was replaced.
+- Dependabot opened PRs for Actions major bumps (checkout 7, upload-artifact 7, signpath action 3). Not merged yet; review them (the signpath action input names may differ in v3).
