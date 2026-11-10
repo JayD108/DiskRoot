@@ -135,7 +135,7 @@ SectionEnd
   !insertmacro MUI_DESCRIPTION_TEXT ${SecApp} "The Xylem app, including the Fast scan helper."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecCli} "xylem-cli.exe: scan from the command line and export CSV."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "A Xylem shortcut on the desktop."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecExplorer} "Adds \"Analyze with Xylem\" when you right-click a folder or drive."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecExplorer} "Adds $\"Analyze with Xylem$\" when you right-click a folder or drive."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
