@@ -33,6 +33,28 @@ pub fn categories() -> &'static [Category] {
     &CATEGORIES
 }
 
+/// Items found so far by a running folder-walk scan (0 when idle).
+pub fn scan_progress() -> u64 {
+    xylem_scan_walk::PROGRESS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// (total, free) bytes of the volume holding `path` (free = free for this user).
+pub fn disk_space(path: &str) -> Option<(u64, u64)> {
+    #[link(name = "kernel32", kind = "raw-dylib")]
+    unsafe extern "system" {
+        fn GetDiskFreeSpaceExW(dir: *const u16, free_to_caller: *mut u64, total: *mut u64, total_free: *mut u64) -> i32;
+    }
+    let mut root = path.to_owned();
+    if !root.ends_with('\\') {
+        root.push('\\');
+    }
+    let w: Vec<u16> = root.encode_utf16().chain([0]).collect();
+    let (mut free, mut total, mut total_free) = (0u64, 0u64, 0u64);
+    // SAFETY: NUL-terminated path and three valid out pointers.
+    let ok = unsafe { GetDiskFreeSpaceExW(w.as_ptr(), &mut free, &mut total, &mut total_free) } != 0;
+    (ok && total > 0).then_some((total, free))
+}
+
 /// Drive roots that exist, e.g. `["C:\\", "D:\\"]`.
 pub fn drives() -> Vec<String> {
     // GetDriveTypeW answers from the local mount table, so network drives

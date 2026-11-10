@@ -152,8 +152,13 @@ struct Listing {
 
 /// Scans a folder or drive root (e.g. `C:\`) and returns the full tree with
 /// folder totals already computed.
+/// Items found so far by the running folder walk (for a progress display).
+/// Updated once per folder, so it costs nothing measurable.
+pub static PROGRESS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub fn scan(root: &Path, opts: &ScanOptions) -> io::Result<Scan> {
     let start = Instant::now();
+    PROGRESS.store(0, std::sync::atomic::Ordering::Relaxed);
     let (display, nt_path) = prepare_root(root)?;
     let mut index = Index::new(&display);
     let mut stats = ScanStats::default();
@@ -204,6 +209,7 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> io::Result<Scan> {
                     stats.files += 1;
                 }
             }
+            PROGRESS.store(index.len() as u64, std::sync::atomic::Ordering::Relaxed);
             pending += listing.subdirs.len();
             let parent = listing.handle;
             stack.push_all(

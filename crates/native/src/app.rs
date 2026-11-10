@@ -93,6 +93,16 @@ enum Dialog {
     ConfirmDelete(Box<Confirm>),
 }
 
+/// The drive strip at the bottom of the window.
+struct DriveBar {
+    root: String,
+    /// Volume size and free space (None if Windows didn't say).
+    space: Option<(u64, u64)>,
+    scanned: u64,
+    /// The 5 biggest top-level items: (node, name, bytes on disk, colour category).
+    top: Vec<(u32, String, u64, u8)>,
+}
+
 /// "Largest files & file types": the search text and current results.
 struct FilesView {
     query: String,
@@ -155,6 +165,8 @@ pub struct XylemApp {
     changes: Option<Changes>,
     /// Set when the tree on screen is a remembered scan (its scan time).
     remembered_at: Option<u64>,
+    /// Bottom strip: how full the drive is, and the 5 biggest items.
+    drive_bar: Option<DriveBar>,
     scroll_to_selected: bool,
 }
 
@@ -185,6 +197,7 @@ impl XylemApp {
             remember_rx: None,
             changes: None,
             remembered_at: None,
+            drive_bar: None,
             scroll_to_selected: false,
         };
         if !app.settings.seen_notice {
@@ -311,7 +324,9 @@ impl XylemApp {
         let Some(job) = &self.job else { return };
         match job.rx.try_recv() {
             Err(TryRecvError::Empty) => {
-                ctx.request_repaint_after(Duration::from_millis(120));
+                // Every frame (vsync) while a job runs, so the progress bar
+                // moves smoothly; nothing else redraws while idle.
+                ctx.request_repaint();
             }
             Err(TryRecvError::Disconnected) => {
                 self.job = None;
@@ -358,6 +373,14 @@ impl XylemApp {
         }
     }
 
+    fn refresh_drive_bar(&mut self) {
+        self.drive_bar = self.scanned.as_ref().map(|s| {
+            let sum = s.summary();
+            let top = s.list(0, 5).map(|l| l.items.into_iter().map(|i| (i.id, i.name, i.on_disk, i.cat)).collect()).unwrap_or_default();
+            DriveBar { space: xylem_session::disk_space(&sum.root), root: sum.root, scanned: sum.on_disk, top }
+        });
+    }
+
     fn show_scan(&mut self, s: Scanned, sum: Summary) {
         self.summary = Some(sum);
         self.scanned = Some(s);
@@ -365,6 +388,7 @@ impl XylemApp {
         self.expanded.insert(self.root_key());
         self.selected = Some(self.root_key());
         self.invalidate();
+        self.refresh_drive_bar();
     }
 
     fn finish_reopen(&mut self, r: Option<Reopened>) {
@@ -396,11 +420,13 @@ impl XylemApp {
                     let parent = s.info(node).ok().and_then(|i| i.parent);
                     s.apply_delete(node);
                     self.summary = Some(s.summary());
+                    self.drive_bar = None; // refreshed below
                     if self.selected == Some(Key_::Node(node)) {
                         self.selected = parent.map(Key_::Node);
                     }
                 }
                 self.invalidate();
+                self.refresh_drive_bar();
                 self.say(format!("Moved \"{}\" to the Recycle Bin · {} freed", out.name, fmt_bytes(out.freed)));
             }
             Err(e) => self.dialog = Some(Dialog::Message("Couldn't move it to the Recycle Bin".into(), e)),
@@ -868,6 +894,85 @@ impl XylemApp {
         });
     }
 
+    /// "C:\  1.54 TB used of 1.86 TB (83%) · 320 GB free" and a bar split
+    /// into the 5 biggest items, everything else, and free space.
+    fn drive_strip(&mut self, ui: &mut Ui) {
+        let t = self.tokens();
+        let Some(b) = &self.drive_bar else { return };
+        let is_drive = b.root.len() == 3 && b.root.ends_with(":\\");
+        let (capacity, text) = match b.space {
+            Some((total, free)) if is_drive => {
+                let used = total.saturating_sub(free);
+                (total, format!("{}  {} used of {} ({:.0}%) · {} free", b.root, fmt_bytes(used), fmt_bytes(total), used as f64 * 100.0 / total as f64, fmt_bytes(free)))
+            }
+            Some((total, _)) => (b.scanned.max(1), format!("{}  {} · {:.1}% of the drive ({})", b.root, fmt_bytes(b.scanned), b.scanned as f64 * 100.0 / total as f64, fmt_bytes(total))),
+            None => (b.scanned.max(1), format!("{}  {}", b.root, fmt_bytes(b.scanned))),
+        };
+        let mut click: Option<u32> = None;
+        ui.horizontal_centered(|ui| {
+            ui.label(RichText::new(text).font(theme::semibold(12.5)));
+            ui.add_space(10.0);
+            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::click());
+            let p = ui.painter_at(r);
+            p.rect_filled(r, CornerRadius::same(4), t.head);
+            let mut x = r.min.x;
+            let px = |bytes: u64| (bytes as f64 / capacity as f64 * r.width() as f64) as f32;
+            let mut segs: Vec<(Rect, String, u64, Option<u32>, Color32)> = Vec::new();
+            for (k, (id, name, bytes, cat)) in b.top.iter().enumerate() {
+                let w = px(*bytes);
+                if w < 1.0 {
+                    continue;
+                }
+                // Same-category neighbours get alternating shades so each stands apart.
+                let c = theme::cat_color(*cat);
+                let c = if k % 2 == 1 { c.gamma_multiply(0.78) } else { c };
+                segs.push((Rect::from_min_size(pos2(x, r.min.y), vec2(w, r.height())), name.clone(), *bytes, Some(*id), c));
+                x += w;
+            }
+            let rest = b.scanned.saturating_sub(b.top.iter().map(|x| x.2).sum());
+            if rest > 0 {
+                let w = px(rest);
+                segs.push((Rect::from_min_size(pos2(x, r.min.y), vec2(w, r.height())), "Everything else".into(), rest, None, t.line_strong));
+                x += w;
+            }
+            if let (Some((total, free)), true) = (b.space, is_drive) {
+                let hidden = total.saturating_sub(free).saturating_sub(b.scanned);
+                if hidden > (total / 200) {
+                    let w = px(hidden);
+                    segs.push((Rect::from_min_size(pos2(x, r.min.y), vec2(w, r.height())), "Not visible to this scan (system, other users; Fast scan sees it)".into(), hidden, None, t.faint));
+                }
+            }
+            for (rect, name, bytes, _, color) in &segs {
+                p.rect_filled(rect.shrink2(vec2(0.5, 0.0)), CornerRadius::same(3), *color);
+                let pct = *bytes as f64 * 100.0 / capacity as f64;
+                let label = format!("{name} {pct:.0}%");
+                let g = p.layout_no_wrap(label, theme::regular(11.0), Color32::WHITE);
+                if g.size().x + 8.0 < rect.width() {
+                    p.galley(rect.center() - g.size() / 2.0, g, Color32::WHITE);
+                }
+            }
+            if let Some(pos) = resp.hover_pos()
+                && let Some((_, name, bytes, id, _)) = segs.iter().find(|s| s.0.contains(pos))
+            {
+                let pct = *bytes as f64 * 100.0 / capacity as f64;
+                let more = if id.is_some() { "\nClick to open it" } else { "" };
+                resp.clone().on_hover_text_at_pointer(format!("{}\n{} · {pct:.1}%{more}", visible(name), fmt_bytes(*bytes)));
+                if resp.clicked() {
+                    click = *id;
+                }
+            } else if resp.hovered() {
+                resp.on_hover_text_at_pointer("Free space");
+            }
+        });
+        if let Some(id) = click {
+            if self.settings.by_category {
+                self.settings.by_category = false;
+                self.regroup();
+            }
+            self.go_to(Key_::Node(id));
+        }
+    }
+
     fn pane_frame(t: &Tokens) -> Frame {
         Frame::new()
             .fill(t.panel)
@@ -1205,6 +1310,11 @@ impl XylemApp {
                     let resp = resp.on_hover_ui_at_pointer(|ui| {
                         ui.label(RichText::new(&n.name).font(theme::semibold(13.0)));
                         ui.label(RichText::new(format!("{}  ·  {} of {}", fmt_bytes(n.size), fmt_pct(n.size, root_size), m.nodes[0].name)).color(t.muted));
+                        if let Some(sum) = &self.summary
+                            && sum.on_disk > root_size
+                        {
+                            ui.label(RichText::new(format!("{} of all of {}", fmt_pct(n.size, sum.on_disk), sum.root)).color(t.muted));
+                        }
                         if n.merged > 0 {
                             ui.label(RichText::new(format!("{} items too small to draw", fmt_count(u64::from(n.merged)))).color(t.muted));
                         } else if !label.is_empty() {
@@ -1406,19 +1516,27 @@ impl XylemApp {
                 JobKind::Export(p) => ("Exporting to CSV".to_owned(), format!("Writing {p}…")),
             };
             Modal::new(egui::Id::unique("xylem-job")).show(ctx, |ui| {
+                // Fixed size from the first frame, so the dialog doesn't jump.
                 ui.set_width(420.0);
+                ui.set_min_height(96.0);
                 ui.label(RichText::new(title).font(theme::semibold(14.0)));
                 ui.add_space(6.0);
                 ui.label(RichText::new(text).color(t.muted));
                 ui.add_space(10.0);
-                // Indeterminate bar: a sap pulse moving along the track.
+                // Indeterminate bar: a sap pulse gliding back and forth
+                // (eased at both ends, so it never jumps).
                 let (r, _) = ui.allocate_exact_size(vec2(420.0, 8.0), Sense::hover());
                 let p = ui.painter();
-                p.rect_filled(r, CornerRadius::same(2), t.head);
-                let w = r.width() * 0.25;
-                let x = r.min.x + (secs * 0.6).fract() * (r.width() + w) - w;
-                let pulse = Rect::from_min_max(pos2(x.max(r.min.x), r.min.y), pos2((x + w).min(r.max.x), r.max.y));
-                p.rect_filled(pulse, CornerRadius::same(2), t.accent);
+                p.rect_filled(r, CornerRadius::same(4), t.head);
+                let w = r.width() * 0.28;
+                let k = (1.0 - (secs * 2.2).cos()) / 2.0; // 0 → 1 → 0, smooth
+                let x = r.min.x + k * (r.width() - w);
+                p.rect_filled(Rect::from_min_size(pos2(x, r.min.y), vec2(w, r.height())), CornerRadius::same(4), t.accent);
+                if matches!(job.kind, JobKind::Scan(_)) {
+                    let found = xylem_session::scan_progress();
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(if found > 1 { format!("{} items found", fmt_count(found)) } else { "Starting…".to_owned() }).color(t.muted));
+                }
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{secs:.0} s")).color(t.faint).size(11.5));
@@ -1881,6 +1999,13 @@ impl eframe::App for XylemApp {
             .frame(Frame::new().fill(t.win).inner_margin(Margin::symmetric(10, 2)).stroke(Stroke::new(1.0, t.line)))
             .exact_size(26.0)
             .show(ui, |ui| self.status_bar(ui));
+        if self.drive_bar.is_some() {
+            egui::Panel::bottom("drivebar")
+                .frame(Frame::new().fill(t.win).inner_margin(Margin { left: 10, right: 10, top: 4, bottom: 4 }))
+                .exact_size(34.0)
+                .show_separator_line(false)
+                .show(ui, |ui| self.drive_strip(ui));
+        }
         egui::Panel::bottom("details")
             .frame(Frame::new().fill(t.win).inner_margin(Margin { left: 6, right: 6, top: 0, bottom: 6 }))
             .exact_size(158.0)

@@ -3,7 +3,7 @@
 //! view the session returns. Layout is cached per (data, size), so an idle
 //! window costs nothing.
 
-use std::f32::consts::{FRAC_PI_2, PI, TAU};
+use std::f32::consts::{FRAC_PI_2, TAU};
 
 use eframe::egui::{
     Align2, Color32, CornerRadius, Mesh, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, emath::Rot2, epaint::TextShape,
@@ -242,6 +242,33 @@ pub fn fit(painter: &Painter, text: &str, size: f32, max_w: f32) -> Option<Strin
     (lo > 1).then(|| chars[..lo].iter().collect::<String>() + "…")
 }
 
+/// Draws `text` centred on screen angle `mid` (radians, 0 = 3 o'clock) along
+/// a circle of radius `r`. Upper half: reads clockwise; lower half: reads
+/// counter-clockwise, so the text is never upside down.
+fn curved_text(p: &Painter, center: Pos2, r: f32, mid: f32, text: &str, color: Color32) {
+    let font = theme::regular(11.5);
+    let chars: Vec<(char, f32)> =
+        text.chars().map(|c| (c, p.layout_no_wrap(c.to_string(), font.clone(), color).size().x)).collect();
+    let total: f32 = chars.iter().map(|c| c.1).sum();
+    let lower = mid.sin() > 0.15; // bottom of the circle (screen y grows down)
+    let dir = if lower { -1.0 } else { 1.0 };
+    let mut theta = mid - dir * total / r / 2.0;
+    for (c, w) in chars {
+        let a = theta + dir * w / r / 2.0; // angle at this letter's centre
+        theta += dir * w / r;
+        if c == ' ' {
+            continue;
+        }
+        let rot = if lower { a - FRAC_PI_2 } else { a + FRAC_PI_2 };
+        let galley = p.layout_no_wrap(c.to_string(), font.clone(), color);
+        let at = center + vec2(a.cos(), a.sin()) * r;
+        let pos = at - Rot2::from_angle(rot) * (galley.size() / 2.0);
+        let mut ts = TextShape::new(pos, galley, color);
+        ts.angle = rot;
+        p.add(ts);
+    }
+}
+
 pub struct PaintCtx<'a> {
     pub nodes: &'a [Node],
     pub hover: Option<usize>,
@@ -270,27 +297,18 @@ pub fn paint(p: &Painter, layout: &Layout, cx: &PaintCtx) {
                     p.add(Shape::closed_line(pts, Stroke::new(2.0, t.text)));
                 }
             }
-            // Labels: tangential, turned upright on the lower half.
+            // Labels follow the ring: each letter is placed on the arc and
+            // turned along it (upright on both halves of the circle), so
+            // long names bend with the segment instead of sticking out.
             for s in arcs {
                 let rm = (s.ri + s.ro) / 2.0;
                 let len = (s.a1 - s.a0) * rm;
                 if len < 60.0 || s.ro - s.ri < 15.0 {
                     continue;
                 }
-                let Some(label) = fit(p, &cx.nodes[s.i].name, 11.5, (len - 12.0).min(180.0)) else { continue };
-                let galley = p.layout_no_wrap(label, theme::regular(11.5), theme::ink(s.depth, t));
-                let mid = (s.a0 + s.a1) / 2.0 - FRAC_PI_2;
-                let mut rot = mid + FRAC_PI_2;
-                rot = rot.sin().atan2(rot.cos());
-                if rot.abs() > FRAC_PI_2 {
-                    rot += PI;
-                }
-                let at = *center + vec2(mid.cos(), mid.sin()) * rm;
-                let half = galley.size() / 2.0;
-                let pos = at - Rot2::from_angle(rot) * half;
-                let mut ts = TextShape::new(pos, galley, theme::ink(s.depth, t));
-                ts.angle = rot;
-                p.add(ts);
+                let ink = theme::ink(s.depth, t);
+                let Some(label) = fit(p, &cx.nodes[s.i].name, 11.5, (len - 14.0).min(320.0)) else { continue };
+                curved_text(p, *center, rm, (s.a0 + s.a1) / 2.0 - FRAC_PI_2, &label, ink);
             }
             // Pith with faint growth rings.
             p.circle_filled(*center, r0 - 3.0, t.panel);

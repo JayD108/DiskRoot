@@ -395,3 +395,12 @@ User asked: "go for next step and also add the security measures ... and think o
   - main.rs drops the stray `"` that `"C:\"` turns into under Windows' argument rules.
   - The CI install test now checks the entries are added and removed.
 - 64 tests, clippy clean.
+
+### 11 Nov: UI refinements from the user's feedback
+- **Smoother scan start:** the progress modal repainted only every 120 ms (choppy slide). Now it repaints every frame while a job runs, and the pulse is eased back and forth (cosine) instead of a hard wrap. The modal has a fixed minimum size from the first frame. **Live count** for folder walks via a new `xylem_scan_walk::PROGRESS` atomic, updated once per folder (no measurable cost; C: scan 4.46 s), exposed as `session::scan_progress()`.
+- **Drive strip** (new bottom panel above the status bar):
+  - Shows "C:\ 1.54 TB used of 1.86 TB (83%) · 325 GB free" (`session::disk_space` via GetDiskFreeSpaceExW).
+  - A bar with the 5 biggest top-level items (category colours, alternating shades), "Everything else", space the scan couldn't see (shown only if > 0.5%), and free space. Hover shows size and %; click jumps to the item.
+  - For a folder scan it shows the folder's share of the drive. Refreshed after deletes.
+- **Curved sunburst labels** (`map::curved_text`): each letter is placed and rotated along the ring; reads clockwise on the upper half and counter-clockwise on the lower half, so text is never upside down. Long names like "RESIDENT EVIL 4 BIOHAZARD RE4" now follow the curve.
+- Map tooltip also shows the item's share of the whole scan.

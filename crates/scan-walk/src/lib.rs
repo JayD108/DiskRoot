@@ -16,4 +16,4 @@ pub mod sys;
 mod walker;
 
 pub use xylem_core::{Scan, ScanStats};
-pub use walker::{ScanOptions, default_threads, scan};
+pub use walker::{PROGRESS, ScanOptions, default_threads, scan};
