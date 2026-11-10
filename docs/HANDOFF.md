@@ -12,8 +12,8 @@
 - Every test passes and `cargo clippy --workspace --all-targets` is clean.
 - **Waiting on the user** (details at the end of DEVLOG session 2):
   1. **Security.md:** consent screen and shield. Discuss before implementing, and keep the copy honest (WebView2 does contact Microsoft).
-  2. **UI technology:** keep Tauri/WebView2 (~250 MB of runtime, Microsoft connections) or move to a native Rust UI (egui/Slint: no browser runtime, far lighter).
-  3. **Approve the prototype design**, then port it into the real app.
+  2. **UI plan in `docs/UI-ARCHITECTURE.md`:** a native egui UI by default (spike: 4.46 MB, ~59 MB, 0 network) plus an optional Tauri web UI add-on, both on a new `xylem-session` crate.
+  3. **Approve prototype v2** (`xylem-ui-prototype/`, "classic utility, modern finish"), then build the native UI to match it.
 
 ## Build and run
 ```powershell
