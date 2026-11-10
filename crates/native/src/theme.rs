@@ -119,34 +119,34 @@ pub fn ink(depth: u8, t: &Tokens) -> Color32 {
 
 /// Loads Segoe UI (+ Semibold) from the Windows fonts folder. Falls back to
 /// egui's built-in fonts if they can't be read.
+/// Uses only fonts that ship with Windows (nothing is bundled in the exe,
+/// so every component of Xylem stays under an OSI-approved license).
+/// Each family tries a short fallback list.
 pub fn install_fonts(ctx: &egui::Context) {
-    let mut fonts = FontDefinitions::default();
+    let mut fonts = FontDefinitions::empty();
     let dir = std::env::var_os("WINDIR").map_or_else(|| "C:\\Windows".into(), std::path::PathBuf::from).join("Fonts");
-    let mut add = |name: &str, file: &str| -> bool {
-        match std::fs::read(dir.join(file)) {
-            Ok(bytes) => {
-                fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_owned(bytes)));
-                true
-            }
-            Err(_) => false,
-        }
+    let mut first = |name: &str, files: &[&str]| -> Option<String> {
+        files.iter().find_map(|f| {
+            let bytes = std::fs::read(dir.join(f)).ok()?;
+            fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_owned(bytes)));
+            Some(name.to_owned())
+        })
     };
-    let regular = add("segoe", "segoeui.ttf");
-    let semibold = add("segoe-sb", "seguisb.ttf");
-    let symbols = add("segoe-sym", "seguisym.ttf");
-    if regular {
-        let p = fonts.families.entry(FontFamily::Proportional).or_default();
-        p.insert(0, "segoe".into());
-        if symbols {
-            p.push("segoe-sym".into());
-        }
-    }
-    if semibold {
-        fonts.families.insert(FontFamily::Name("semibold".into()), vec!["segoe-sb".into(), "segoe".into()]);
-    } else {
-        let p = fonts.families[&FontFamily::Proportional].clone();
-        fonts.families.insert(FontFamily::Name("semibold".into()), p);
-    }
+    let regular = first("ui", &["segoeui.ttf", "tahoma.ttf", "arial.ttf"]);
+    let semibold = first("ui-semibold", &["seguisb.ttf", "segoeuib.ttf", "tahomabd.ttf", "arialbd.ttf"]);
+    let mono = first("mono", &["consola.ttf", "cour.ttf"]);
+    let symbols = first("symbols", &["seguisym.ttf"]);
+    let chain = |main: &Option<String>| -> Vec<String> {
+        [main, &regular, &symbols].into_iter().flatten().cloned().fold(Vec::new(), |mut v, n| {
+            if !v.contains(&n) {
+                v.push(n);
+            }
+            v
+        })
+    };
+    fonts.families.insert(FontFamily::Proportional, chain(&regular));
+    fonts.families.insert(FontFamily::Monospace, chain(&mono));
+    fonts.families.insert(FontFamily::Name("semibold".into()), chain(&semibold));
     ctx.set_fonts(fonts);
 }
 

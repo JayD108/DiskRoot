@@ -1,9 +1,14 @@
-# Builds a release from a version tag (e.g. `git tag v0.1.0 && git push --tags`)
-# and uploads the installer, portable zip and checksums as a build artifact.
+# Release pipeline. Push a tag that matches Cargo.toml's version
+# (e.g. `git tag v0.1.0 && git push origin v0.1.0`) or run it by hand.
 #
-# Code signing (SignPath Foundation) plugs in at the marked step once the
-# project is accepted: SignPath signs the artifact that THIS workflow built,
-# which is how it verifies the binaries come from this repository.
+#   build exes -> [SignPath signs exes] -> installer + zip from those exes
+#   -> real install/uninstall test -> [SignPath signs installer]
+#   -> checksums -> GitHub Release (tags only)
+#
+# Signing turns on by itself once the repository secret SIGNPATH_API_TOKEN
+# and the variable SIGNPATH_ORGANIZATION_ID exist (see docs/SIGNPATH.md).
+# Every signing request still needs manual approval in SignPath. Until
+# then, releases are published unsigned and say so.
 name: Release
 on:
   push:
@@ -13,43 +18,136 @@ on:
 permissions:
   contents: read
 
+env:
+  SIGNPATH_ENABLED: ${{ secrets.SIGNPATH_API_TOKEN != '' && vars.SIGNPATH_ORGANIZATION_ID != '' }}
+
 jobs:
-  build:
+  release:
     runs-on: windows-latest
+    permissions:
+      contents: write # create the GitHub Release
+      actions: read # SignPath reads the build artifacts
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install Inno Setup
-        run: choco install innosetup --no-progress -y
+
+      - name: Check tag matches Cargo.toml version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$v") { throw "tag $env:GITHUB_REF_NAME != v$v" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
       - name: Test
         run: cargo test --workspace
-      - name: Build release (unsigned)
+
+      - name: Build exes
         shell: powershell
-        run: .\tools\release.ps1
-      - name: Upload unsigned release
-        id: upload
+        run: .\tools\release.ps1 -Step build
+
+      - name: Upload exes (unsigned)
+        id: upload-bin
         uses: actions/upload-artifact@v4
         with:
-          name: xylem-unsigned
-          path: |
-            dist/*.exe
-            dist/*.zip
-            dist/SHA256SUMS.txt
+          name: xylem-${{ steps.ver.outputs.version }}-exes-unsigned
+          path: dist/stage/*.exe
           if-no-files-found: error
 
-      # --- SignPath (enable after acceptance) -----------------------------
-      # 1. Add the repository secret SIGNPATH_API_TOKEN.
-      # 2. Fill in the organization id and slugs that SignPath gives you.
-      # 3. Uncomment this step. Every signing request still needs manual
-      #    approval in SignPath before anything is signed.
-      #
-      # - name: Sign with SignPath
-      #   uses: signpath/github-action-submit-signing-request@v1
-      #   with:
-      #     api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-      #     organization-id: "<from SignPath>"
-      #     project-slug: "xylem"
-      #     signing-policy-slug: "release-signing"
-      #     github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
-      #     wait-for-completion: true
-      #     output-artifact-directory: signed
+      - name: Sign exes with SignPath
+        if: env.SIGNPATH_ENABLED == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'Xylem' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: exes
+          github-artifact-id: ${{ steps.upload-bin.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-exes
+
+      - name: Install NSIS
+        run: choco install nsis --no-progress -y
+
+      - name: Build installer and portable zip
+        shell: powershell
+        run: |
+          $dir = if ($env:SIGNPATH_ENABLED -eq 'true') { 'signed-exes' } else { 'dist\stage' }
+          .\tools\release.ps1 -Step package -StageDir $dir
+          if ($LASTEXITCODE) { exit 1 }
+
+      - name: Test install and uninstall
+        shell: pwsh
+        run: |
+          $v = '${{ steps.ver.outputs.version }}'
+          $dir = "$env:ProgramFiles\Xylem"
+          $p = Start-Process "dist\xylem-setup-$v.exe" -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode) { throw "installer exit code $($p.ExitCode)" }
+          foreach ($f in 'xylem.exe', 'xylem-cli.exe', 'uninstall.exe', 'LICENSE-MIT') {
+            if (-not (Test-Path "$dir\$f")) { throw "missing $dir\$f" }
+          }
+          if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Xylem.lnk")) { throw "no Start Menu shortcut" }
+          $key = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Xylem'
+          if ((Get-ItemProperty $key).DisplayVersion -ne $v) { throw "uninstall entry missing or wrong version" }
+          & "$dir\xylem-cli.exe" --version
+          if ($LASTEXITCODE) { throw "installed xylem-cli failed" }
+          Start-Process "$dir\uninstall.exe" -ArgumentList '/S' -Wait
+          for ($i = 0; $i -lt 60 -and (Test-Path $dir); $i++) { Start-Sleep 1 }
+          if (Test-Path $dir) { throw "install folder left behind" }
+          if (Test-Path $key) { throw "uninstall entry left behind" }
+          if (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Xylem.lnk") { throw "shortcut left behind" }
+          "install/uninstall OK"
+
+      - name: Upload installer (unsigned)
+        id: upload-setup
+        uses: actions/upload-artifact@v4
+        with:
+          name: xylem-${{ steps.ver.outputs.version }}-installer-unsigned
+          path: dist/xylem-setup-*.exe
+          if-no-files-found: error
+
+      - name: Sign installer with SignPath
+        if: env.SIGNPATH_ENABLED == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'Xylem' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: installer
+          github-artifact-id: ${{ steps.upload-setup.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-setup
+
+      - name: Collect release files and checksums
+        shell: pwsh
+        run: |
+          $v = '${{ steps.ver.outputs.version }}'
+          New-Item -ItemType Directory -Force out | Out-Null
+          $setup = if ($env:SIGNPATH_ENABLED -eq 'true') { "signed-setup\xylem-setup-$v.exe" } else { "dist\xylem-setup-$v.exe" }
+          $exes = if ($env:SIGNPATH_ENABLED -eq 'true') { 'signed-exes' } else { 'dist\stage' }
+          Copy-Item $setup, "dist\xylem-$v-portable.zip", "$exes\xylem.exe", "$exes\xylem-cli.exe" out
+          Get-ChildItem out -File | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
+          } | Set-Content -Encoding ascii out\SHA256SUMS.txt
+          Get-Content out\SHA256SUMS.txt
+
+      - name: Upload release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: xylem-${{ steps.ver.outputs.version }}-release
+          path: out/*
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = '${{ steps.ver.outputs.version }}'
+          $signed = if ($env:SIGNPATH_ENABLED -eq 'true') { 'Signed' } else { '**Not signed yet** (SignPath application pending). Windows SmartScreen will warn; check the SHA-256 checksums below.' }
+          $notes = (Get-Content .github\release-notes.md -Raw).Replace('{{VERSION}}', $v).Replace('{{SIGNED}}', $signed)
+          $notes += "`n## SHA-256 checksums`n``````n" + (Get-Content out\SHA256SUMS.txt -Raw) + "``````n"
+          Set-Content -Encoding utf8 notes.md $notes
+          gh release create $env:GITHUB_REF_NAME out\xylem-setup-$v.exe out\xylem-$v-portable.zip out\SHA256SUMS.txt --title "Xylem $v" --notes-file notes.md

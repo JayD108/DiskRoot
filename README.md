@@ -70,7 +70,7 @@ cargo build --release --workspace          # Rust 1.88+, MSVC build tools
 
 In the app, type or pick a drive and press **Scan** (F5), or **Fast scan** (Ctrl+F5) for whole NTFS drives. The tree-table is the main view: expand folders, use the arrow keys, filter by name. The map beside it follows your selection, and clicking a ring or tile selects it. Switch **Location / Category** and **Sunburst / Treemap** in the toolbar or the View menu. The details pane says what the selected item is and whether it's safe to remove. *Move to Recycle Bin…* (or Delete, or right-click) asks first.
 
-**Install:** run `dist\xylem-setup-<version>.exe` (built by `tools\release.ps1`). It installs into Program Files, which protects the admin helper (see below). A portable zip is built too. The command-line tool is an optional part of the install.
+**Install:** download `xylem-setup-<version>.exe` from [Releases](https://github.com/JayD108/Xylem/releases), or build it yourself with `tools\release.ps1` (needs NSIS). It installs into Program Files, which protects the admin helper (see below). A portable zip is built too. The command-line tool is an optional part of the install.
 
 CLI options: `--mode auto|mft|walk`, `--by disk|size`, `--json`, `--export all.csv`, `--threads N`.
 
@@ -177,7 +177,7 @@ Each file record becomes exactly one entry, so a hardlinked file is counted **on
 
 Windows releases will be signed with a free certificate: **free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).** *(The application is pending; until it's accepted, release builds are unsigned and the app says so in Help → Security & privacy.)*
 
-- **Builds:** every signed file is built by GitHub Actions from this repository (`.github/workflows/release.yml`). Nothing built on a personal machine is signed.
+- **Builds:** every signed file is built by GitHub Actions from this repository (`.github/workflows/release.yml`), and each signing request is approved by hand. Nothing built on a personal machine is signed. Details: [docs/SIGNPATH.md](docs/SIGNPATH.md).
 - **Team roles:**
   - Committers and reviewers: [JayD108](https://github.com/JayD108)
   - Approvers (approve each signing request by hand): [JayD108](https://github.com/JayD108)
@@ -199,7 +199,8 @@ xylem/
 │  └─ bench/       xylem-bench.exe: gen | run | time | verify | modes
 ├─ xylem-ui-prototype/   standalone design reference (open index.html)
 ├─ spikes/        throwaway experiments (native UI size spike)
-├─ installer/      Inno Setup script (xylem.iss)
+├─ installer/      NSIS installer script (xylem.nsi)
+├─ .github/        CI (tests, clippy) and the release pipeline (build → sign → package → test install → publish)
 ├─ tools/          release.ps1 (build → sign → installer → checksums), benchmark + UI-test scripts
 └─ docs/           PRD, TECHSTACK, DEVLOG (history), HANDOFF (start here)
 ```

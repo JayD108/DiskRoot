@@ -240,3 +240,26 @@ User asked: "go for next step and also add the security measures ... and think o
   - SignPath's standard privacy statement ("will not transfer any information...").
   - Uninstall notes.
 - **HANDOFF:** removed personal paths and the user-preferences section (those live in the assistant's local memory, not the public repo).
+
+### Same day, later: SignPath Foundation prerequisites (user is applying today)
+- **License audit** (`cargo metadata`): every dependency offers MIT/Apache/Zlib/BSD/ISC, except **egui's bundled fonts (Ubuntu Font Licence, not OSI-approved)**.
+  - Fix: dropped eframe's `default_fonts` feature. `theme::install_fonts` now builds `FontDefinitions::empty()` from Windows fonts only, with fallbacks:
+    - Proportional: Segoe UI → Tahoma → Arial
+    - Semibold: seguisb → segoeuib → Tahoma Bold → Arial Bold
+    - Monospace: Consolas → Courier New
+    - Symbols: Segoe UI Symbol
+  - xylem.exe 6.96 → 6.30 MB. Screenshot-checked: all text and the ▶ ⚡ ◎ ▦ symbols render.
+- **Installer switched from Inno Setup to NSIS.** Inno Setup's license isn't OSI-listed; NSIS is zlib, with LZMA under CPL.
+  - `installer/xylem.nsi`: per-machine into `$PROGRAMFILES64\Xylem`, MUI2 pages, components (app required, cli default, desktop shortcut optional).
+  - HKLM uninstall entry; the uninstaller deletes only the files it installed (no recursive delete).
+  - The installer also carries version info.
+  - A downloaded portable NSIS couldn't be run locally (the sandbox blocks running downloaded code), so the installer is built and tested in GitHub Actions instead.
+- **`tools/release.ps1` split into steps:** `-Step build` stages the exes; `-Step package -StageDir <dir>` builds installer + zip + checksums from given (e.g. SignPath-signed) exes; `all` does both.
+- **`release.yml` rewritten:**
+  - Tag/version check → test → build → upload exes → *SignPath signs exes* → NSIS package from those exes → **real silent install + uninstall test** (files, Start Menu shortcut, HKLM entry, installed CLI runs, nothing left behind) → upload installer → *SignPath signs installer* → checksums → GitHub Release (tags only).
+  - The SignPath steps switch on automatically when the secret `SIGNPATH_API_TOKEN` and the variable `SIGNPATH_ORGANIZATION_ID` exist.
+- **New docs:**
+  - `docs/SIGNPATH.md`: eligibility checklist mapped to the repo, prepared application answers, setup after acceptance, artifact configuration XML for `exes` and `installer`, end-to-end flow.
+  - `SECURITY.md`: private vulnerability reporting.
+  - `.github/release-notes.md`: download-page text with the code signing policy and privacy statement.
+- **Still on the user:** enable GitHub 2FA (and MFA on SignPath), submit the application, and later add the secret/variable. "Verifiable reputation" is SignPath's judgement and can't be guaranteed by code.

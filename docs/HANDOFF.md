@@ -10,7 +10,7 @@
   - `xylem-cli.exe`, `xylem-bench.exe`.
 - **Engine API:** `crates/session`. Design reference: `xylem-ui-prototype/` (v2, HTML mock-up only).
 - **Release:**
-  - `tools/release.ps1` builds, optionally signs (`XYLEM_SIGN_*`), then makes the installer (`installer/xylem.iss`, Program Files), the portable zip and `SHA256SUMS.txt` in `dist/`.
+  - `tools/release.ps1` builds, optionally signs (`XYLEM_SIGN_*`), then makes the NSIS installer (`installer/xylem.nsi`, Program Files), the portable zip and `SHA256SUMS.txt` in `dist/`.
   - Current: setup 4.40 MB, xylem.exe 6.90 MB, **unsigned**.
 - **Security:**
   - Delete re-check (type, links on the path).
