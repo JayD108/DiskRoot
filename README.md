@@ -60,7 +60,7 @@ Xylem's architecture follows the same path:
 ## Quick start
 
 ```powershell
-git clone <repo> xylem
+git clone https://github.com/JayD108/Xylem.git xylem
 cd xylem
 cargo build --release --workspace          # Rust 1.88+, MSVC build tools
 
@@ -172,6 +172,17 @@ Each file record becomes exactly one entry, so a hardlinked file is counted **on
   - Xylem contains **no network code** and no HTTP client or browser engine in its dependencies.
   - **Measured: 0 network connections**, one process.
   - The only online step anywhere is the signing timestamp in `tools/release.ps1`, on the developer's machine, never in the app.
+
+## Code signing policy
+
+Windows releases will be signed with a free certificate: **free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).** *(The application is pending; until it's accepted, release builds are unsigned and the app says so in Help → Security & privacy.)*
+
+- **Builds:** every signed file is built by GitHub Actions from this repository (`.github/workflows/release.yml`). Nothing built on a personal machine is signed.
+- **Team roles:**
+  - Committers and reviewers: [JayD108](https://github.com/JayD108)
+  - Approvers (approve each signing request by hand): [JayD108](https://github.com/JayD108)
+- **Privacy policy:** this program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. Xylem has no network code at all; see *Security & privacy* above.
+- **Uninstalling:** the installer adds a normal Windows uninstaller (Settings → Apps). The portable zip needs no uninstall: delete the folder. Settings (`%APPDATA%\Xylem`) and the deletion log (`%LOCALAPPDATA%\Xylem`) can be deleted by hand.
 
 ## Project layout
 

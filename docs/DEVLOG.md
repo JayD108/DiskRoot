@@ -226,3 +226,17 @@ User asked: "go for next step and also add the security measures ... and think o
   - Welcome → Scan → shield panel (Location ! and Signature !, correct for a dev build).
   - Deleting `proj` containing `.git`: warning shown, button disabled until ticked, recycled, log line written, history lists it.
 - **52 tests pass, clippy clean.**
+
+### Same day, later: going public on GitHub, SignPath preparation
+- **Repo:** https://github.com/JayD108/Xylem (public).
+  - The commit author email was switched to the GitHub no-reply address before the first push, so the user's personal email isn't public (user's choice). The rewrite covered only local, unpushed commits.
+- **Windows version resource** (`build.rs` + `winresource`) in xylem.exe and xylem-cli.exe: ProductName "Xylem", version 0.1.0, description, and the app icon embedded in the exe. SignPath enforces product name/version metadata.
+- **GitHub Actions:**
+  - `ci.yml`: test + `clippy -D warnings` on windows-latest.
+  - `release.yml`: on a `v*` tag, install Inno Setup, test, run `tools/release.ps1`, and upload the unsigned installer, zip and checksums. The SignPath signing step is prepared but commented out until acceptance.
+- **README "Code signing policy" section:**
+  - SignPath attribution, with the application marked as pending.
+  - Team roles (JayD108 for all of them).
+  - SignPath's standard privacy statement ("will not transfer any information...").
+  - Uninstall notes.
+- **HANDOFF:** removed personal paths and the user-preferences section (those live in the assistant's local memory, not the public repo).

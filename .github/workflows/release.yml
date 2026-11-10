@@ -1,0 +1,55 @@
+# Builds a release from a version tag (e.g. `git tag v0.1.0 && git push --tags`)
+# and uploads the installer, portable zip and checksums as a build artifact.
+#
+# Code signing (SignPath Foundation) plugs in at the marked step once the
+# project is accepted: SignPath signs the artifact that THIS workflow built,
+# which is how it verifies the binaries come from this repository.
+name: Release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+      - name: Test
+        run: cargo test --workspace
+      - name: Build release (unsigned)
+        shell: powershell
+        run: .\tools\release.ps1
+      - name: Upload unsigned release
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: xylem-unsigned
+          path: |
+            dist/*.exe
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      # --- SignPath (enable after acceptance) -----------------------------
+      # 1. Add the repository secret SIGNPATH_API_TOKEN.
+      # 2. Fill in the organization id and slugs that SignPath gives you.
+      # 3. Uncomment this step. Every signing request still needs manual
+      #    approval in SignPath before anything is signed.
+      #
+      # - name: Sign with SignPath
+      #   uses: signpath/github-action-submit-signing-request@v1
+      #   with:
+      #     api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+      #     organization-id: "<from SignPath>"
+      #     project-slug: "xylem"
+      #     signing-policy-slug: "release-signing"
+      #     github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      #     wait-for-completion: true
+      #     output-artifact-directory: signed

@@ -27,7 +27,7 @@
 
 ## Build and run
 ```powershell
-cd "C:\Users\Mrittunjay Dubey\Storage\xylem"
+cd <your clone of github.com/JayD108/Xylem>
 $env:Path += ";$env:USERPROFILE\.cargo\bin"     # if cargo isn't found
 cargo test --workspace
 cargo clippy --workspace --all-targets
@@ -38,19 +38,14 @@ cargo build --release --workspace               # app ~2-3 min (fat LTO)
 ```
 
 ## Environment quirks
-- **Claude's shell is not elevated.** Admin tests run a script through `Start-Process powershell -Verb RunAs -Wait ...`, and the user clicks Yes on the UAC prompt. Batch several admin checks into one script (`tools/admin-bench.ps1`) to keep prompts to a minimum.
+- **The dev shell is usually not elevated.** Admin tests run a script through `Start-Process powershell -Verb RunAs -Wait ...`, and the user clicks Yes on the UAC prompt. Batch several admin checks into one script (`tools/admin-bench.ps1`) to keep prompts to a minimum.
 - **Smart App Control is ON.** Freshly built unsigned exes are sometimes blocked (os error 4551); retrying usually works.
 - **Testing the UI without moving the mouse:** `tools/ui-screenshot.ps1` launches the app and captures only its window. `tools/ui-click.ps1` and `tools/ui-setpath.ps1` press buttons and type paths through UI Automation.
 - **UI tests that open the app:** set `$env:APPDATA` / `$env:LOCALAPPDATA` to a temp folder first. That keeps the user's real settings and deletion log untouched. The first-run notice then shows; press "Got it" via `tools/ui-click.ps1`.
-- The home folder `C:\Users\Mrittunjay Dubey` is itself a git repo. This project has its **own** repo in `xylem/`.
 
-## User preferences
-- Wants short, plain answers. Is a CS engineer who is newer to Windows and Android internals.
-- Wants everything recorded (`DEVLOG.md`, `HANDOFF.md`, git commits) so no context is lost.
-- Never ship anything that depends on reverse-engineering WizTree.
 
 ## Next steps
-1. **Code signing** once the user picks a certificate route; then sign and re-test with Smart App Control on.
+1. **Code signing via SignPath Foundation** (chosen 2026-11-10; repo public at github.com/JayD108/Xylem). After acceptance: add the `SIGNPATH_API_TOKEN` secret, fill in and uncomment the SignPath step in `.github/workflows/release.yml`, tag a release, approve the request, and re-test with Smart App Control on.
 2. **Phase 5:**
    - Index cache plus USN journal (instant reopen).
    - Snapshots and diff ("what changed").
