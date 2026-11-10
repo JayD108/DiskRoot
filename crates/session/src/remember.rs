@@ -211,7 +211,7 @@ pub struct Changes {
 
 /// FNV-1a over the lowercased path: a 64-bit fingerprint, so comparing
 /// two snapshots doesn't need lowercase copies of every path.
-fn path_key(p: &str) -> u64 {
+pub fn path_key(p: &str) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for c in p.chars().flat_map(char::to_lowercase) {
         let mut buf = [0u8; 4];
@@ -344,6 +344,17 @@ pub fn reopen(root: &str) -> Option<(Index, ScanStats, String, u64)> {
         fs::metadata(&idx_path).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs())
     });
     Some((index, stats, mode, time))
+}
+
+/// Folder sizes of the scan before the latest one, keyed by
+/// `path_key(relative path)`. Lets the tree show a "change" next to each
+/// folder. ~16 bytes per folder.
+pub type PrevSizes = HashMap<u64, u64>;
+
+pub fn previous_sizes(root: &str) -> Option<PrevSizes> {
+    let (_, _, prev_path) = paths(root)?;
+    let s = load_snap(&prev_path)?;
+    Some(s.dirs.iter().map(|d| (path_key(&d.path), d.bytes)).collect())
 }
 
 /// What changed between the last two remembered scans of `root`.

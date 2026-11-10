@@ -14,7 +14,7 @@ use eframe::egui::{
     Stroke, StrokeKind, TextEdit, Ui, ViewportCommand, pos2, vec2,
 };
 use xylem_session::integrity::{Integrity, SignatureState};
-use xylem_session::remember::{self, Changes};
+use xylem_session::remember::{self, Changes, PrevSizes};
 use xylem_session::safety::{DeleteWarnings, LogEntry, visible};
 use xylem_session::{DeleteOut, FileRow, ItemInfo, PendingDelete, RULES, Safety, Scanned, Shape, Summary, TypeRow};
 
@@ -63,6 +63,7 @@ struct Reopened {
     scanned: Scanned,
     time: u64,
     changes: Option<Changes>,
+    prev: Option<PrevSizes>,
     took: Duration,
 }
 
@@ -92,6 +93,10 @@ enum Dialog {
     Message(String, String),
     ConfirmDelete(Box<Confirm>),
 }
+
+/// Result of the background "remember" step: what changed, and the previous
+/// scan's folder sizes for the tree's change column.
+type Remembered = (Result<Option<Changes>, String>, Option<PrevSizes>);
 
 /// The drive strip at the bottom of the window.
 struct DriveBar {
@@ -160,13 +165,15 @@ pub struct XylemApp {
     scan_after_welcome: bool,
     /// Background "remember this scan" step (saves the cache, computes
     /// what changed). Separate from `job`: the scan is already on screen.
-    remember_rx: Option<Receiver<Result<Option<Changes>, String>>>,
+    remember_rx: Option<Receiver<Remembered>>,
     /// What changed between the previous scan and the current one.
     changes: Option<Changes>,
     /// Set when the tree on screen is a remembered scan (its scan time).
     remembered_at: Option<u64>,
     /// Bottom strip: how full the drive is, and the 5 biggest items.
     drive_bar: Option<DriveBar>,
+    /// Folder sizes from the previous scan (for the tree's change column).
+    prev_sizes: Option<PrevSizes>,
     scroll_to_selected: bool,
 }
 
@@ -198,6 +205,7 @@ impl XylemApp {
             changes: None,
             remembered_at: None,
             drive_bar: None,
+            prev_sizes: None,
             scroll_to_selected: false,
         };
         if !app.settings.seen_notice {
@@ -266,6 +274,7 @@ impl XylemApp {
                 scanned,
                 time,
                 changes: remember::last_changes(&p),
+                prev: remember::previous_sizes(&p),
                 took: t.elapsed(),
             });
             let _ = tx.send(Done::Reopened(Box::new(r)));
@@ -283,7 +292,9 @@ impl XylemApp {
         let (idx, stats, mode) = s.remember_parts();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(remember::remember(&idx, &stats, &mode).map_err(|e| e.to_string()));
+            let r = remember::remember(&idx, &stats, &mode).map_err(|e| e.to_string());
+            let prev = remember::previous_sizes(idx.name(0));
+            let _ = tx.send((r, prev));
         });
         self.remember_rx = Some(rx);
     }
@@ -293,8 +304,10 @@ impl XylemApp {
         match rx.try_recv() {
             Err(TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(200)),
             Err(TryRecvError::Disconnected) => self.remember_rx = None,
-            Ok(r) => {
+            Ok((r, prev)) => {
                 self.remember_rx = None;
+                self.prev_sizes = prev;
+                self.rows = None;
                 match r {
                     Ok(Some(ch)) => {
                         let msg = changes_summary(&ch);
@@ -367,6 +380,7 @@ impl XylemApp {
                 self.show_scan(s, sum);
                 self.remembered_at = None;
                 self.changes = None;
+                self.prev_sizes = None;
                 self.start_remember();
             }
             Err(e) => self.dialog = Some(Dialog::Message("Scan didn't finish".into(), e)),
@@ -408,6 +422,7 @@ impl XylemApp {
         self.show_scan(r.scanned, sum);
         self.remembered_at = Some(r.time);
         self.changes = r.changes;
+        self.prev_sizes = r.prev;
     }
 
     fn finish_delete(&mut self, node: u32, r: Result<DeleteOut, String>) {
@@ -845,7 +860,10 @@ impl XylemApp {
                 if shield_button(ui, &t).on_hover_text("Security & privacy: what Xylem does with your disk").clicked() {
                     self.open_security();
                 }
-                let r = ui.add(TextEdit::singleline(&mut self.filter).desired_width(200.0).hint_text("Filter by name"));
+                let r = ui.add(TextEdit::singleline(&mut self.filter).desired_width(200.0).hint_text("Filter by name  (Ctrl+F)"));
+                if ui.input(|i| i.modifiers.ctrl && i.key_pressed(Key::F)) {
+                    r.request_focus();
+                }
                 if r.changed() {
                     self.rows = None;
                 }
@@ -973,6 +991,47 @@ impl XylemApp {
         }
     }
 
+    /// Before the first scan: one card per drive (used / free bar), click
+    /// to scan it.
+    fn start_screen(&mut self, ui: &mut Ui, t: &Tokens) {
+        ui.add_space(28.0);
+        let mut pick: Option<String> = None;
+        ui.vertical_centered(|ui| {
+            ui.label(RichText::new("See what's filling your drive").font(theme::semibold(16.0)));
+            ui.add_space(4.0);
+            ui.label(RichText::new("Pick a drive to scan. Fast scan (admin) reads a whole NTFS drive in seconds.").color(t.muted));
+            ui.add_space(14.0);
+            for d in &self.drives {
+                let space = xylem_session::disk_space(d);
+                let (rect, resp) = ui.allocate_exact_size(vec2(420.0, 54.0), Sense::click());
+                let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Scan {d}")));
+                let p = ui.painter();
+                p.rect_filled(rect, CornerRadius::same(6), if resp.hovered() { t.hover } else { t.field });
+                p.rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, t.line), StrokeKind::Inside);
+                p.text(pos2(rect.min.x + 14.0, rect.min.y + 16.0), Align2::LEFT_CENTER, d, theme::semibold(14.0), t.text);
+                if let Some((total, free)) = space {
+                    let used = total.saturating_sub(free);
+                    let txt = format!("{} free of {}", fmt_bytes(free), fmt_bytes(total));
+                    p.text(pos2(rect.max.x - 14.0, rect.min.y + 16.0), Align2::RIGHT_CENTER, txt, theme::regular(12.0), t.muted);
+                    let bar = Rect::from_min_size(pos2(rect.min.x + 14.0, rect.min.y + 32.0), vec2(rect.width() - 28.0, 9.0));
+                    p.rect_filled(bar, CornerRadius::same(4), t.head);
+                    let frac = used as f32 / total as f32;
+                    let col = if frac > 0.9 { theme::cat_color(5) } else if frac > 0.75 { theme::WARN } else { t.accent };
+                    p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac, bar.height())), CornerRadius::same(4), col);
+                }
+                if resp.clicked() {
+                    pick = Some(d.clone());
+                }
+                ui.add_space(8.0);
+            }
+        });
+        if let Some(d) = pick {
+            self.path = d;
+            self.start_scan(false);
+        }
+    }
+
     fn pane_frame(t: &Tokens) -> Frame {
         Frame::new()
             .fill(t.panel)
@@ -1001,16 +1060,12 @@ impl XylemApp {
             p.text(pos2(hr.min.x + cols.bar_x, hr.center().y), Align2::LEFT_CENTER, "% of parent", f.clone(), t.muted);
             if cols.wide {
                 p.text(pos2(hr.min.x + cols.files_r, hr.center().y), Align2::RIGHT_CENTER, "Files", f.clone(), t.muted);
-                p.text(pos2(hr.min.x + cols.cat_x, hr.center().y), Align2::LEFT_CENTER, "Category", f, t.muted);
+                let head = if self.prev_sizes.is_some() { "Change · Category" } else { "Category" };
+                p.text(pos2(hr.min.x + cols.cat_x, hr.center().y), Align2::LEFT_CENTER, head, f, t.muted);
             }
 
             if self.scanned.is_none() {
-                ui.add_space(40.0);
-                ui.vertical_centered(|ui| {
-                    ui.label(RichText::new("See what's filling your drive").font(theme::semibold(16.0)));
-                    ui.add_space(6.0);
-                    ui.label(RichText::new("Pick a drive and press Scan, or Fast scan for whole NTFS drives (reads the file table directly).").color(t.muted));
-                });
+                self.start_screen(ui, &t);
                 return;
             }
 
@@ -1103,8 +1158,23 @@ impl XylemApp {
                         );
                         if cols.wide {
                             p.text(pos2(rect.min.x + cols.files_r, y), Align2::RIGHT_CENTER, fmt_count(r.files), theme::regular(12.0), t.muted);
-                            if let Some(c) = map::fit(&p, &r.cat_label, 12.0, rect.max.x - (rect.min.x + cols.cat_x) - 8.0) {
-                                p.text(pos2(rect.min.x + cols.cat_x, y), Align2::LEFT_CENTER, c, theme::regular(12.0), t.muted);
+                            // Change since the previous scan (folders, ≥ 1 MB).
+                            let mut cat_x = rect.min.x + cols.cat_x;
+                            if let (Some(prev), Some(s), Key_::Node(n)) = (&self.prev_sizes, &self.scanned, &r.key)
+                                && r.dir
+                                && let (Ok(full), Some(sum)) = (s.path(*n), &self.summary)
+                            {
+                                let rel = full.strip_prefix(sum.root.as_str()).unwrap_or(&full).trim_start_matches('\\');
+                                let before = prev.get(&remember::path_key(rel)).copied().unwrap_or(0);
+                                let d = i128::from(r.bytes) - i128::from(before);
+                                if d.unsigned_abs() >= 1 << 20 {
+                                    let col = if d > 0 { theme::WARN } else { t.accent };
+                                    p.text(pos2(cat_x, y), Align2::LEFT_CENTER, fmt_delta(d), theme::semibold(12.0), col);
+                                    cat_x += 74.0;
+                                }
+                            }
+                            if let Some(c) = map::fit(&p, &r.cat_label, 12.0, rect.max.x - cat_x - 8.0) {
+                                p.text(pos2(cat_x, y), Align2::LEFT_CENTER, c, theme::regular(12.0), t.muted);
                             }
                         }
                     }

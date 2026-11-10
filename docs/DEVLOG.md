@@ -404,3 +404,9 @@ User asked: "go for next step and also add the security measures ... and think o
   - For a folder scan it shows the folder's share of the drive. Refreshed after deletes.
 - **Curved sunburst labels** (`map::curved_text`): each letter is placed and rotated along the ring; reads clockwise on the upper half and counter-clockwise on the lower half, so text is never upside down. Long names like "RESIDENT EVIL 4 BIOHAZARD RE4" now follow the curve.
 - Map tooltip also shows the item's share of the whole scan.
+- **Change column in the tree:**
+  - `remember::previous_sizes(root)` loads the previous snapshot as `path_key → bytes` (~16 B per folder). It's loaded on the background remember/reopen threads.
+  - Folder rows show `+25.0 MB` (amber) or `−30.0 MB` (green) when the change is ≥ 1 MB; a folder new since the last scan shows its whole size. The header reads "Change · Category".
+  - Verified: games +25 MB, cache −30 MB, root −5 MB.
+- **Start screen:** one card per drive (name, "324 GB free of 1.86 TB", used bar: accent / amber > 75% / red > 90%). Click to scan.
+- **Ctrl+F** focuses the filter box (hint text says so).
