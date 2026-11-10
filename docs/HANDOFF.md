@@ -1,69 +1,59 @@
 # Handoff: start here next session
 
-**Read this first, then the last section of `DEVLOG.md`. The plan is in `ROADMAP.md`.** Keep both up to date: after every milestone, add to `DEVLOG.md`, refresh this file, and commit.
+**Read this file first, then the last sections of `DEVLOG.md` (full history, newest at the bottom).** The plan is in `ROADMAP.md` and `FEATURE-PROPOSALS.md`. After every milestone: add to `DEVLOG.md`, refresh this file, commit, push.
 
-## Where we are
-- **Phases 1–4 are done.** Native app built, installer and security features added (2026-11-10). Renamed Drishti → Xylem.
-- **The web UI was removed completely** (user's decision, 2026-11-10: "only the exe, so it's safer to present"). There is no Tauri/WebView2 anywhere now, and the dependency tree has no HTTP client.
-- **Binaries:**
-  - `xylem.exe`: the app. Also the elevated helper (`--helper-scan`).
-  - `xylem-cli.exe`, `xylem-bench.exe`.
-- **Engine API:** `crates/session`. Design reference: `xylem-ui-prototype/` (v2, HTML mock-up only).
-- **Release:**
-  - `tools/release.ps1` builds, optionally signs (`XYLEM_SIGN_*`), then makes the NSIS installer (`installer/xylem.nsi`, Program Files), the portable zip and `SHA256SUMS.txt` in `dist/`.
-  - Current: setup 4.40 MB, xylem.exe 6.90 MB, **unsigned**.
-- **Security:**
-  - Delete re-check (type, links on the path).
-  - OneDrive/Git/large warnings with a required tick.
-  - Deletion log + history viewer.
-  - Integrity panel (location + Authenticode), first-run notice, shield button.
-  - Fuzz tests (they found 3 real bugs, all fixed).
-- All 52 tests pass; clippy is clean.
-- **Public repo:** https://github.com/JayD108/Xylem. CI is green, and the release pipeline dry run is green (NSIS installer 2.34 MB, real install/uninstall test in CI). SignPath prerequisites are in place: see `docs/SIGNPATH.md`.
-- **v0.1.0 is published** (unsigned): https://github.com/JayD108/Xylem/releases/tag/v0.1.0. Old note, done: publish the first release. Run `git tag -a v0.1.0 -m "Xylem 0.1.0"` then `git push origin v0.1.0` (the user runs it or approves it). After that the user applies to SignPath.
-- **Phase 5 (partly done):**
-  - Done: instant reopen (C: 1.6M files in ~0.4 s), folder snapshots + "What changed" (View menu), and privacy controls (File → Remember scans / Forget remembered scans). Code: `crates/session/src/remember.rs`.
-  - 5.2 (USN catch-up) deferred: it needs admin like Fast scan and saves only ~1 s. **Phase 6 started:** scan data 204 → 143 MB, app 278 → 213 MB (see ROADMAP). Measure with `cargo test --release -p xylem-session memory_of_a_real_scan -- --ignored --nocapture`.
-- **Phase 7 done (11 Nov):** largest files + search, file types, CSV export, Explorer right-click, multi-select delete, duplicate finder, hardlink names. Plus the UI round from user feedback: drive strip with top 5, curved labels, change column, drive cards, smooth progress.
-- **Testing:** `tools/full-test.ps1` (full local test → `test-evidence/REPORT.md`), `tools/fuzz-overnight.ps1` (cargo-fuzz + ASan, 6 targets; first run started 11 Nov 01:06 for 10 h). The laptop is Windows 11 Home (no Hyper-V), so destructive VM tests should run on disposable GitHub Windows runners.
-- **Security:** all findings F-01…F-16 fixed or decided (`docs/SECURITY-STATUS.md`); the admin helper writes nothing to disk (named pipe). Remaining before 1.0: the VM clearance test run, 24 h cargo-fuzz, signing.
-- **Security retest (10 Nov):**
-  - Score 8/10.
-  - Fixed DLL planting and the Windows-subfolder lock bypass.
-  - `cargo audit` is clean and runs in CI.
-- **Open items:**
-  - **Code signing needs the user's certificate.** Options: SignPath (free for OSS), Azure Trusted Signing, or a paid cert. Then set `XYLEM_SIGN_*` and run `tools/release.ps1`.
-  - Scan-data RAM (~255–272 MB for C:).
-  - First-raw-read cost.
-  - Phase 5.
+_Last updated: 11 Nov 2026, ~03:45, after commit 3b5fcd6._
 
-## Build and run
+## Where we are (one screen)
+- **Product:** Xylem, a native Windows disk space analyzer (Rust + egui). One `xylem.exe` (the app, which is also its own elevated Fast-scan helper), plus `xylem-cli.exe` and `xylem-bench.exe`. Open source (MIT OR Apache-2.0), offline, no telemetry.
+- **Repo:** https://github.com/JayD108/Xylem (public; recreated by the owner on 10 Nov). CI (tests, cargo-audit, cargo-deny) is green; the release pipeline is green.
+- **Released:** v0.1.0 (unsigned) on GitHub Releases. The current `main` is far ahead of it: next release **v0.2.0**.
+- **Phases done:** 1–4 (scanners, MFT reader, app, categories, safe delete) · 5 (instant reopen, snapshots, "what changed"; 5.2 USN catch-up deliberately skipped) · 6 (memory: scan data 204 → 143 MB, app peak 375 → 282 MB) · 7 (largest files + search, file types, CSV export, Explorer right-click, multi-select delete, duplicate finder, hardlink names) · the UI round (drive strip with top 5, curved sunburst labels, Change column, drive cards, smooth progress, Ctrl+F) · the logo everywhere.
+- **Quality:** 67 tests · clippy `-D warnings` clean · `tools/full-test.ps1` **19/19** (`docs/TEST-REPORT.md`) · all security findings F-01…F-16 fixed or decided (`docs/SECURITY-STATUS.md`).
+- **Benchmarks** (`docs/BENCHMARKS.md`): Xylem is fastest in every test. With admin: scan 1.07 s (eDirStat 2.41, WizTree 4.42); scan + CSV 1.59 s (WinDirStat 8.09, WizTree 16.57). Without admin: 4.29 s / 4.85 s. TreeSize and SizeTrend couldn't be timed (TreeSize's CLI didn't scan; SizeTrend has no CLI).
+- **Competitors** (`docs/COMPETITORS.md`): eDirStat (closest technically) and SizeTrend (closest in purpose). Fast MFT scanning is now common. Honest positioning: "the open-source disk analyzer that tells you what's safe to delete and what changed, at full speed, offline".
+
+## Open threads (pick up here)
+1. **Overnight fuzzing**: started 11 Nov 01:06, 10 h per target, ends ~11:07. Check `fuzz\logs\_status.txt` and `fuzz\artifacts\` (gitignored). At 03:37: ~1.24 billion runs, **0 crashes**. If anything crashed: reproduce with `cargo +nightly fuzz run <target> fuzz/artifacts/<target>/<file>`, fix, add a regression test.
+2. **Next work: Phase 8, "Clean up with confidence"** (`docs/FEATURE-PROPOSALS.md`): dependency purge ("Mark all" + Rust `target` detection via `CACHEDIR.TAG`), leftovers view, more cache rules, custom glob rules (can't unlock protection), DISM / System Protection buttons via Windows' own tools. Waiting for the owner's go-ahead; recommended first item: dependency purge.
+3. **Re-run benchmarks on an idle PC** after fuzzing ends (`tools/bench-competitors.ps1 -Mode user`, then `-Mode admin` elevated). Add TreeSize if the owner opens it once to clear its first-run/trial dialog.
+4. **VM-style destructive tests** (other users, crafted VHDX images, junction races) from the owner's test plan (`Storage/security test.md`). The laptop is Windows 11 Home (no Hyper-V/Sandbox), so the plan is a workflow on disposable GitHub Windows runners.
+5. **Admin session with the owner** (a couple of UAC clicks): Fast-scan memory peak, first-raw-read timing (Phase 6.3).
+6. **Release v0.2.0** (tag `v0.2.0` after bumping `version` in `Cargo.toml`; the tag must match), then **apply to SignPath** (`docs/SIGNPATH.md`; enable the secret/variable after acceptance).
+7. **Dependabot PRs** for major action bumps (checkout 7, upload-artifact 7, signpath action 3) are open: **don't merge** without checking (the signpath v3 inputs may differ).
+
+## Build, test, run
 ```powershell
 cd <your clone of github.com/JayD108/Xylem>
-$env:Path += ";$env:USERPROFILE\.cargo\bin"     # if cargo isn't found
+$env:Path += ";$env:USERPROFILE\.cargo\bin"
 cargo test --workspace
-cargo clippy --workspace --all-targets
-cargo build --release --workspace               # app ~2-3 min (fat LTO)
-.\tools\release.ps1                               # dist\: setup.exe, portable zip, SHA256SUMS
-.\target\release\xylem.exe            # the app
-.\target\release\xylem-cli.exe scan C: --top 20   # admin shell => MFT mode
+cargo clippy --workspace --all-targets -- -D warnings
+cargo build --release --workspace                 # ~2-3 min (fat LTO)
+.\target\release\xylem.exe                        # the app
+.\tools\full-test.ps1                             # full local test (~20 min) -> test-evidence\REPORT.md
+.\tools\bench-competitors.ps1 -Mode user          # benchmark (admin mode from an elevated shell)
+.\tools\fuzz-overnight.ps1 -Hours 10              # coverage-guided fuzzing (nightly + cargo-fuzz + MSVC ASan)
+.\tools\release.ps1                               # local installer build (needs NSIS); CI does this on tags
+python tools\make-icons.py <logo.png>             # regenerate every icon/logo file
 ```
 
+## Where things are
+- `crates/core`: index, store (index file format), classify + `rules.json`, view, report (CSV).
+- `crates/scan-mft`: MFT reader (`record.rs`, `volume.rs`, `scan.rs`, `fuzz.rs`, `fuzzing` entry points).
+- `crates/scan-walk`: folder walker (NtQueryDirectoryFile, live `PROGRESS` counter).
+- `crates/session`: engine API (`lib.rs`), elevated helper (`helper.rs` + `elevate.rs`, named pipe), `safety.rs` (re-check, identity chain, hard locks, warnings, deletion log, hardlink names, `visible()`), `integrity.rs` (signature, Program Files gate, DLL hardening), `remember.rs` (cache, snapshots, diff), `dupes.rs`, `recycle.rs`.
+- `crates/native`: the app (`app.rs` UI, `map.rs` sunburst/treemap incl. curved labels, `theme.rs`, `settings.rs`), `assets/` icons.
+- `fuzz/`: cargo-fuzz targets (6). `installer/xylem.nsi` + `welcome.bmp`. `.github/workflows/` (ci.yml, release.yml), `release-notes.md`, `dependabot.yml`. `deny.toml`.
+- Docs: README (short; no comparisons there), HOW-IT-WORKS, SECURITY-AND-PRIVACY, SECURITY-STATUS, DEVELOPMENT, ROADMAP, FEATURE-PROPOSALS, BENCHMARKS, COMPETITORS, TEST-REPORT, SIGNPATH, DEVLOG, `logo/`.
+
 ## Environment quirks
-- **The dev shell is usually not elevated.** Admin tests run a script through `Start-Process powershell -Verb RunAs -Wait ...`, and the user clicks Yes on the UAC prompt. Batch several admin checks into one script (`tools/admin-bench.ps1`) to keep prompts to a minimum.
-- **Smart App Control is ON.** Freshly built unsigned exes are sometimes blocked (os error 4551); retrying usually works.
-- **Testing the UI without moving the mouse:** `tools/ui-screenshot.ps1` launches the app and captures only its window. `tools/ui-click.ps1` and `tools/ui-setpath.ps1` press buttons and type paths through UI Automation.
-- **UI tests that open the app:** set `$env:APPDATA` / `$env:LOCALAPPDATA` to a temp folder first. That keeps the user's real settings and deletion log untouched. The first-run notice then shows; press "Got it" via `tools/ui-click.ps1`.
+- **The dev shell isn't elevated.** Admin runs go through `Start-Process powershell -Verb RunAs -Wait ...`; the owner clicks Yes. Batch admin checks into one script.
+- **Smart App Control is on;** unsigned fresh builds are occasionally blocked; retrying usually works.
+- **UI testing without touching the mouse:** `tools/ui-screenshot.ps1` (PrintWindow: only the app's own window, never screen-region capture), `tools/ui-click.ps1`, `tools/ui-setpath.ps1`. Point `APPDATA`/`LOCALAPPDATA` at a temp folder so the owner's settings, deletion log and remembered scans stay untouched. Screenshots meant for the public repo should show `C:\Windows`, not personal folders.
+- **Windows PowerShell 5.1:** save scripts with non-ASCII text (e.g. ⚡) **with a BOM**; native tools' stderr + `Stop` makes false errors (check exit codes instead).
+- The owner may have the **installed Xylem open** (`C:\Program Files\Xylem`). Don't close it, and don't count it in tests.
+- Background jobs/fuzzers: check `fuzz\logs` before running speed benchmarks (they use CPU).
 
-
-## Next steps
-1. **Code signing via SignPath Foundation** (chosen 2026-11-10; repo public at github.com/JayD108/Xylem). After acceptance: add the `SIGNPATH_API_TOKEN` secret, fill in and uncomment the SignPath step in `.github/workflows/release.yml`, tag a release, approve the request, and re-test with Smart App Control on.
-2. **Phase 5:**
-   - Index cache plus USN journal (instant reopen).
-   - Snapshots and diff ("what changed").
-3. **Speed:** the first-raw-read "extents" cost (0.36–0.80 s).
-4. **Later:**
-   - Show the other names of hardlinked files.
-   - Reduce MFT-mode RAM.
-   - Explorer context menu.
-   - Multi-select delete, in-app CSV export.
+## Release and signing
+- CI release pipeline: tag → test → build → (SignPath signs the exes) → NSIS installer → real install/uninstall test → (SignPath signs the installer) → checksums → GitHub Release. SignPath steps switch on when `SIGNPATH_API_TOKEN` + `SIGNPATH_ORGANIZATION_ID` exist.
+- Signing is deferred by the owner until all phases are done.

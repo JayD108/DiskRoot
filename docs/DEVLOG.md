@@ -462,3 +462,8 @@ User asked: "go for next step and also add the security measures ... and think o
 - SizeTrend: no CLI, not timed.
 - Caveat: 6 fuzzer processes were running (6/24 threads).
 - Written up in `docs/BENCHMARKS.md` and linked from the README and COMPETITORS.
+
+### 11 Nov (~03:45): checkpoint
+- Reviewed the owner's 15 feature ideas (`docs/FEATURE-PROPOSALS.md`): 13 viable (several redesigned to keep the constraints), Space Shifter and Archive & replace deferred. Phases 8–10 planned in ROADMAP.
+- `docs/HANDOFF.md` was rewritten as a complete resume point: state, 7 open threads, commands, file map, quirks.
+- Overnight fuzz at 03:37: ~1.24 billion runs, 0 crashes (ends ~11:07).
