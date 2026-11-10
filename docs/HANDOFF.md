@@ -1,6 +1,6 @@
 # Handoff: start here next session
 
-**Read this first, then the last section of `DEVLOG.md`.** Keep both up to date: after every milestone, add to `DEVLOG.md`, refresh this file, and commit.
+**Read this first, then the last section of `DEVLOG.md`. The plan is in `ROADMAP.md`.** Keep both up to date: after every milestone, add to `DEVLOG.md`, refresh this file, and commit.
 
 ## Where we are
 - **Phases 1–4 are done.** Native app built, installer and security features added (2026-11-10). Renamed Drishti → Xylem.
