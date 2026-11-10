@@ -23,7 +23,8 @@
 - **v0.1.0 is published** (unsigned): https://github.com/JayD108/Xylem/releases/tag/v0.1.0. Old note, done: publish the first release. Run `git tag -a v0.1.0 -m "Xylem 0.1.0"` then `git push origin v0.1.0` (the user runs it or approves it). After that the user applies to SignPath.
 - **Phase 5 (partly done):**
   - Done: instant reopen (C: 1.6M files in ~0.4 s), folder snapshots + "What changed" (View menu), and privacy controls (File → Remember scans / Forget remembered scans). Code: `crates/session/src/remember.rs`.
-  - Next: 5.2, USN journal catch-up, so a reopened scan becomes current in seconds without a full rescan.
+  - 5.2 (USN catch-up) deferred: it needs admin like Fast scan and saves only ~1 s. **Next: Phase 6 (memory).**
+- **Security:** all findings F-01…F-16 fixed or decided (`docs/SECURITY-STATUS.md`); the admin helper writes nothing to disk (named pipe). Remaining before 1.0: the VM clearance test run, 24 h cargo-fuzz, signing.
 - **Security retest (10 Nov):**
   - Score 8/10.
   - Fixed DLL planting and the Windows-subfolder lock bypass.

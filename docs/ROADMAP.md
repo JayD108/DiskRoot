@@ -18,7 +18,7 @@
 
 ## Phase 5: instant reopen + "what changed" (the biggest visible win)
 
-**Status (10 Nov 2026):** 5.1, 5.3, 5.4 and 5.5 are done. 5.2 (USN catch-up) is next.
+**Status (10 Nov 2026):** 5.1, 5.3, 5.4 and 5.5 are done. **5.2 (USN catch-up) is deferred:** reading the USN journal needs admin rights, exactly like Fast scan. So a catch-up would still need the UAC prompt and would save only about 1 s over a full Fast scan (~1.5 s), and without admin it can't run at all. Revisit only if scans of much larger drives make Fast scan slow.
 
 | Step | What | Detail |
 |---|---|---|
