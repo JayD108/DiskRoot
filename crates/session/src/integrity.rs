@@ -59,6 +59,27 @@ pub fn is_protected_location(exe: &Path) -> bool {
 #[link(name = "kernel32", kind = "raw-dylib")]
 unsafe extern "system" {
     fn SetDefaultDllDirectories(flags: u32) -> i32;
+    fn GetSystemWindowsDirectoryW(buf: *mut u16, len: u32) -> u32;
+}
+
+/// The real Windows folder (from the system, not the WINDIR variable).
+pub fn windows_dir() -> PathBuf {
+    let mut buf = [0u16; 260];
+    // SAFETY: buffer and its length are passed together.
+    let n = unsafe { GetSystemWindowsDirectoryW(buf.as_mut_ptr(), buf.len() as u32) } as usize;
+    if n == 0 || n >= buf.len() {
+        return PathBuf::from("C:\\Windows");
+    }
+    PathBuf::from(String::from_utf16_lossy(&buf[..n]))
+}
+
+pub const FAST_SCAN_NEEDS_INSTALL: &str = "Fast scan runs Xylem with admin rights, so it only works from an installed copy \
+(in Program Files, which other programs can't change). This copy runs from a folder any program can modify. \
+Install Xylem to use Fast scan, or use Scan, which needs no admin rights.";
+
+/// Fast scan (elevation) is allowed only from a protected install location.
+pub fn fast_scan_allowed() -> bool {
+    std::env::current_exe().is_ok_and(|exe| is_protected_location(&exe))
 }
 
 /// Call first thing in `main`: any DLL loaded later (by name) comes only

@@ -122,6 +122,15 @@ impl Index {
 
         let cols = Columns { parent, size, alloc, flags: flag_bytes, name_off, name_len, names };
         let mut index = Index::from_columns(cols).map_err(|e| bad(&e))?;
+        // A swapped or crafted file must not smuggle in names that change
+        // the meaning of a path ("..\\Windows", "x:y"): only the root may
+        // contain separators or a colon.
+        for id in 1..index.len() as u32 {
+            let n = index.name(id);
+            if n.is_empty() || n == "." || n == ".." || n.contains(['\\', '/', ':', '\0']) {
+                return Err(bad("invalid file name"));
+            }
+        }
         index.compute_totals();
         let stats = ScanStats { files, dirs, unreadable, orphans, elapsed: Duration::from_nanos(nanos) };
         Ok((index, stats, mode))
@@ -170,6 +179,15 @@ mod tests {
         let mut huge = buf.clone();
         huge[8..16].copy_from_slice(&u64::MAX.to_le_bytes());
         assert!(Index::load(&mut huge.as_slice()).is_err(), "absurd node count");
+        // Names that would change a path's meaning are refused.
+        for evil in ["..", r"a\b", "c:x", "a/b"] {
+            let mut i = Index::new("C:\\");
+            i.push(0, evil, 1, 1, 0);
+            i.compute_totals();
+            let mut b = Vec::new();
+            i.save(&ScanStats::default(), "walk", &mut b).unwrap();
+            assert!(Index::load(&mut b.as_slice()).is_err(), "{evil}");
+        }
     }
 }
 

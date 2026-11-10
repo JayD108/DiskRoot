@@ -318,3 +318,22 @@ User asked: "go for next step and also add the security measures ... and think o
 - **Speed A/B:** the CLI from commit 090a6d1 vs today, same disk, alternating: old 4.70/5.56/4.88 s vs new 4.75/4.60/3.92 s. No regression. One GUI run showed 11.3 s; two re-runs gave 3.7 and 5.1 s (a cold cache after builds).
 - 4 new tests (diff, new/removed, snapshot round-trip + fuzz, keys). All tests pass, clippy clean.
 - Dark theme showing up in two test runs was traced to the setting being switched in a test window left open on screen (it can't be reproduced without interaction); not a bug.
+
+### Same day, later: security test plan findings F-01…F-16
+- The user supplied a clearance test plan (`Storage/security test.md`). Status per finding: `docs/SECURITY-STATUS.md`.
+- **Fixed:**
+  - F-01/F-03: NSIS has no directory page, `/D` is ignored, "Start Xylem" goes through explorer (un-elevated).
+  - F-02: release builds refuse Fast scan outside Program Files.
+  - F-04: absolute explorer path.
+  - F-05: odd names and long paths are refused.
+  - F-06: file-identity chain, including the scan root, recorded when the dialog opens and checked before deleting. The app now confirms the exact `PendingDelete` it armed.
+  - F-07: refuses folders that contain protected places.
+  - F-08: `real_path` plus a file-identity hard lock (works through subst/UNC/8.3).
+  - F-10: warning for USB/network drives.
+  - F-12: `GetDriveTypeW`, network drives skipped.
+  - F-13: `visible()` in the delete dialog.
+  - F-16: Actions pinned by SHA, Dependabot.
+  - PA-05: loader validates names.
+- **Open:** F-09 (TEMP by handle), F-11 (helper timeout/cancel), F-15 (OTS UAC decision), F-13 for the log/CSV, cargo-deny, then the VM test run.
+- 61 tests, clippy clean.
+- **Git:** at the user's request there is no Claude attribution. The `Co-Authored-By` trailers were stripped from all commits (local backup branch `backup-before-rewrite`). The user will delete the GitHub repo and push to a new one themselves.

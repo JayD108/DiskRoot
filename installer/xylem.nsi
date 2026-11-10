@@ -49,18 +49,27 @@ VIAddVersionKey "LegalCopyright" "MIT OR Apache-2.0"
 !define MUI_ICON "..\crates\native\assets\icon.ico"
 !define MUI_UNICON "..\crates\native\assets\icon.ico"
 !define MUI_ABORTWARNING
-!define MUI_FINISHPAGE_RUN "$INSTDIR\xylem.exe"
+; "Start Xylem" must not inherit the installer's admin rights: launch it
+; through Explorer, which runs it as the signed-in user (not elevated).
+!define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "Start Xylem"
+!define MUI_FINISHPAGE_RUN_FUNCTION StartUnelevated
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "..\LICENSE-MIT"
 !insertmacro MUI_PAGE_COMPONENTS
-!insertmacro MUI_PAGE_DIRECTORY
+; No directory page: Xylem always goes to Program Files, which normal users
+; can't modify. A user-writable folder would let malware replace xylem.exe,
+; which Fast scan runs as admin.
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
+
+Function StartUnelevated
+  Exec '"$WINDIR\explorer.exe" "$INSTDIR\xylem.exe"'
+FunctionEnd
 
 Function .onInit
   ${IfNot} ${RunningX64}
@@ -69,6 +78,8 @@ Function .onInit
   ${EndIf}
   SetRegView 64
   SetShellVarContext all
+  ; Ignore /D=... too: always the protected Program Files folder.
+  StrCpy $INSTDIR "$PROGRAMFILES64\Xylem"
 FunctionEnd
 
 Function un.onInit

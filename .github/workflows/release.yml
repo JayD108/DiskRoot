@@ -28,8 +28,8 @@ jobs:
       contents: write # create the GitHub Release
       actions: read # SignPath reads the build artifacts
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
       - name: Check tag matches Cargo.toml version
         id: ver
@@ -48,7 +48,7 @@ jobs:
 
       - name: Upload exes (unsigned)
         id: upload-bin
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: xylem-${{ steps.ver.outputs.version }}-exes-unsigned
           path: dist/stage/*.exe
@@ -56,7 +56,7 @@ jobs:
 
       - name: Sign exes with SignPath
         if: env.SIGNPATH_ENABLED == 'true'
-        uses: signpath/github-action-submit-signing-request@v1
+        uses: signpath/github-action-submit-signing-request@ced31329c0317e779dad2eec2a7c3bb46ea1343e # v1
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
@@ -101,7 +101,7 @@ jobs:
 
       - name: Upload installer (unsigned)
         id: upload-setup
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: xylem-${{ steps.ver.outputs.version }}-installer-unsigned
           path: dist/xylem-setup-*.exe
@@ -109,7 +109,7 @@ jobs:
 
       - name: Sign installer with SignPath
         if: env.SIGNPATH_ENABLED == 'true'
-        uses: signpath/github-action-submit-signing-request@v1
+        uses: signpath/github-action-submit-signing-request@ced31329c0317e779dad2eec2a7c3bb46ea1343e # v1
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
@@ -134,7 +134,7 @@ jobs:
           Get-Content out\SHA256SUMS.txt
 
       - name: Upload release files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: xylem-${{ steps.ver.outputs.version }}-release
           path: out/*

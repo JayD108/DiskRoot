@@ -23,12 +23,15 @@ pub struct DeleteWarnings {
     pub git_repos: u32,
     /// Big enough that a slip would hurt (≥ 10 GB or ≥ 50,000 files).
     pub large: bool,
+    /// On a USB stick or network share: Windows may have no Recycle Bin
+    /// there and delete it permanently (after its own prompt).
+    pub no_recycle_bin: bool,
 }
 
 impl DeleteWarnings {
     /// True if the user should explicitly tick "I understand" first.
     pub fn needs_ack(&self) -> bool {
-        self.cloud || self.git_repos > 0 || self.large
+        self.cloud || self.git_repos > 0 || self.large || self.no_recycle_bin
     }
 }
 
@@ -73,6 +76,174 @@ pub fn verify_before_recycle(path: &Path, scan_root: &Path, expect_dir: bool, wa
             Err(_) => return changed(&format!("The folder {} disappeared", dir.display())),
         }
         cur = dir.parent();
+    }
+    Ok(())
+}
+
+/// Names Windows silently rewrites or treats as devices. A file created as
+/// `report.` (trailing dot) is a *different* file from `report`, but the
+/// Recycle Bin call would delete `report`. Xylem refuses such names (and
+/// over-long paths) instead of risking the wrong item.
+pub fn unusual_name(path: &Path) -> Option<String> {
+    const DEVICES: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2",
+        "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    if path.as_os_str().encode_wide_len() >= 260 {
+        return Some("Its path is longer than Windows' 260-character limit for the Recycle Bin.".into());
+    }
+    for c in path.components() {
+        let std::path::Component::Normal(name) = c else { continue };
+        let n = name.to_string_lossy();
+        if n.ends_with('.') || n.ends_with(' ') {
+            return Some(format!("\"{n}\" ends with a dot or space, which Windows would silently change."));
+        }
+        let stem = n.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
+        if DEVICES.contains(&stem.as_str()) {
+            return Some(format!("\"{n}\" is a reserved device name in Windows."));
+        }
+    }
+    None
+}
+
+trait WideLen {
+    fn encode_wide_len(&self) -> usize;
+}
+impl WideLen for std::ffi::OsStr {
+    fn encode_wide_len(&self) -> usize {
+        use std::os::windows::ffi::OsStrExt;
+        self.encode_wide().count()
+    }
+}
+
+/// Identity of a file or folder on disk: volume serial number + file index.
+/// Survives renames; a different item at the same path has another id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileId {
+    volume: u32,
+    index: u64,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct ByHandleFileInformation {
+    attributes: u32,
+    times: [u32; 6],
+    volume_serial: u32,
+    size_high: u32,
+    size_low: u32,
+    links: u32,
+    index_high: u32,
+    index_low: u32,
+}
+
+#[link(name = "kernel32", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn GetFileInformationByHandle(h: *mut std::ffi::c_void, info: *mut ByHandleFileInformation) -> i32;
+}
+
+/// Opens the item itself (never what a link points to) with no data access.
+pub fn file_id(path: &Path) -> std::io::Result<FileId> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    const FILE_READ_ATTRIBUTES: u32 = 0x80;
+    const SHARE_ALL: u32 = 0x7;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let f = OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(SHARE_ALL)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    let mut info = ByHandleFileInformation::default();
+    // SAFETY: valid open handle and a correctly sized output struct.
+    if unsafe { GetFileInformationByHandle(f.as_raw_handle(), &mut info) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(FileId { volume: info.volume_serial, index: u64::from(info.index_high) << 32 | u64::from(info.index_low) })
+}
+
+/// The identities of `path` and of every folder above it, up to and
+/// including `scan_root`. Taken when the delete dialog opens and compared
+/// right before deleting: if anything on the way was swapped (a folder
+/// replaced, a junction slipped in, even the scan root itself), the ids
+/// differ and the delete is refused.
+pub fn identity_chain(path: &Path, scan_root: &Path) -> Result<Vec<(PathBuf, FileId)>, String> {
+    let mut out = Vec::new();
+    let mut cur = Some(path);
+    while let Some(p) = cur {
+        out.push((p.to_path_buf(), file_id(p).map_err(|_| format!("{} no longer exists. Rescan to refresh.", p.display()))?));
+        if p == scan_root || !p.starts_with(scan_root) {
+            break;
+        }
+        cur = p.parent();
+    }
+    Ok(out)
+}
+
+/// Hard locks that don't depend on how a path is spelled (UNC `\\host\C$`,
+/// `\\?\`, `subst`, 8.3 names, junctions): the item and every folder above
+/// it, up to the drive root, are compared by file identity with the real
+/// Windows and Program Files folders (locked with everything inside), and
+/// with ProgramData and the Users folder (locked themselves).
+pub fn hard_lock(path: &Path) -> Option<String> {
+    let id = |p: &Path| file_id(p).ok();
+    let tree: Vec<(PathBuf, FileId)> = std::iter::once(crate::integrity::windows_dir())
+        .chain(["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"].iter().filter_map(std::env::var_os).map(PathBuf::from))
+        .filter_map(|p| id(&p).map(|i| (p, i)))
+        .collect();
+    let own: Vec<(PathBuf, FileId)> = ["ProgramData", "PUBLIC", "USERPROFILE"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .flat_map(|p| {
+            // For PUBLIC / USERPROFILE also lock their parent, the Users folder.
+            let parent = p.parent().map(Path::to_path_buf);
+            [Some(p), parent]
+        })
+        .flatten()
+        .filter_map(|p| id(&p).map(|i| (p, i)))
+        .collect();
+    let item = id(path)?;
+    if let Some((p, _)) = own.iter().chain(&tree).find(|(_, i)| *i == item) {
+        return Some(format!("This is {} itself, which Xylem never deletes.", p.display()));
+    }
+    let mut cur = path.parent();
+    while let Some(dir) = cur {
+        if let Some(d) = id(dir)
+            && let Some((p, _)) = tree.iter().find(|(_, i)| *i == d)
+        {
+            return Some(format!("It's inside {}, which Xylem never deletes from.", p.display()));
+        }
+        cur = dir.parent();
+    }
+    None
+}
+
+/// Makes a name safe to show: control characters, bidirectional overrides
+/// (U+202E can make `fdp.exe` look like `exe.pdf`) and zero-width characters
+/// are shown as `<U+XXXX>`, so the dialog and log show what's really there.
+pub fn visible(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            let hidden = c.is_control()
+                || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}');
+            if hidden { format!("<U+{:04X}>", c as u32) } else { c.to_string() }
+        })
+        .collect()
+}
+
+pub fn check_identity(chain: &[(PathBuf, FileId)]) -> Result<(), String> {
+    for (p, id) in chain {
+        match file_id(p) {
+            Ok(now) if now == *id => {}
+            _ => {
+                return Err(format!(
+                    "{} was replaced or moved after you confirmed, so Xylem won't delete anything. Rescan and try again.",
+                    p.display()
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -145,6 +316,26 @@ mod tests {
         assert_eq!(format_utc(0), "1970-01-01 00:00:00");
         assert_eq!(format_utc(1_762_800_000), "2025-11-10 18:40:00");
         assert_eq!(format_utc(951_782_400), "2000-02-29 00:00:00", "leap day");
+    }
+
+    #[test]
+    fn hard_lock_ignores_path_spelling() {
+        let win = crate::integrity::windows_dir();
+        assert!(hard_lock(&win.join("Fonts")).is_some(), "inside Windows");
+        assert!(hard_lock(&win).is_some(), "Windows itself");
+        // Same folder through a subst drive letter (no admin needed).
+        let subst = win.join("System32").join("subst.exe");
+        if let Some(l) = ('P'..='Y').rev().find(|c| !Path::new(&format!("{c}:\\")).exists()) {
+            let drive = format!("{l}:");
+            if std::process::Command::new(&subst).arg(&drive).arg(&win).status().is_ok_and(|s| s.success()) {
+                let r = hard_lock(Path::new(&format!("{drive}\\Fonts")));
+                let _ = std::process::Command::new(&subst).args([drive.as_str(), "/D"]).status();
+                assert!(r.is_some(), "subst {drive} -> Windows must stay locked");
+            }
+        }
+        assert!(hard_lock(&std::env::temp_dir()).is_none(), "temp is not locked");
+        assert_eq!(visible("invoice\u{202E}fdp.exe"), "invoice<U+202E>fdp.exe");
+        assert_eq!(visible("a\tb"), "a<U+0009>b");
     }
 
     #[test]

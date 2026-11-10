@@ -13,8 +13,8 @@ use eframe::egui::{
 };
 use xylem_session::integrity::{Integrity, SignatureState};
 use xylem_session::remember::{self, Changes};
-use xylem_session::safety::{DeleteWarnings, LogEntry};
-use xylem_session::{DeleteOut, ItemInfo, RULES, Safety, Scanned, Shape, Summary};
+use xylem_session::safety::{DeleteWarnings, LogEntry, visible};
+use xylem_session::{DeleteOut, ItemInfo, PendingDelete, RULES, Safety, Scanned, Shape, Summary};
 
 use crate::map::{self, Hit, Kind, Layout as MapLayout, PaintCtx};
 use crate::settings::Settings;
@@ -92,6 +92,10 @@ struct Confirm {
     info: ItemInfo,
     warnings: DeleteWarnings,
     ack: bool,
+    /// The delete prepared and "armed" (file identities recorded) when the
+    /// dialog opened. Confirming runs exactly this, so anything swapped on
+    /// disk while the dialog was open is caught. None for protected items.
+    pending: Option<PendingDelete>,
 }
 
 /// The map's current root.
@@ -276,20 +280,15 @@ impl XylemApp {
         }
     }
 
-    fn start_delete(&mut self, node: u32) {
-        let Some(s) = &self.scanned else { return };
-        match s.prepare_delete(node) {
-            Err(why) => self.dialog = Some(Dialog::Message("Can't delete this".into(), why)),
-            Ok(pending) => {
-                let (tx, rx) = mpsc::channel();
-                let name = pending.name.clone();
-                std::thread::spawn(move || {
-                    let r = pending.recycle();
-                    let _ = tx.send(Done::Deleted(node, r));
-                });
-                self.job = Some(Job { kind: JobKind::Delete(name), started: Instant::now(), rx });
-            }
-        }
+    /// Runs the delete the user confirmed (prepared and armed in `ask_delete`).
+    fn start_delete(&mut self, pending: PendingDelete) {
+        let (tx, rx) = mpsc::channel();
+        let (node, name) = (pending.node, pending.name.clone());
+        std::thread::spawn(move || {
+            let r = pending.recycle();
+            let _ = tx.send(Done::Deleted(node, r));
+        });
+        self.job = Some(Job { kind: JobKind::Delete(name), started: Instant::now(), rx });
     }
 
     fn poll_job(&mut self, ctx: &egui::Context) {
@@ -1033,15 +1032,21 @@ impl XylemApp {
 
     fn ask_delete(&mut self, n: u32) {
         let Some(s) = &self.scanned else { return };
-        // Protected items still open the dialog (it explains why); others
-        // get their warnings (cloud, Git, large) computed up front.
-        let warnings = s.prepare_delete(n).map(|p| p.warnings).unwrap_or_default();
-        match s.info(n) {
-            Ok(_) if n == 0 => {
+        // Protected items still open the dialog (it explains why). Others are
+        // prepared and armed now: warnings computed, file identities taken.
+        let prepared = s.prepare_delete(n).and_then(|mut p| p.arm().map(|()| p));
+        match (s.info(n), prepared) {
+            (Ok(_), _) if n == 0 => {
                 self.dialog = Some(Dialog::Message("Can't delete this".into(), "Xylem won't delete the whole scanned folder or drive.".into()));
             }
-            Ok(info) => self.dialog = Some(Dialog::ConfirmDelete(Box::new(Confirm { info, warnings, ack: false }))),
-            Err(e) => self.dialog = Some(Dialog::Message("Can't delete this".into(), e)),
+            (Ok(info), _) if info.protected.is_some() => {
+                self.dialog = Some(Dialog::ConfirmDelete(Box::new(Confirm { info, warnings: DeleteWarnings::default(), ack: false, pending: None })));
+            }
+            (Ok(info), Ok(p)) => {
+                let warnings = p.warnings.clone();
+                self.dialog = Some(Dialog::ConfirmDelete(Box::new(Confirm { info, warnings, ack: false, pending: Some(p) })));
+            }
+            (Ok(_), Err(e)) | (Err(e), _) => self.dialog = Some(Dialog::Message("Can't delete this".into(), e)),
         }
     }
 
@@ -1500,9 +1505,9 @@ impl XylemApp {
                 }
                 Dialog::ConfirmDelete(c) => {
                     let info = &c.info;
-                    ui.label(RichText::new(format!("Move \"{}\" to the Recycle Bin?", info.name)).font(theme::semibold(15.0)));
+                    ui.label(RichText::new(format!("Move \"{}\" to the Recycle Bin?", visible(&info.name))).font(theme::semibold(15.0)));
                     ui.add_space(4.0);
-                    ui.label(RichText::new(&info.path).monospace().color(t.muted));
+                    ui.label(RichText::new(visible(&info.path)).monospace().color(t.muted));
                     ui.add_space(6.0);
                     ui.label(format!("Frees {} · {}", fmt_bytes(info.on_disk), fmt_files(u64::from(info.files))));
                     if let Some(note) = RULES.info.get(info.rule as usize).and_then(|r| r.note.as_ref()) {
@@ -1532,6 +1537,9 @@ impl XylemApp {
                         if w.git_repos > 0 {
                             let n = if w.git_repos == 1 { "a Git repository".to_owned() } else { format!("{} Git repositories", w.git_repos) };
                             warn(ui, &format!("Contains {n}"), "Commits, branches or stashes that were never pushed exist only here.");
+                        }
+                        if w.no_recycle_bin {
+                            warn(ui, "May be deleted permanently", "This is on a USB drive or network share. Windows often has no Recycle Bin there, so it may delete it for good (it asks first). Copy anything you might need back.");
                         }
                         if w.large {
                             warn(ui, "Large delete", "This is a lot of data. Windows may say it's too big for the Recycle Bin and offer to delete it permanently. Read that prompt carefully.");
@@ -1607,9 +1615,12 @@ impl XylemApp {
             self.dialog = None;
             self.show_rel(&rel);
         }
-        if let Some(id) = confirm {
-            self.dialog = None;
-            self.start_delete(id);
+        if confirm.is_some() {
+            if let Some(Dialog::ConfirmDelete(c)) = self.dialog.take()
+                && let Some(p) = c.pending
+            {
+                self.start_delete(p);
+            }
         } else if close {
             self.dialog = None;
         }

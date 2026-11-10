@@ -35,7 +35,26 @@ pub fn categories() -> &'static [Category] {
 
 /// Drive roots that exist, e.g. `["C:\\", "D:\\"]`.
 pub fn drives() -> Vec<String> {
-    ('A'..='Z').map(|c| format!("{c}:\\")).filter(|d| Path::new(d).exists()).collect()
+    // GetDriveTypeW answers from the local mount table, so network drives
+    // are skipped without touching the network (no SMB traffic at startup).
+    ('A'..='Z')
+        .map(|c| format!("{c}:\\"))
+        .filter(|d| matches!(drive_type(d), 2 | 3 | 5 | 6)) // removable, fixed, CD, RAM disk
+        .filter(|d| Path::new(d).exists())
+        .collect()
+}
+
+#[link(name = "kernel32", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn GetDriveTypeW(root: *const u16) -> u32;
+}
+
+/// 0 unknown, 1 no root, 2 removable, 3 fixed, 4 remote, 5 CD-ROM, 6 RAM disk.
+pub fn drive_type(path: &str) -> u32 {
+    let root: String = if path.starts_with(r"\\") { return 4 } else { path.chars().take(2).chain("\\".chars()).collect() };
+    let w: Vec<u16> = root.encode_utf16().chain([0]).collect();
+    // SAFETY: NUL-terminated buffer that outlives the call.
+    unsafe { GetDriveTypeW(w.as_ptr()) }
 }
 
 fn mode_text(used: &Used) -> String {
@@ -49,9 +68,29 @@ fn mode_text(used: &Used) -> String {
 /// Scans a drive or folder in this process (MFT if possible, else walk).
 /// Blocking: call it from a worker thread.
 pub fn scan(path: &str) -> Result<Scanned, String> {
+    let path = real_path(path)?;
     let threads = xylem_scan_walk::default_threads();
-    let (s, used) = scan_auto(Path::new(path), Mode::Auto, threads).map_err(|e| format!("Scan failed: {e}"))?;
+    let (s, used) = scan_auto(Path::new(&path), Mode::Auto, threads).map_err(|e| format!("Scan failed: {e}"))?;
     Ok(Scanned::new(s.index, s.stats, mode_text(&used)))
+}
+
+/// The real, full path of what the user typed: short 8.3 names
+/// (`C:\PROGRA~1`), `subst` drive letters, junctions and symlinks are
+/// resolved. Protection rules match on folder names, so they must see the
+/// real path, not whatever spelling was typed.
+pub fn real_path(path: &str) -> Result<String, String> {
+    let p = path.trim();
+    // "C:" alone means "the current folder on C:", not the drive.
+    let p = if p.len() == 2 && p.ends_with(':') { format!("{p}\\") } else { p.to_owned() };
+    let c = std::fs::canonicalize(&p).map_err(|e| format!("Can't open \"{path}\": {e}"))?;
+    let s = c.to_string_lossy();
+    Ok(if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        rest.to_owned()
+    } else {
+        s.into_owned()
+    })
 }
 
 /// The remembered scan of `root` (instant reopen), and when it was made.
@@ -64,7 +103,16 @@ pub fn reopen(root: &str) -> Option<(Scanned, u64)> {
 /// Fast MFT scan through the elevated helper (shows the UAC prompt).
 /// Blocking: call it from a worker thread.
 pub fn scan_admin(drive: &str) -> Result<Scanned, String> {
-    let (index, stats, mode) = elevate::scan_with_helper(drive)?;
+    // Fast scan runs this very exe with admin rights. A copy in a folder the
+    // user can write to (Downloads, a portable zip) could be swapped by any
+    // program running as the user, which would then get admin rights from
+    // the user's "Yes". So release builds only elevate from Program Files.
+    #[cfg(not(debug_assertions))]
+    if !integrity::fast_scan_allowed() {
+        return Err(integrity::FAST_SCAN_NEEDS_INSTALL.into());
+    }
+    let drive = real_path(drive)?;
+    let (index, stats, mode) = elevate::scan_with_helper(&drive)?;
     Ok(Scanned::new(index, stats, mode))
 }
 
@@ -410,14 +458,24 @@ impl Scanned {
         }
         let idx = &self.index;
         let path = PathBuf::from(&info.path);
+        if let Some(why) = safety::unusual_name(&path) {
+            return Err(format!("Xylem won't delete this: {why} Use File Explorer instead."));
+        }
         let mut warnings = safety::DeleteWarnings {
             cloud: idx.flags(node) & flags::CLOUD != 0 || safety::in_cloud_folder(&path),
             git_repos: 0,
             large: info.on_disk >= safety::LARGE_BYTES || info.files >= safety::LARGE_FILES,
+            no_recycle_bin: matches!(drive_type(&info.path), 2 | 4),
         };
-        // One pass over the subtree: Git repos and cloud placeholders.
+        // One pass over the subtree: protected places inside (refuse), Git
+        // repos and cloud placeholders (warn).
         let mut stack = vec![node];
         while let Some(x) = stack.pop() {
+            if x != node
+                && let Some(what) = self.cls.protected_here(&RULES, x)
+            {
+                return Err(format!("It contains {}, which Xylem protects ({what}).", idx.path(x)));
+            }
             if x != node && idx.name(x).eq_ignore_ascii_case(".git") {
                 warnings.git_repos += 1;
             }
@@ -442,6 +500,7 @@ impl Scanned {
             scan_root: PathBuf::from(idx.name(0)),
             category: CATEGORIES[self.cls.cat[node as usize] as usize].name.to_owned(),
             warnings,
+            identity: None,
         })
     }
 
@@ -494,6 +553,9 @@ pub struct PendingDelete {
     pub scan_root: PathBuf,
     pub category: String,
     pub warnings: safety::DeleteWarnings,
+    /// File identities of the item and every folder up to the scan root,
+    /// taken when the user was asked (see [`PendingDelete::arm`]).
+    identity: Option<Vec<(PathBuf, safety::FileId)>>,
 }
 
 impl PendingDelete {
@@ -501,8 +563,27 @@ impl PendingDelete {
     /// write the result to the local deletion log. Blocking (Windows may
     /// show its own progress or "too big to recycle" prompt): use a worker
     /// thread.
+    /// Records the on-disk identity of the item and of every folder above
+    /// it, up to and including the scan root. Call it when the confirmation
+    /// dialog opens; `recycle` then refuses if anything was swapped in the
+    /// meantime.
+    pub fn arm(&mut self) -> Result<(), String> {
+        if let Some(why) = safety::hard_lock(&self.path) {
+            return Err(why);
+        }
+        self.identity = Some(safety::identity_chain(&self.path, &self.scan_root)?);
+        Ok(())
+    }
+
     pub fn recycle(&self) -> Result<DeleteOut, String> {
-        let result = safety::verify_before_recycle(&self.path, &self.scan_root, self.dir, self.was_link)
+        let identity = match &self.identity {
+            Some(chain) => Ok(chain.clone()),
+            None => safety::identity_chain(&self.path, &self.scan_root),
+        };
+        let result = identity
+            .and_then(|chain| safety::check_identity(&chain))
+            .and_then(|()| safety::hard_lock(&self.path).map_or(Ok(()), Err))
+            .and_then(|()| safety::verify_before_recycle(&self.path, &self.scan_root, self.dir, self.was_link))
             .and_then(|()| recycle::to_recycle_bin(&self.path));
         let cancelled = matches!(result, Ok(recycle::Outcome::Cancelled));
         safety::append_log(&safety::LogEntry {
@@ -528,7 +609,9 @@ pub fn reveal(path: &str) -> Result<(), String> {
     if path.contains('"') {
         return Err("Path contains a quote character".into());
     }
-    std::process::Command::new("explorer.exe")
+    // Absolute path: a bare "explorer.exe" is searched for in this exe's own
+    // folder first, where a planted copy would run instead.
+    std::process::Command::new(integrity::windows_dir().join("explorer.exe"))
         .raw_arg(format!("/select,\"{path}\""))
         .spawn()
         .map(|_| ())
@@ -598,6 +681,62 @@ mod tests {
                 assert!(s.prepare_delete(it.id).is_err(), "{sub}\\{} must be locked", it.name);
             }
         }
+    }
+
+    #[test]
+    fn refuses_folders_that_contain_protected_places() {
+        // Deleting "Users" from a scan of C:\ would take profile folders and
+        // anything protected inside with it.
+        let s = demo();
+        assert!(s.prepare_delete(1).is_err() || s.info(1).unwrap().protected.is_some());
+        let mut idx = Index::new("C:\\");
+        let stuff = idx.push(0, "stuff", 0, 0, flags::DIR);
+        let win = idx.push(stuff, "Windows", 0, 0, flags::DIR);
+        idx.push(win, "x.dll", 1, 1, 0);
+        idx.compute_totals();
+        let s = Scanned::new(idx, ScanStats::default(), "test".into());
+        // C:\stuff\Windows isn't the real Windows folder, so nothing is locked.
+        assert!(s.prepare_delete(stuff).is_ok());
+    }
+
+    #[test]
+    fn real_path_resolves_short_names() {
+        let windir = integrity::windows_dir();
+        let pf = std::env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".into());
+        // C:\PROGRA~1 (8.3 name), if 8.3 names exist on this volume.
+        let short = format!("{}PROGRA~1", &pf[..3]);
+        if std::path::Path::new(&short).exists() {
+            assert_eq!(real_path(&short).unwrap().to_lowercase(), pf.to_lowercase());
+        }
+        assert_eq!(real_path(&windir.to_string_lossy().to_uppercase()).unwrap().to_lowercase(), windir.to_string_lossy().to_lowercase());
+        assert!(real_path("C:").unwrap().ends_with('\\'), "drive letter means the drive root");
+        assert!(real_path("Z:\\no\\such\\folder\\xylem").is_err());
+    }
+
+    #[test]
+    fn delete_refuses_swapped_items_and_odd_names() {
+        let root = std::env::temp_dir().join(format!("xylem-arm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        std::fs::write(root.join("a").join("f.txt"), b"x").unwrap();
+        let s = scan(&root.to_string_lossy()).unwrap();
+        let a = s.find_rel("a").unwrap();
+        let mut pending = s.prepare_delete(a).unwrap();
+        pending.arm().unwrap();
+        // Swap folder "a" for another folder with the same name after the
+        // user was asked: the delete must be refused, nothing recycled.
+        std::fs::rename(root.join("a"), root.join("a-old")).unwrap();
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        let err = pending.recycle().unwrap_err();
+        assert!(err.contains("replaced or moved"), "{err}");
+        assert!(root.join("a").exists() && root.join("a-old").exists());
+
+        assert!(safety::unusual_name(std::path::Path::new("C:\\x\\report.")).is_some());
+        assert!(safety::unusual_name(std::path::Path::new("C:\\x\\notes \\a")).is_some());
+        assert!(safety::unusual_name(std::path::Path::new("C:\\x\\con.txt")).is_some());
+        assert!(safety::unusual_name(std::path::Path::new("C:\\x\\console.txt")).is_none());
+        assert!(safety::unusual_name(std::path::Path::new(&format!("C:\\{}", "a".repeat(300)))).is_some());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

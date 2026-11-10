@@ -406,6 +406,17 @@ impl Classification {
     }
 
     /// Why `id` must not be deleted from Xylem, if it mustn't.
+    /// The protected place that starts exactly at `id` (its sub-type name),
+    /// if a protecting rule matched this very node. Used to refuse deleting
+    /// a folder that *contains* something protected.
+    pub fn protected_here<'r>(&self, rules: &'r Rules, id: u32) -> Option<&'r str> {
+        let r = self.rule[id as usize];
+        if self.bits[id as usize] & MATCHED_HERE == 0 || r == NO_RULE {
+            return None;
+        }
+        rules.info[r as usize].protect.is_some().then(|| rules.subs[self.sub[id as usize] as usize].name.as_str())
+    }
+
     pub fn protection(&self, idx: &Index, rules: &Rules, id: u32) -> Option<String> {
         if id == 0 {
             return Some("This is the scanned folder itself.".into());
