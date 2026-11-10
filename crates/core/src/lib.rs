@@ -174,11 +174,13 @@ impl Index {
         if self.totals_ready {
             return;
         }
+        // Saturating: sizes come from disk structures, and a corrupt record
+        // claiming ~2^64 bytes must not wrap the totals (found by fuzzing).
         for i in (1..self.len()).rev() {
             let p = self.parent[i] as usize;
-            self.size[p] += self.size[i];
-            self.alloc[p] += self.alloc[i];
-            self.files[p] += self.files[i];
+            self.size[p] = self.size[p].saturating_add(self.size[i]);
+            self.alloc[p] = self.alloc[p].saturating_add(self.alloc[i]);
+            self.files[p] = self.files[p].saturating_add(self.files[i]);
         }
         self.totals_ready = true;
     }

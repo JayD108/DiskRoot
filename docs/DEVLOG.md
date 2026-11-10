@@ -176,3 +176,53 @@ Accuracy vs WizTree: 279/309 top-level folders exact. The 12 GB gap was System V
   - Port the v2 design into the web add-on's HTML.
   - Reduce scan-data RAM (index + classification ≈ 200+ MB for 1.8M items).
   - Investigate the first-raw-read flush cost.
+
+### Same day, later: installer, signing hook, security features, web UI removed
+User asked: "go for next step and also add the security measures ... and think of security measures that will enhance the tool's use case". Mid-way the user added: "drop web ui completely, only the exe, so it would be safer to present".
+
+- **Installer:** `installer/xylem.iss` (Inno Setup 6.7.3, installed per-user via winget).
+  - Per-machine install into `{autopf}\Xylem` (admin-only writable, which protects the Fast-scan helper); `/CURRENTUSER` allows a per-user test install.
+  - Parts: app (fixed) and cli (default). Start Menu shortcut, uninstaller. Settings and the deletion log are kept on uninstall.
+  - **Tested twice:** silent per-user install into %TEMP%, then the installed `xylem-cli --version`, then a silent uninstall. Nothing left behind (folder, shortcut, HKCU uninstall key).
+- **`tools/release.ps1`:** build → stage → **optional signtool signing** → ISCC → portable zip → `SHA256SUMS.txt`, all in `dist/` (gitignored).
+  - Signing turns on with `XYLEM_SIGN_THUMBPRINT`, `XYLEM_SIGN_PFX` (+ password) or `XYLEM_SIGN_DLIB` (+ metadata, for Azure Trusted Signing), and runs `signtool verify /pa` afterwards.
+  - The timestamp server is the only network step.
+  - Output today (unsigned): setup 4.40 MB, portable zip 3.33 MB, xylem.exe 6.90 MB, xylem-cli.exe 0.82 MB.
+  - Windows PowerShell 5.1: `$ErrorActionPreference = "Stop"` turns cargo's stderr into errors, so the script checks exit codes.
+- **Added `LICENSE-MIT` + `LICENSE-APACHE`.** The README claimed them, but the files were missing. The Apache text came from apache.org.
+- **`crates/session/src/safety.rs`:**
+  - `verify_before_recycle`: still exists, same file/folder type, link status unchanged, and no folder between the scan root and the item became a link. Tested with a real `mklink /J` swap.
+  - `DeleteWarnings { cloud, git_repos, large }`:
+    - Cloud: OneDrive env-var folders or CLOUD placeholders in the subtree.
+    - Git: `.git` entries in the subtree.
+    - Large: ≥ 10 GB or ≥ 50,000 files.
+  - Deletion log as JSON lines in `%LOCALAPPDATA%\Xylem\deletions.log` (recycled / cancelled / refused), with UTC timestamps (no date crate).
+  - `PendingDelete::recycle` now re-checks, recycles and logs. `prepare_delete` refuses node 0 (the scan root).
+- **`crates/session/src/integrity.rs`:**
+  - Program Files location check.
+  - Authenticode via `WinVerifyTrust` (raw-dylib, no revocation, cache-only URLs, so it stays offline). Tested: Edge = Signed, the test binary = Unsigned.
+  - Windows' own exes are catalog-signed, which this embedded-signature check reports as unsigned. That's irrelevant for our exe.
+- **Native UI:**
+  - First-run **Welcome** notice (`settings.seen_notice`; a command-line scan waits until it's closed).
+  - Painted **shield button** and Help → Security & privacy, with a "This copy of Xylem" integrity section.
+  - **File → Deletion history…** (table plus "Open log folder").
+  - Delete dialog shows amber warnings and an **"I understand" tick** that the button requires.
+  - Fixes: wrapped labels in a Grid made the modal taller than the window (now a stacked layout); every dialog has its own window id, so sizes don't carry over.
+- **Fuzz tests:**
+  - `crates/scan-mft/src/fuzz.rs`: mutated and noise records, run lists, boot sectors, random parent graphs through `build_tree`.
+  - `crates/core/src/store.rs`: mutated index files.
+  - Deterministic seeds; `XYLEM_FUZZ_ROUNDS` sets the length (2M rounds: 123 s, pass).
+  - **Real bugs found and fixed:**
+    1. A parent-link cycle → `from_columns` panic. Columns are now sized by the BFS-reached count.
+    2. A boot sector could declare record sizes up to 2 GB or clusters up to 128 GB → limited to 512–4096 B sectors, ≤ 2 MB clusters, ≤ 64 KB records.
+    3. u64 overflow in `compute_totals`, category sums, extension merge and `remove_subtree` (debug panic, silent wrap in release) → saturating arithmetic.
+- **Speed unchanged:** build_tree 1.77M records 0.188 s (was ~0.21); classify 0.115 s + stats 0.096 s.
+- **Web UI removed completely** (user's decision):
+  - `crates/app` deleted and taken out of the workspace.
+  - Tauri, wry, WebView2 and reqwest are gone from `Cargo.lock`.
+  - Installer, release script, README and docs updated.
+  - Before removal, its delete got the same warning confirmation, and trimming its Tauri permissions was tried. Neither could be UI-tested (UI Automation can't type into WebView2), which was one more reason to drop it.
+- **Verified in the real app** (isolated `APPDATA`/`LOCALAPPDATA`; the user's settings and log untouched):
+  - Welcome → Scan → shield panel (Location ! and Signature !, correct for a dev build).
+  - Deleting `proj` containing `.git`: warning shown, button disabled until ticked, recycled, log line written, history lists it.
+- **52 tests pass, clippy clean.**

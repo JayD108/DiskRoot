@@ -34,9 +34,9 @@ struct Job {
     bytes: usize,
 }
 
-struct ChunkOut {
-    recs: Vec<Parsed>,
-    names: String,
+pub(crate) struct ChunkOut {
+    pub(crate) recs: Vec<Parsed>,
+    pub(crate) names: String,
 }
 
 /// Scans a whole NTFS drive by reading its MFT. Needs administrator rights.
@@ -153,7 +153,7 @@ fn get<'a>(chunks: &'a [ChunkOut], slot: &[u64], rec: u32) -> Option<&'a Parsed>
     chunks[(s >> 32) as usize].recs.get((s & 0xFFFF_FFFF) as usize)
 }
 
-fn build_tree(letter: char, mut chunks: Vec<ChunkOut>, total: usize) -> (Index, ScanStats) {
+pub(crate) fn build_tree(letter: char, mut chunks: Vec<ChunkOut>, total: usize) -> (Index, ScanStats) {
     let trace = std::env::var_os("XYLEM_TRACE").is_some();
     let t0 = Instant::now();
     let lap = |what: &str| {
@@ -187,7 +187,7 @@ fn build_tree(letter: char, mut chunks: Vec<ChunkOut>, total: usize) -> (Index, 
             b.size = e.size;
             b.has_data = true;
         }
-        b.alloc += e.alloc;
+        b.alloc = b.alloc.saturating_add(e.alloc);
         if e.name_rank > b.name_rank {
             (b.name_chunk, b.name_off, b.name_len, b.name_rank) = (e.name_chunk, e.name_off, e.name_len, e.name_rank);
             (b.parent, b.parent_seq) = (e.parent, e.parent_seq);
@@ -236,10 +236,10 @@ fn build_tree(letter: char, mut chunks: Vec<ChunkOut>, total: usize) -> (Index, 
     // 4a. Breadth-first over the child lists only (compact u32 arrays) to
     //     give every reachable record its node id. BFS order guarantees
     //     parent id < child id.
-    let n = children.len() + 1;
+    let cap = children.len() + 1;
     let mut node_of = vec![u32::MAX; total];
-    let mut parent_node = Vec::with_capacity(n);
-    let mut order = Vec::with_capacity(n); // order[node] = record
+    let mut parent_node = Vec::with_capacity(cap);
+    let mut order = Vec::with_capacity(cap); // order[node] = record
     node_of[ROOT_RECORD as usize] = 0;
     order.push(ROOT_RECORD);
     parent_node.push(NO_PARENT);
@@ -253,6 +253,9 @@ fn build_tree(letter: char, mut chunks: Vec<ChunkOut>, total: usize) -> (Index, 
         }
         head += 1;
     }
+    // Records in a parent-link cycle (only on a corrupt MFT) are never
+    // reached from the root, so size everything by what BFS reached.
+    let n = order.len();
     drop((children, child_start, order));
     lap("bfs ids");
 

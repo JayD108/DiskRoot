@@ -9,6 +9,8 @@
 #[cfg(not(windows))]
 compile_error!("xylem-scan-mft only supports Windows");
 
+#[cfg(test)]
+mod fuzz;
 mod record;
 mod scan;
 mod volume;

@@ -480,21 +480,22 @@ impl CatStats {
                 let a = idx.alloc(id);
                 let cat = cls.cat[i] as usize;
                 let sub = cls.sub[i];
-                s.cat_total[cat] += a;
+                s.cat_total[cat] = s.cat_total[cat].saturating_add(a);
                 s.cat_files[cat] += 1;
-                s.sub_total[sub as usize] += a;
+                s.sub_total[sub as usize] = s.sub_total[sub as usize].saturating_add(a);
                 s.sub_files[sub as usize] += 1;
                 let anchor = cls.anchor[i];
                 if cls.sub[anchor as usize] == sub {
-                    own_bytes[anchor as usize] += a;
+                    own_bytes[anchor as usize] = own_bytes[anchor as usize].saturating_add(a);
                     own_files[anchor as usize] += 1;
                 } else {
                     let e = mixed.entry((sub, anchor)).or_insert((0, 0));
-                    e.0 += a;
+                    e.0 = e.0.saturating_add(a);
                     e.1 += 1;
                 }
                 if p != NO_PARENT {
-                    s.dir_cats[s.dir_slot[p as usize] as usize][cat] += a;
+                    let dc = &mut s.dir_cats[s.dir_slot[p as usize] as usize][cat];
+                    *dc = dc.saturating_add(a);
                 }
             } else {
                 let mine = s.dir_cats[s.dir_slot[i] as usize];
@@ -507,7 +508,7 @@ impl CatStats {
                 if p != NO_PARENT {
                     let ps = s.dir_slot[p as usize] as usize;
                     for (t, v) in s.dir_cats[ps].iter_mut().zip(mine) {
-                        *t += v;
+                        *t = t.saturating_add(v);
                     }
                 }
             }
@@ -719,9 +720,9 @@ impl Index {
         let mut cur = self.parent(id);
         while cur != NO_PARENT {
             let c = cur as usize;
-            self.size[c] -= s;
-            self.alloc[c] -= a;
-            self.files[c] -= f;
+            self.size[c] = self.size[c].saturating_sub(s);
+            self.alloc[c] = self.alloc[c].saturating_sub(a);
+            self.files[c] = self.files[c].saturating_sub(f);
             cur = self.parent(cur);
         }
         let mut stack = vec![id];

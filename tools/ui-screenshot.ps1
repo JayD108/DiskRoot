@@ -42,7 +42,7 @@ $w = $r.R - $r.L; $hh = $r.B - $r.T
 $bmp = New-Object System.Drawing.Bitmap $w, $hh
 $g = [System.Drawing.Graphics]::FromImage($bmp)
 $hdc = $g.GetHdc()
-$ok = [Win]::PrintWindow($h, $hdc, 2)   # 2 = PW_RENDERFULLCONTENT (needed for WebView2)
+$ok = [Win]::PrintWindow($h, $hdc, 2)   # 2 = PW_RENDERFULLCONTENT (captures GPU-drawn content)
 $g.ReleaseHdc($hdc)
 $bmp.Save($Out, [System.Drawing.Imaging.ImageFormat]::Png)
 "pid=$($p.Id) size=${w}x${hh} printwindow=$ok"

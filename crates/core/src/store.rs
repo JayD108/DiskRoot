@@ -172,3 +172,70 @@ mod tests {
         assert!(Index::load(&mut huge.as_slice()).is_err(), "absurd node count");
     }
 }
+
+/// Fuzz test: the index file comes from the elevated helper through
+/// `%TEMP%`, so a damaged or swapped file must be rejected, never crash the
+/// app or make it allocate wildly.
+#[cfg(test)]
+mod fuzz {
+    use super::*;
+
+    #[test]
+    fn loader_survives_mutated_files() {
+        let mut idx = Index::new("C:\\");
+        let d = idx.push(0, "dir", 0, 0, flags::DIR);
+        for i in 0..20 {
+            idx.push(d, &format!("f{i}.bin"), i * 100, 4096, 0);
+        }
+        idx.compute_totals();
+        let mut good = Vec::new();
+        idx.save(&ScanStats::default(), "MFT", &mut good).unwrap();
+
+        let mut rng = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+        let rounds = std::env::var("XYLEM_FUZZ_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(50_000);
+        for round in 0..rounds {
+            let mut b = good.clone();
+            for _ in 0..1 + next() % 6 {
+                let at = (next() as usize) % b.len();
+                b[at] = match next() % 4 {
+                    0 => b[at] ^ (1 << (next() % 8)),
+                    1 => 0xFF,
+                    2 => 0,
+                    _ => next() as u8,
+                };
+            }
+            if round % 5 == 0 {
+                b.truncate((next() as usize) % (b.len() + 1));
+            }
+            if let Ok((back, _, _)) = Index::load_checked(&mut b.as_slice(), b.len() as u64) {
+                // Anything accepted must be a structurally valid tree.
+                for i in 1..back.len() as u32 {
+                    assert!(back.parent(i) < i, "round {round}");
+                    let _ = back.path(i);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod overflow {
+    use super::*;
+
+    #[test]
+    fn absurd_sizes_saturate_instead_of_wrapping() {
+        let mut idx = Index::new("C:\\");
+        let d = idx.push(0, "d", 0, 0, flags::DIR);
+        idx.push(d, "a", u64::MAX - 5, u64::MAX - 5, 0);
+        idx.push(d, "b", 100, 100, 0);
+        idx.compute_totals();
+        assert_eq!(idx.size(0), u64::MAX);
+        assert_eq!(idx.alloc(d), u64::MAX);
+    }
+}

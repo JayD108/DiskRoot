@@ -66,10 +66,11 @@ cargo build --release --workspace          # Rust 1.88+, MSVC build tools
 
 .\target\release\xylem.exe                  # the app (native UI)
 .\target\release\xylem-cli.exe scan C: --top 20   # command line (MFT mode when run as admin)
-.\target\release\xylem-web.exe              # optional web UI add-on (needs Microsoft WebView2)
 ```
 
 In the app, type or pick a drive and press **Scan** (F5), or **Fast scan** (Ctrl+F5) for whole NTFS drives. The tree-table is the main view: expand folders, use the arrow keys, filter by name. The map beside it follows your selection, and clicking a ring or tile selects it. Switch **Location / Category** and **Sunburst / Treemap** in the toolbar or the View menu. The details pane says what the selected item is and whether it's safe to remove. *Move to Recycle Bin…* (or Delete, or right-click) asks first.
+
+**Install:** run `dist\xylem-setup-<version>.exe` (built by `tools\release.ps1`). It installs into Program Files, which protects the admin helper (see below). A portable zip is built too. The command-line tool is an optional part of the install.
 
 CLI options: `--mode auto|mft|walk`, `--by disk|size`, `--json`, `--export all.csv`, `--threads N`.
 
@@ -88,7 +89,6 @@ CLI options: `--mode auto|mft|walk`, `--by disk|size`, `--json`, `--export all.c
                     │  boot sector ─► $MFT runs ─► read + parse ─► tree ─► save, exit│
                     └────────────────────────────────────────────────────────────────┘
  Without admin: the app runs the folder-walk scanner itself (no prompt).
- xylem-web.exe (optional) is the same engine behind an HTML UI in WebView2.
 ```
 
 ### 1. Roots: two scanners
@@ -123,14 +123,13 @@ Each file record becomes exactly one entry, so a hardlinked file is counted **on
 - **By-category view:** Category → Sub-type → **places** (the folders holding those bytes). Sizes add up exactly.
 
 ### 4. Canopy: the apps
-- **Engine API (`crates/session`):** one `Scanned` value answers every UI question: `view`, `list`, `crumbs`, `category_view`, `cat_children`, `info`, `prepare_delete` → `recycle` → `apply_delete`. Both UIs use it, so they behave the same, and neither holds the full tree.
-- **Native app (`crates/native`, `xylem.exe`, the default):**
+- **Engine API (`crates/session`):** one `Scanned` value answers every UI question: `view`, `list`, `crumbs`, `category_view`, `cat_children`, `info`, `prepare_delete` → `recycle` → `apply_delete`. The UI never holds the full tree, and the engine can be tested without it.
+- **The app (`crates/native`, `xylem.exe`):**
   - egui on OpenGL: one process, no browser engine, and it only redraws on input.
   - The layout is "classic utility, modern finish": menu bar, toolbar, tree-table, map, details pane and status bar.
   - Botanical palette, light and dark themes, Segoe UI loaded from Windows (not bundled), keyboard navigation, and accessible tree rows for screen readers.
   - Scans and deletes run on worker threads, so the window never freezes.
-- **Web add-on (`crates/app`, `xylem-web.exe`, optional):** Tauri + WebView2 with an HTML/Canvas UI, for people who prefer it.
-- **Design prototype (`xylem-ui-prototype/`):** the static HTML reference both UIs follow.
+- **Design prototype (`xylem-ui-prototype/`):** the static HTML mock-up the app's look was taken from (design reference only; not shipped).
 - **Safe delete:** `SHFileOperationW` with *allow undo*, so things go to the Recycle Bin, and Windows itself warns if something is too big to recycle. Protected items are refused **in the backend**, not just hidden in the UI.
 
 ## Accuracy rules
@@ -152,11 +151,27 @@ Each file record becomes exactly one entry, so a hardlinked file is counted **on
   - The app loads it with full validation and deletes it.
   - The helper's location can't be redirected in release builds.
 - **Untrusted input is parsed safely.** MFT records and index files are bounds-checked in safe Rust; `unsafe` is limited to small, commented Windows calls.
-- **UI:** file names are escaped before display, and a Content Security Policy allows only the app's own files.
+- **Fuzz-tested parsers.** The MFT record parser, run lists, the boot sector, the tree builder and the index loader each get hundreds of thousands of random and mutated inputs on every `cargo test`. Set `XYLEM_FUZZ_ROUNDS` for longer runs; 2 million rounds pass. Fuzzing found and fixed three real bugs:
+  - A parent-link cycle in a corrupt MFT crashed the tree build.
+  - Sizes near 2⁶⁴ overflowed the totals; they now saturate.
+  - A corrupt boot sector could ask for huge buffers; the geometry is now limited to real NTFS values.
+- **Deleting safely:**
+  - Always to the Recycle Bin, and only after you confirm.
+  - Right before the move, the engine **re-checks the item on disk**: it must still exist, still be a file or folder as scanned, and no folder on its path may have become a link (junction/symlink) since the scan. Otherwise the delete is refused, so a swapped folder can't redirect it somewhere else.
+  - Windows, program folders, profile roots and the scan root itself are locked in the engine.
+- **Warnings that need a tick** before deleting:
+  - *OneDrive* folders: deleting syncs to the cloud and your other devices.
+  - Folders containing *Git repositories*: unpushed work.
+  - *Very large* deletes: 10 GB or more, or 50,000+ files.
+- **Deletion history.** Each delete (recycled, cancelled or refused) is logged on your PC in `%LOCALAPPDATA%\Xylem\deletions.log`, viewable under File → Deletion history.
+- **Integrity check** (shield button / Help → Security & privacy):
+  - Shows whether this copy runs from Program Files (only admins can change it) and whether it carries a valid Authenticode signature (Windows' `WinVerifyTrust`, offline: no revocation lookup).
+  - Release builds are signed by `tools/release.ps1` once a certificate is configured. Until then they are honestly shown as *unsigned*.
+- **First-run notice:** a plain list of what Xylem reads, what it never does, and how deleting works.
 - **Network:**
-  - Xylem's code contains **no network code**. No HTTP client is compiled for Windows; Tauri's optional HTTP crates are for other platforms only.
-  - **The native app was measured with 0 network connections.**
-  - *Honest note on the optional web add-on:* its window is drawn by Microsoft **WebView2**, which was measured opening HTTPS connections to Microsoft for its own services. Your file data never goes there, and the default native app doesn't use WebView2 at all.
+  - Xylem contains **no network code** and no HTTP client or browser engine in its dependencies.
+  - **Measured: 0 network connections**, one process.
+  - The only online step anywhere is the signing timestamp in `tools/release.ps1`, on the developer's machine, never in the app.
 
 ## Project layout
 
@@ -166,14 +181,15 @@ xylem/
 │  ├─ core/        Index, store, view, classify (+ rules.json), report, format
 │  ├─ scan-walk/   folder-walk scanner (Windows FFI in ffi.rs)
 │  ├─ scan-mft/    MFT reader: volume.rs, record.rs, scan.rs
-│  ├─ session/     engine API shared by both UIs; the elevated helper; Recycle Bin
-│  ├─ native/      xylem.exe: native UI (egui) + helper mode   <- the app
-│  ├─ app/         xylem-web.exe: optional web UI add-on (Tauri + WebView2)
+│  ├─ session/     engine API used by the app; elevated helper; Recycle Bin;
+│  │               safety.rs (re-check, warnings, deletion log); integrity.rs (signature)
+│  ├─ native/      xylem.exe: the app (egui) + helper mode
 │  ├─ cli/         xylem-cli.exe: command line
 │  └─ bench/       xylem-bench.exe: gen | run | time | verify | modes
 ├─ xylem-ui-prototype/   standalone design reference (open index.html)
 ├─ spikes/        throwaway experiments (native UI size spike)
-├─ tools/          benchmark + UI-test scripts
+├─ installer/      Inno Setup script (xylem.iss)
+├─ tools/          release.ps1 (build → sign → installer → checksums), benchmark + UI-test scripts
 └─ docs/           PRD, TECHSTACK, DEVLOG (history), HANDOFF (start here)
 ```
 
@@ -195,6 +211,9 @@ The tests cover:
 - Classification, protection and category totals.
 - The admin helper's path guard.
 - Recycle-Bin delete (an opt-in test).
+- The delete re-check against a real junction swap; Git/OneDrive warnings.
+- Signature checks (signed Edge vs unsigned test binary).
+- Fuzz tests (`fuzz.rs` in scan-mft, `store.rs` in core).
 
 ## Roadmap
 
@@ -202,8 +221,9 @@ The tests cover:
 |---|---|
 | ✅ 1–3 | Folder walk, MFT reader, desktop app with sunburst, treemap and admin helper |
 | ✅ 4 | Categories, by-category view, notes and safety badges, Recycle-Bin delete |
-| ✅ UI | Native app (default) + optional web add-on on one engine API |
+| ✅ UI | Native app `xylem.exe` on a separate engine API (an earlier web UI was removed: one process, no browser engine, nothing online) |
+| ✅ Release | Installer (Program Files, uninstaller, optional parts), portable zip, checksums, signing hook; delete re-check, warnings, history, integrity check, fuzzing |
 | ⏭ 5 | Instant reopen (index cache + USN journal), "what changed" snapshots |
-| Later | Port the v2 design into the web add-on; show every name of hardlinked files; lower scan-data RAM; installer into Program Files + code signing; Explorer context menu |
+| Later | Show every name of hardlinked files; lower scan-data RAM; a real code-signing certificate; Explorer context menu |
 
 *Xylem was called "Drishti" until 10 Nov 2026.*

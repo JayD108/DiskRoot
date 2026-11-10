@@ -1,6 +1,6 @@
 [package]
 name = "xylem-session"
-description = "UI-agnostic engine API shared by the native and web UIs"
+description = "UI-agnostic engine API used by the Xylem app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,3 +10,4 @@ xylem-core.workspace = true
 xylem-scan-walk.workspace = true
 xylem-scan-mft.workspace = true
 serde.workspace = true
+serde_json.workspace = true

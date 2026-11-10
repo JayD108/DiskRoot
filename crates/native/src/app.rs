@@ -11,6 +11,8 @@ use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, Frame, Key, Layout, Margin, Modal, Rect, RichText, ScrollArea, Sense,
     Stroke, StrokeKind, TextEdit, Ui, ViewportCommand, pos2, vec2,
 };
+use xylem_session::integrity::{Integrity, SignatureState};
+use xylem_session::safety::{DeleteWarnings, LogEntry};
 use xylem_session::{DeleteOut, ItemInfo, RULES, Safety, Scanned, Shape, Summary};
 
 use crate::map::{self, Hit, Kind, Layout as MapLayout, PaintCtx};
@@ -63,9 +65,20 @@ struct Job {
 
 enum Dialog {
     About,
-    Privacy,
+    /// First launch: what Xylem does and doesn't do.
+    Welcome,
+    Security(Box<Integrity>),
+    History(Vec<LogEntry>),
     Message(String, String),
-    ConfirmDelete(Box<ItemInfo>),
+    ConfirmDelete(Box<Confirm>),
+}
+
+/// The delete confirmation: the item, the warnings to show, and whether
+/// the user ticked "I understand" (required when there are warnings).
+struct Confirm {
+    info: ItemInfo,
+    warnings: DeleteWarnings,
+    ack: bool,
 }
 
 /// The map's current root.
@@ -101,6 +114,9 @@ pub struct XylemApp {
     status: Option<(String, Instant)>,
     title: String,
     tree_focus: bool,
+    /// A folder was passed on the command line while the first-run notice
+    /// was showing: scan it once the notice is closed.
+    scan_after_welcome: bool,
     scroll_to_selected: bool,
 }
 
@@ -127,9 +143,13 @@ impl XylemApp {
             status: None,
             title: String::new(),
             tree_focus: true,
+            scan_after_welcome: false,
             scroll_to_selected: false,
         };
-        if start.is_some() {
+        if !app.settings.seen_notice {
+            app.dialog = Some(Dialog::Welcome);
+            app.scan_after_welcome = start.is_some();
+        } else if start.is_some() {
             app.start_scan(false);
         }
         app
@@ -518,6 +538,11 @@ impl XylemApp {
                     ui.close();
                 }
                 ui.separator();
+                if ui.button("Deletion history…").clicked() {
+                    self.open_history();
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button("Exit").clicked() {
                     ui.ctx().send_viewport_cmd(ViewportCommand::Close);
                 }
@@ -550,7 +575,7 @@ impl XylemApp {
             });
             ui.menu_button("Help", |ui| {
                 if ui.button("Security & privacy").clicked() {
-                    self.dialog = Some(Dialog::Privacy);
+                    self.open_security();
                     ui.close();
                 }
                 if ui.button("About Xylem").clicked() {
@@ -620,6 +645,9 @@ impl XylemApp {
                 self.regroup();
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if shield_button(ui, &t).on_hover_text("Security & privacy: what Xylem does with your disk").clicked() {
+                    self.open_security();
+                }
                 let r = ui.add(TextEdit::singleline(&mut self.filter).desired_width(200.0).hint_text("Filter by name"));
                 if r.changed() {
                     self.rows = None;
@@ -867,10 +895,24 @@ impl XylemApp {
 
     fn ask_delete(&mut self, n: u32) {
         let Some(s) = &self.scanned else { return };
+        // Protected items still open the dialog (it explains why); others
+        // get their warnings (cloud, Git, large) computed up front.
+        let warnings = s.prepare_delete(n).map(|p| p.warnings).unwrap_or_default();
         match s.info(n) {
-            Ok(info) => self.dialog = Some(Dialog::ConfirmDelete(Box::new(info))),
+            Ok(_) if n == 0 => {
+                self.dialog = Some(Dialog::Message("Can't delete this".into(), "Xylem won't delete the whole scanned folder or drive.".into()));
+            }
+            Ok(info) => self.dialog = Some(Dialog::ConfirmDelete(Box::new(Confirm { info, warnings, ack: false }))),
             Err(e) => self.dialog = Some(Dialog::Message("Can't delete this".into(), e)),
         }
+    }
+
+    fn open_security(&mut self) {
+        self.dialog = Some(Dialog::Security(Box::new(xylem_session::integrity::check_current_exe())));
+    }
+
+    fn open_history(&mut self) {
+        self.dialog = Some(Dialog::History(xylem_session::safety::read_log(200)));
     }
 
     fn map_pane(&mut self, ui: &mut Ui) {
@@ -1176,11 +1218,16 @@ impl XylemApp {
             });
             return;
         }
-        let Some(d) = &self.dialog else { return };
+        let Some(d) = &mut self.dialog else { return };
         let mut close = false;
         let mut confirm: Option<u32> = None;
-        let resp = Modal::new(egui::Id::unique("xylem-dialog")).show(ctx, |ui| {
-            ui.set_width(480.0);
+        let mut action: Option<&'static str> = None;
+        let wide = matches!(d, Dialog::History(_));
+        // One window id per dialog kind, so a dialog never inherits another
+        // one's remembered size.
+        let kind = std::mem::discriminant(&*d);
+        let resp = Modal::new(egui::Id::unique("xylem-dialog").with(kind)).show(ctx, |ui| {
+            ui.set_width(if wide { 720.0 } else { 500.0 });
             match d {
                 Dialog::About => {
                     ui.label(RichText::new("Xylem").font(theme::semibold(16.0)));
@@ -1188,28 +1235,87 @@ impl XylemApp {
                     ui.add_space(6.0);
                     ui.label(RichText::new("Xylem is the plant tissue that carries water up from the roots. This app carries your drive's file table up into a map.").color(t.muted));
                 }
-                Dialog::Privacy => {
+                Dialog::Welcome => {
+                    ui.label(RichText::new("Welcome to Xylem").font(theme::semibold(16.0)));
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("Before you start, here is exactly what Xylem does on your computer:").color(t.muted));
+                    ui.add_space(8.0);
+                    facts(ui, &t, &[
+                        ("Reads", "File names and sizes. It never opens or reads what's inside your files."),
+                        ("Stays offline", "No network connections, no accounts, no telemetry."),
+                        ("Asks first", "Admin rights only for Fast scan, through the Windows prompt. The helper exits after the scan."),
+                        ("Deletes carefully", "Only when you confirm, always to the Recycle Bin, re-checked on disk first. Windows and system folders are locked."),
+                        ("Keeps a record", "Every delete is written to a log on this PC (File → Deletion history)."),
+                    ]);
+                }
+                Dialog::Security(ig) => {
                     ui.label(RichText::new("Security & privacy").font(theme::semibold(16.0)));
-                    ui.add_space(6.0);
-                    egui::Grid::new("privacy").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
-                        for (k, v) in [
-                            ("Network", "Xylem makes no network connections and sends nothing anywhere. The native app has no browser engine."),
-                            ("Disk access", "Drives are opened for reading only. Xylem has no code that writes to the disk."),
-                            ("Admin rights", "Only for Fast scan, after the Windows prompt. A helper reads the file table (about 1–5 s) and exits."),
-                            ("Deleting", "Always to the Recycle Bin. Windows, program folders and your profile folders are locked."),
-                        ] {
-                            ui.label(RichText::new(k).color(t.muted));
-                            ui.add(egui::Label::new(v).wrap());
-                            ui.end_row();
-                        }
-                    });
+                    ui.add_space(8.0);
+                    facts(ui, &t, &[
+                        ("Network", "Xylem makes no network connections and sends nothing anywhere. The native app has no browser engine."),
+                        ("Disk access", "Drives are opened for reading only. Scanning never writes to the disk."),
+                        ("Admin rights", "Only for Fast scan, after the Windows prompt. A helper reads the file table (about 1–5 s) and exits."),
+                        ("Deleting", "Always to the Recycle Bin, after you confirm. Right before moving, Xylem re-checks the item: if it changed, or a folder on its path became a link since the scan, it refuses."),
+                        ("Warnings", "Extra confirmation for OneDrive folders (deleting syncs to your other devices), Git repositories (unpushed work) and very large deletes."),
+                        ("History", "Each delete is logged on this PC in %LOCALAPPDATA%\\Xylem\\deletions.log."),
+                    ]);
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.label(RichText::new("This copy of Xylem").font(theme::semibold(13.5)));
+                    ui.add_space(4.0);
+                    let (sig_ok, sig_text) = match ig.signature {
+                        SignatureState::Signed => (true, "Digitally signed, and Windows trusts the signature."),
+                        SignatureState::Unsigned => (false, "Not signed (normal for a build from source). Official releases will be signed."),
+                        SignatureState::Invalid => (false, "Has a signature Windows does NOT trust. Don't use Fast scan with this copy."),
+                    };
+                    let loc_text = if ig.protected_location {
+                        "Installed in Program Files, which only administrators can change."
+                    } else {
+                        "Running from a folder your user account can change. Install Xylem to protect the admin helper used by Fast scan."
+                    };
+                    for (ok, k, v) in [(ig.protected_location, "Location", loc_text), (sig_ok, "Signature", sig_text)] {
+                        let (mark, col) = if ok { ("✔", t.accent) } else { ("!", theme::WARN) };
+                        ui.label(RichText::new(format!("{mark}  {k}")).font(theme::semibold(13.0)).color(col));
+                        ui.add(egui::Label::new(RichText::new(v).color(t.muted)).wrap());
+                        ui.add_space(4.0);
+                    }
+                    ui.add_space(2.0);
+                    ui.label(RichText::new(&ig.exe).monospace().size(11.0).color(t.faint));
+                }
+                Dialog::History(entries) => {
+                    ui.label(RichText::new("Deletion history").font(theme::semibold(16.0)));
+                    ui.label(RichText::new("Everything deleted through Xylem on this PC, newest first. Recycled items can be restored from the Recycle Bin.").color(t.muted));
+                    ui.add_space(8.0);
+                    if entries.is_empty() {
+                        ui.label(RichText::new("Nothing has been deleted with Xylem yet.").color(t.faint));
+                    } else {
+                        egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
+                            egui::Grid::new("history").num_columns(4).striped(true).spacing([14.0, 5.0]).show(ui, |ui| {
+                                for h in ["When (UTC)", "Result", "Size", "Item"] {
+                                    ui.label(RichText::new(h).color(t.muted).size(12.0));
+                                }
+                                ui.end_row();
+                                for e in entries.iter() {
+                                    ui.label(RichText::new(&e.time).monospace().size(11.5));
+                                    let col = if e.outcome == "recycled" { t.accent } else { t.muted };
+                                    let short = e.outcome.split(':').next().unwrap_or("");
+                                    ui.label(RichText::new(short).color(col)).on_hover_text(&e.outcome);
+                                    ui.label(fmt_bytes(e.bytes));
+                                    ui.add(egui::Label::new(&e.path).truncate())
+                                        .on_hover_text(format!("{}\n{} · {}", e.path, e.category, fmt_files(u64::from(e.files))));
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
                 }
                 Dialog::Message(title, msg) => {
-                    ui.label(RichText::new(title).font(theme::semibold(15.0)));
+                    ui.label(RichText::new(title.as_str()).font(theme::semibold(15.0)));
                     ui.add_space(4.0);
-                    ui.add(egui::Label::new(msg).wrap());
+                    ui.add(egui::Label::new(msg.as_str()).wrap());
                 }
-                Dialog::ConfirmDelete(info) => {
+                Dialog::ConfirmDelete(c) => {
+                    let info = &c.info;
                     ui.label(RichText::new(format!("Move \"{}\" to the Recycle Bin?", info.name)).font(theme::semibold(15.0)));
                     ui.add_space(4.0);
                     ui.label(RichText::new(&info.path).monospace().color(t.muted));
@@ -1220,11 +1326,35 @@ impl XylemApp {
                         ui.add(egui::Label::new(RichText::new(note).color(t.muted)).wrap());
                     }
                     ui.add_space(6.0);
-                    match &info.protected {
-                        Some(why) => {
-                            ui.label(RichText::new(format!("Xylem won't delete this. {why}")).color(theme::cat_color(5)));
+                    if let Some(why) = &info.protected {
+                        ui.label(RichText::new(format!("Xylem won't delete this. {why}")).color(theme::cat_color(5)));
+                    } else {
+                        let w = &c.warnings;
+                        let warn = |ui: &mut Ui, title: &str, text: &str| {
+                            egui::Frame::new()
+                                .fill(theme::WARN.gamma_multiply(if t.dark { 0.22 } else { 0.14 }))
+                                .corner_radius(CornerRadius::same(4))
+                                .inner_margin(egui::Margin::symmetric(10, 6))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.label(RichText::new(title).font(theme::semibold(13.0)));
+                                    ui.add(egui::Label::new(RichText::new(text).color(t.muted)).wrap());
+                                });
+                            ui.add_space(4.0);
+                        };
+                        if w.cloud {
+                            warn(ui, "Synced with OneDrive", "Deleting it here also deletes it from OneDrive and from your other devices. If you only want space back, use OneDrive's \"Free up space\" instead.");
                         }
-                        None => {
+                        if w.git_repos > 0 {
+                            let n = if w.git_repos == 1 { "a Git repository".to_owned() } else { format!("{} Git repositories", w.git_repos) };
+                            warn(ui, &format!("Contains {n}"), "Commits, branches or stashes that were never pushed exist only here.");
+                        }
+                        if w.large {
+                            warn(ui, "Large delete", "This is a lot of data. Windows may say it's too big for the Recycle Bin and offer to delete it permanently. Read that prompt carefully.");
+                        }
+                        if w.needs_ack() {
+                            ui.checkbox(&mut c.ack, "I understand. Move it to the Recycle Bin.");
+                        } else {
                             ui.add(egui::Label::new(RichText::new("It goes to the Recycle Bin, so you can restore it. If it's too big for the bin, Windows asks before deleting it permanently.").color(t.muted)).wrap());
                         }
                     }
@@ -1232,25 +1362,62 @@ impl XylemApp {
             }
             ui.add_space(12.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if let Dialog::ConfirmDelete(info) = d
-                    && info.protected.is_none() {
+                match d {
+                    Dialog::ConfirmDelete(c) if c.info.protected.is_none() => {
+                        let ready = c.ack || !c.warnings.needs_ack();
                         let b = egui::Button::new(RichText::new("Move to Recycle Bin").color(Color32::WHITE)).fill(theme::cat_color(5));
-                        if ui.add(b).clicked() {
-                            confirm = Some(info.id);
+                        if ui.add_enabled(ready, b).clicked() {
+                            confirm = Some(c.info.id);
                         }
                         if ui.button("Cancel").clicked() {
                             close = true;
                         }
                         return;
                     }
+                    Dialog::Welcome => {
+                        let b = egui::Button::new(RichText::new("Got it").color(t.accent_ink)).fill(t.accent).min_size(vec2(90.0, 26.0));
+                        if ui.add(b).clicked() {
+                            action = Some("welcome-done");
+                        }
+                        return;
+                    }
+                    Dialog::History(_) => {
+                        let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
+                        if ui.add(ok).clicked() {
+                            close = true;
+                        }
+                        if ui.button("Open log folder").clicked() {
+                            action = Some("open-log");
+                        }
+                        return;
+                    }
+                    _ => {}
+                }
                 let ok = egui::Button::new(RichText::new("OK").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
                 if ui.add(ok).clicked() {
                     close = true;
                 }
             });
         });
-        if resp.should_close() {
+        // Escape / click outside closes everything except the first-run notice.
+        if resp.should_close() && !matches!(self.dialog, Some(Dialog::Welcome)) {
             close = true;
+        }
+        match action {
+            Some("welcome-done") => {
+                self.settings.seen_notice = true;
+                self.settings.save();
+                self.dialog = None;
+                if std::mem::take(&mut self.scan_after_welcome) {
+                    self.start_scan(false);
+                }
+            }
+            Some("open-log") => {
+                if let Some(p) = xylem_session::safety::log_path() {
+                    let _ = xylem_session::reveal(&p.display().to_string());
+                }
+            }
+            _ => {}
         }
         if let Some(id) = confirm {
             self.dialog = None;
@@ -1389,4 +1556,41 @@ impl eframe::App for XylemApp {
         self.dialogs(&ctx);
         self.update_title(&ctx);
     }
+}
+
+/// Label/explanation pairs in a two-column grid (dialogs).
+fn facts(ui: &mut Ui, t: &Tokens, rows: &[(&str, &str)]) {
+    // Stacked rather than a grid: wrapped labels inside an auto-sized grid
+    // in a modal can grow the dialog taller than the window.
+    for (k, v) in rows {
+        ui.label(RichText::new(*k).font(theme::semibold(13.0)));
+        ui.add(egui::Label::new(RichText::new(*v).color(t.muted)).wrap());
+        ui.add_space(6.0);
+    }
+}
+
+/// Toolbar button with a small painted shield (no emoji font needed).
+fn shield_button(ui: &mut Ui, t: &Tokens) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 24.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Security & privacy"));
+    let p = ui.painter();
+    if resp.hovered() {
+        p.rect_filled(rect, CornerRadius::same(3), t.hover);
+    }
+    let c = rect.center();
+    let (w, h) = (6.5, 8.0);
+    let pts = vec![
+        pos2(c.x, c.y - h),
+        pos2(c.x + w, c.y - h + 2.5),
+        pos2(c.x + w, c.y + 1.0),
+        pos2(c.x, c.y + h),
+        pos2(c.x - w, c.y + 1.0),
+        pos2(c.x - w, c.y - h + 2.5),
+    ];
+    p.add(egui::Shape::convex_polygon(pts, t.accent, egui::Stroke::NONE));
+    let ink = egui::Stroke::new(1.6, t.accent_ink);
+    p.line_segment([pos2(c.x - 3.0, c.y - 0.5), pos2(c.x - 0.8, c.y + 2.0)], ink);
+    p.line_segment([pos2(c.x - 0.8, c.y + 2.0), pos2(c.x + 3.2, c.y - 3.0)], ink);
+    resp
 }

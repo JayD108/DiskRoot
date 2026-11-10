@@ -96,6 +96,9 @@ const CAT: [Color32; 10] = [
     hex(0x8c857b), // bark         Other
 ];
 
+/// Amber for warnings (cloud, Git, large deletes, integrity notes).
+pub const WARN: Color32 = hex(0xb7791f);
+
 pub fn cat_color(cat: u8) -> Color32 {
     CAT.get(cat as usize).copied().unwrap_or(CAT[9])
 }

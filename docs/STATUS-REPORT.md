@@ -6,26 +6,19 @@ All numbers were measured on one machine: Core Ultra 9 275HX, NVMe SSD, Windows 
 
 ---
 
-## 1. Verdict: native exe or web UI?
+## 1. Decision: one native app, no web UI
 
-**The native `xylem.exe` is the better product. Keep the web UI only as an optional add-on and a place to try designs.**
+**Xylem ships as one native `xylem.exe` only.** The earlier web UI (Tauri + Microsoft WebView2) was removed on 10 Nov 2026. The measurements that drove the decision:
 
-| | Native `xylem.exe` | Web `xylem-web.exe` |
+| | Native `xylem.exe` | Former web UI |
 |---|---|---|
-| Download | **6.8 MB, one file** (UI + engine + admin helper) | 8.2 MB, plus Microsoft WebView2 must be installed |
+| Download | **6.9 MB exe, 4.4 MB installer** | 8.2 MB + WebView2 runtime |
 | Processes | **1** | 7 (app + 6 WebView2) |
-| Memory, UI idle (small folder) | **~59 MB** (spike) | ~258 MB |
-| Memory with all of C: loaded | **~272 MB** | ~272 MB of scan data + ~248 MB WebView2 (estimated from the two measurements) |
-| Network connections | **0 (measured)** | 2 HTTPS to Microsoft (WebView2's own services, measured; not our code) |
-| Idle CPU | ~16 ms per 5 s | not measured |
-| Can honestly say "100% offline"? | **Yes** | No, only "our code sends nothing" |
-| Looks and feels like | A Windows tool (menu bar, tree-table, status bar) | A web page in a window |
-| Accessibility | Tree rows and buttons exposed to screen readers (AccessKit) | Browser accessibility (mature) |
-| Speed of changing the design | Slower (Rust code) | **Faster** (HTML/CSS) |
+| Memory with all of C: loaded | **~272 MB** | ~272 MB + ~248 MB WebView2 |
+| Network connections | **0 (measured)** | 2 HTTPS to Microsoft (WebView2's own services) |
+| Can honestly say "offline"? | **Yes** | No |
 
-**Why native wins for this product:** a disk tool is judged on speed, lightness and trust. The native app is one small file with one process. It uses roughly half the memory while scanning a full drive, makes zero network connections, and doesn't need a browser engine. Those are the exact points users compare against WizTree and WinDirStat.
-
-**What the web UI is still good for:** quickly trying visual ideas (the design prototype is HTML), and users who prefer it. Both UIs use the same engine (`crates/session`), so keeping it costs little.
+Removing it also took the whole browser-engine and HTTP stack out of the dependency tree, so there is less code to trust and less to explain when presenting.
 
 ---
 
@@ -79,7 +72,6 @@ All numbers were measured on one machine: Core Ultra 9 275HX, NVMe SSD, Windows 
 | **First raw read of the MFT** | ⚠️ 0.36–0.8 s, sometimes more when the disk is busy (Windows flushes its cache). Not yet optimized |
 | **Tested hardware** | ⚠️ One laptop, one NVMe drive. No HDD, other PCs, non-English names at scale, or very fragmented MFTs in the wild |
 | **Platforms** | Windows only. Fast scan works on NTFS only (other drives use the folder walk) |
-| **Web add-on design** | ⚠️ Still the old look; not ported to the v2 design |
 | **Security.md consent screen and shield** | ⏸ Designed in the prototype, waiting for your decision |
 | **Multi-select delete, Explorer right-click menu, CSV export from the app** | ❌ Not built (the CLI has CSV export) |
 
@@ -99,10 +91,11 @@ All numbers were measured on one machine: Core Ultra 9 275HX, NVMe SSD, Windows 
 | Rename | Drishti → **Xylem** everywhere |
 | Audit | Proved read-only disk access and no network code; **found WebView2's Microsoft connections and ~248 MB of overhead** |
 | Design | Prototype v1 (rejected: looked like a web page) → **v2 "classic utility, modern finish"** (approved) |
-| **Native app** | Shared engine `crates/session`, **native `xylem.exe` (egui)**, web UI moved to an optional add-on |
+| **Native app** | Engine API `crates/session`, **native `xylem.exe` (egui)**; web UI removed |
+| **Release + security** | Installer, signing hook, checksums; delete re-check, OneDrive/Git/large warnings, deletion history, integrity panel, first-run notice, fuzzing (3 bugs found and fixed) |
 | Records | Git history, DEVLOG, HANDOFF, README, UI-ARCHITECTURE, this report |
 
-**Quality today:** 40 automated tests, zero lint warnings. Tested end to end on real data: scans, both views, delete to the Recycle Bin, and the admin fast scan through the UAC prompt.
+**Quality today:** 52 automated tests, zero lint warnings. Tested end to end on real data: scans, both views, delete to the Recycle Bin, and the admin fast scan through the UAC prompt.
 
 ---
 
@@ -112,5 +105,4 @@ All numbers were measured on one machine: Core Ultra 9 275HX, NVMe SSD, Windows 
 3. **Memory diet.** Stream MFT chunks into the index and shrink the classification arrays (target: under 150 MB for C:).
 4. **Consent screen + shield** (after your decision on the Security.md wording).
 5. **Breadth:** multi-select delete, file-type view, duplicate finder, an in-app CSV export, the Explorer context menu.
-6. **Port the v2 look into the web add-on**, or retire the add-on if nobody needs it.
 7. **Wider testing** on other PCs, HDDs and very large drives before the first public release.

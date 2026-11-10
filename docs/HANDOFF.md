@@ -3,18 +3,26 @@
 **Read this first, then the last section of `DEVLOG.md`.** Keep both up to date: after every milestone, add to `DEVLOG.md`, refresh this file, and commit.
 
 ## Where we are
-- **Phases 1–4 are done, and the native app is built** (2026-11-10). Renamed Drishti → Xylem.
+- **Phases 1–4 are done.** Native app built, installer and security features added (2026-11-10). Renamed Drishti → Xylem.
+- **The web UI was removed completely** (user's decision, 2026-11-10: "only the exe, so it's safer to present"). There is no Tauri/WebView2 anywhere now, and the dependency tree has no HTTP client.
 - **Binaries:**
-  - `xylem.exe`: the native app (default). Also the elevated helper (`--helper-scan`).
-  - `xylem-web.exe`: optional web UI add-on (Tauri/WebView2, old look).
+  - `xylem.exe`: the app. Also the elevated helper (`--helper-scan`).
   - `xylem-cli.exe`, `xylem-bench.exe`.
-- **Engine API** for both UIs: `crates/session`. Design reference: `xylem-ui-prototype/` (v2). Plan: `docs/UI-ARCHITECTURE.md`.
-- All 40 tests pass; clippy is clean.
-- **Open items (see the end of the DEVLOG):**
-  - Port the v2 design into the web add-on.
-  - Scan-data RAM.
+- **Engine API:** `crates/session`. Design reference: `xylem-ui-prototype/` (v2, HTML mock-up only).
+- **Release:**
+  - `tools/release.ps1` builds, optionally signs (`XYLEM_SIGN_*`), then makes the installer (`installer/xylem.iss`, Program Files), the portable zip and `SHA256SUMS.txt` in `dist/`.
+  - Current: setup 4.40 MB, xylem.exe 6.90 MB, **unsigned**.
+- **Security:**
+  - Delete re-check (type, links on the path).
+  - OneDrive/Git/large warnings with a required tick.
+  - Deletion log + history viewer.
+  - Integrity panel (location + Authenticode), first-run notice, shield button.
+  - Fuzz tests (they found 3 real bugs, all fixed).
+- All 52 tests pass; clippy is clean.
+- **Open items:**
+  - **Code signing needs the user's certificate.** Options: SignPath (free for OSS), Azure Trusted Signing, or a paid cert. Then set `XYLEM_SIGN_*` and run `tools/release.ps1`.
+  - Scan-data RAM (~255–272 MB for C:).
   - First-raw-read cost.
-  - The Security.md consent screen and shield (discuss first; keep the copy honest).
   - Phase 5.
 
 ## Build and run
@@ -23,8 +31,9 @@ cd "C:\Users\Mrittunjay Dubey\Storage\xylem"
 $env:Path += ";$env:USERPROFILE\.cargo\bin"     # if cargo isn't found
 cargo test --workspace
 cargo clippy --workspace --all-targets
-cargo build --release --workspace               # app ~1.5 min, first time ~3 min
-.\target\release\xylem.exe            # native app
+cargo build --release --workspace               # app ~2-3 min (fat LTO)
+.\tools\release.ps1                               # dist\: setup.exe, portable zip, SHA256SUMS
+.\target\release\xylem.exe            # the app
 .\target\release\xylem-cli.exe scan C: --top 20   # admin shell => MFT mode
 ```
 
@@ -32,6 +41,7 @@ cargo build --release --workspace               # app ~1.5 min, first time ~3 mi
 - **Claude's shell is not elevated.** Admin tests run a script through `Start-Process powershell -Verb RunAs -Wait ...`, and the user clicks Yes on the UAC prompt. Batch several admin checks into one script (`tools/admin-bench.ps1`) to keep prompts to a minimum.
 - **Smart App Control is ON.** Freshly built unsigned exes are sometimes blocked (os error 4551); retrying usually works.
 - **Testing the UI without moving the mouse:** `tools/ui-screenshot.ps1` launches the app and captures only its window. `tools/ui-click.ps1` and `tools/ui-setpath.ps1` press buttons and type paths through UI Automation.
+- **UI tests that open the app:** set `$env:APPDATA` / `$env:LOCALAPPDATA` to a temp folder first. That keeps the user's real settings and deletion log untouched. The first-run notice then shows; press "Got it" via `tools/ui-click.ps1`.
 - The home folder `C:\Users\Mrittunjay Dubey` is itself a git repo. This project has its **own** repo in `xylem/`.
 
 ## User preferences
@@ -40,13 +50,13 @@ cargo build --release --workspace               # app ~1.5 min, first time ~3 mi
 - Never ship anything that depends on reverse-engineering WizTree.
 
 ## Next steps
-1. **After the user's decisions above:** port the prototype design and add the consent screen and shield.
+1. **Code signing** once the user picks a certificate route; then sign and re-test with Smart App Control on.
 2. **Phase 5:**
    - Index cache plus USN journal (instant reopen).
    - Snapshots and diff ("what changed").
-3. **Speed:** investigate the first-raw-read "extents" cost (0.36–0.80 s, likely the NTFS metadata flush).
+3. **Speed:** the first-raw-read "extents" cost (0.36–0.80 s).
 4. **Later:**
    - Show the other names of hardlinked files.
-   - Reduce MFT-mode RAM (now ~255 MB).
-   - Installer into Program Files, plus code signing.
+   - Reduce MFT-mode RAM.
    - Explorer context menu.
+   - Multi-select delete, in-app CSV export.

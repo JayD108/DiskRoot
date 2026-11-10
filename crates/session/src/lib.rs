@@ -1,14 +1,16 @@
-//! UI-agnostic engine API shared by the native UI (`xylem.exe`) and the
-//! optional web UI (`xylem-web.exe`).
+//! UI-agnostic engine API used by the Xylem app (`xylem.exe`) and kept
+//! separate from the UI so it can be tested on its own.
 //!
 //! A [`Scanned`] holds one scan: the tree, its classification and category
 //! totals. Every UI question ("what's inside this folder", "draw this
-//! folder", "is this safe to delete") is a method here, so both UIs behave
-//! identically. The UIs never hold the full tree.
+//! folder", "is this safe to delete") is a method here, so the UI never
+//! holds the full tree.
 
 pub mod elevate;
 pub mod helper;
+pub mod integrity;
 pub mod recycle;
+pub mod safety;
 
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -386,13 +388,51 @@ impl Scanned {
     }
 
     /// Step 1 of a delete: everything needed to recycle `node`, or why not.
-    /// Protection is enforced here, not just in the UI.
+    /// Protection is enforced here, not just in the UI. Also collects the
+    /// warnings the confirmation dialog must show (cloud, Git, large).
     pub fn prepare_delete(&self, node: u32) -> Result<PendingDelete, String> {
         let info = self.info(node)?;
         if let Some(why) = info.protected {
             return Err(why);
         }
-        Ok(PendingDelete { node, path: PathBuf::from(info.path), name: info.name, freed: info.on_disk })
+        if node == 0 {
+            return Err("Xylem won't delete the whole scanned folder or drive.".into());
+        }
+        let idx = &self.index;
+        let path = PathBuf::from(&info.path);
+        let mut warnings = safety::DeleteWarnings {
+            cloud: idx.flags(node) & flags::CLOUD != 0 || safety::in_cloud_folder(&path),
+            git_repos: 0,
+            large: info.on_disk >= safety::LARGE_BYTES || info.files >= safety::LARGE_FILES,
+        };
+        // One pass over the subtree: Git repos and cloud placeholders.
+        let mut stack = vec![node];
+        while let Some(x) = stack.pop() {
+            if x != node && idx.name(x).eq_ignore_ascii_case(".git") {
+                warnings.git_repos += 1;
+            }
+            if idx.flags(x) & flags::CLOUD != 0 {
+                warnings.cloud = true;
+            }
+            if idx.is_dir(x) {
+                stack.extend(self.children.live(idx, x));
+            }
+        }
+        if idx.name(node).eq_ignore_ascii_case(".git") {
+            warnings.git_repos += 1;
+        }
+        Ok(PendingDelete {
+            node,
+            path,
+            name: info.name,
+            freed: info.on_disk,
+            files: info.files,
+            dir: info.dir,
+            was_link: idx.flags(node) & flags::LINK != 0,
+            scan_root: PathBuf::from(idx.name(0)),
+            category: CATEGORIES[self.cls.cat[node as usize] as usize].name.to_owned(),
+            warnings,
+        })
     }
 
     /// Step 3 of a delete: after the Recycle Bin move succeeded, drop the
@@ -422,18 +462,37 @@ pub struct PendingDelete {
     pub path: PathBuf,
     pub name: String,
     pub freed: u64,
+    pub files: u32,
+    pub dir: bool,
+    pub was_link: bool,
+    pub scan_root: PathBuf,
+    pub category: String,
+    pub warnings: safety::DeleteWarnings,
 }
 
 impl PendingDelete {
-    /// Step 2: move it to the Recycle Bin. Blocking (Windows may show its
-    /// own progress or "too big to recycle" prompt): use a worker thread.
+    /// Step 2: re-check the item on disk, move it to the Recycle Bin, and
+    /// write the result to the local deletion log. Blocking (Windows may
+    /// show its own progress or "too big to recycle" prompt): use a worker
+    /// thread.
     pub fn recycle(&self) -> Result<DeleteOut, String> {
-        let outcome = recycle::to_recycle_bin(&self.path)?;
-        Ok(DeleteOut {
-            freed: if matches!(outcome, recycle::Outcome::Cancelled) { 0 } else { self.freed },
-            name: self.name.clone(),
-            cancelled: matches!(outcome, recycle::Outcome::Cancelled),
-        })
+        let result = safety::verify_before_recycle(&self.path, &self.scan_root, self.dir, self.was_link)
+            .and_then(|()| recycle::to_recycle_bin(&self.path));
+        let cancelled = matches!(result, Ok(recycle::Outcome::Cancelled));
+        safety::append_log(&safety::LogEntry {
+            time: safety::utc_now(),
+            path: self.path.display().to_string(),
+            bytes: self.freed,
+            files: self.files,
+            category: self.category.clone(),
+            outcome: match &result {
+                Ok(recycle::Outcome::Recycled) => "recycled".into(),
+                Ok(recycle::Outcome::Cancelled) => "cancelled".into(),
+                Err(e) => format!("refused: {e}"),
+            },
+        });
+        result?;
+        Ok(DeleteOut { freed: if cancelled { 0 } else { self.freed }, name: self.name.clone(), cancelled })
     }
 }
 
@@ -481,6 +540,7 @@ mod tests {
         assert!(s.info(7).unwrap().protected.is_some(), "Windows is protected");
         assert!(s.prepare_delete(7).is_err());
         assert!(s.prepare_delete(4).is_ok(), "node_modules can be deleted");
+        assert!(s.prepare_delete(0).is_err(), "never the scan root");
     }
 
     #[test]
@@ -496,6 +556,26 @@ mod tests {
         assert_eq!(places[0].name, "node_modules");
         assert_eq!(places[0].node, Some(4));
         assert!(s.cat_children("bogus", 1).is_err());
+    }
+
+    #[test]
+    fn delete_warnings_find_git_and_cloud() {
+        let mut idx = Index::new("D:\\");
+        let code = idx.push(0, "code", 0, 0, flags::DIR);
+        let repo = idx.push(code, "app", 0, 0, flags::DIR);
+        let git = idx.push(repo, ".git", 0, 0, flags::DIR);
+        idx.push(git, "HEAD", 10, 4096, 0);
+        let sync = idx.push(0, "synced", 0, 0, flags::DIR);
+        idx.push(sync, "photo.jpg", 5000, 0, flags::CLOUD);
+        idx.compute_totals();
+        let s = Scanned::new(idx, ScanStats::default(), "test".into());
+        let w = s.prepare_delete(code).unwrap().warnings;
+        assert_eq!((w.git_repos, w.cloud, w.large), (1, false, false));
+        assert!(w.needs_ack());
+        let w = s.prepare_delete(sync).unwrap().warnings;
+        assert_eq!((w.git_repos, w.cloud), (0, true));
+        assert!(!s.prepare_delete(git).unwrap().warnings.cloud);
+        assert_eq!(s.prepare_delete(git).unwrap().warnings.git_repos, 1);
     }
 
     #[test]

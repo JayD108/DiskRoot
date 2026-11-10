@@ -362,7 +362,7 @@ fn take_data(p: &mut Parsed, a: &Attr) {
             }
             if let (Some(size), Some(disk)) = (a.data_size(), a.on_disk()) {
                 p.size = size;
-                p.alloc += disk;
+                p.alloc = p.alloc.saturating_add(disk);
                 p.has_data = true;
             }
         } else if let Some(v) = a.value() {
@@ -374,7 +374,7 @@ fn take_data(p: &mut Parsed, a: &Attr) {
         && a.lowest_vcn() == Some(0)
         && let Some(disk) = a.on_disk()
     {
-        p.alloc += disk;
+        p.alloc = p.alloc.saturating_add(disk);
     }
 }
 

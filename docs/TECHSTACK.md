@@ -1,5 +1,7 @@
 # Tech Stack & Architecture: Visual Disk Analyzer
 
+> **Update 10 Nov 2026:** the web UI (Tauri/WebView2) was removed. Xylem now ships only the native `xylem.exe`. Sections about the web UI are kept as history.
+
 **Companion to:** `disk-analyzer-PRD.md` · **Status:** Proposal v1 · **Date:** 10 Nov 2026
 
 ---

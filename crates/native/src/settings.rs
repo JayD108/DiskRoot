@@ -12,11 +12,13 @@ pub struct Settings {
     pub treemap: bool,
     pub by_category: bool,
     pub last_path: String,
+    /// The first-launch notice was shown and confirmed.
+    pub seen_notice: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { dark: false, treemap: false, by_category: false, last_path: "C:\\".into() }
+        Self { dark: false, treemap: false, by_category: false, last_path: "C:\\".into(), seen_notice: false }
     }
 }
 

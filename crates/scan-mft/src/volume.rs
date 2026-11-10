@@ -175,8 +175,13 @@ pub fn parse_boot_sector(b: &[u8]) -> io::Result<VolumeInfo> {
         1u64 << u32::from(cpr.unsigned_abs()).min(31)
     };
     let info = VolumeInfo { bytes_per_sector, bytes_per_cluster, record_size, mft_valid_len: 0, mft_start_lcn };
-    let sane = info.bytes_per_sector >= 512
+    // Real NTFS limits: 512 B–4 KB sectors, clusters up to 2 MB, 1–4 KB
+    // records (allow up to 64 KB). Anything else is corrupt or hostile, and
+    // would make us size buffers from attacker-controlled numbers.
+    let sane = (512..=4096).contains(&info.bytes_per_sector)
         && info.bytes_per_sector.is_power_of_two()
+        && info.bytes_per_cluster <= 2 << 20
+        && info.record_size <= 64 << 10
         && info.bytes_per_cluster.is_power_of_two()
         && info.record_size.is_power_of_two()
         && info.record_size >= 1024

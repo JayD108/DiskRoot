@@ -1,5 +1,7 @@
 # UI architecture: native by default, web UI as an optional add-on
 
+> **Update 10 Nov 2026:** the web UI (Tauri/WebView2) was removed. Xylem now ships only the native `xylem.exe`. Sections about the web UI are kept as history.
+
 **Status:** approved and built (2026-11-10). `crates/session` + `crates/native` (`xylem.exe`) + `crates/app` (`xylem-web.exe`). Deviation: the CLI stays a separate `xylem-cli.exe`, because one Windows exe cannot be both a clean console tool and a window app.
 
 ## Goals
