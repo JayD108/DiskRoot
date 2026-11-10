@@ -19,6 +19,8 @@
   - Integrity panel (location + Authenticode), first-run notice, shield button.
   - Fuzz tests (they found 3 real bugs, all fixed).
 - All 52 tests pass; clippy is clean.
+- **Public repo:** https://github.com/JayD108/Xylem. CI is green, and the release pipeline dry run is green (NSIS installer 2.34 MB, real install/uninstall test in CI). SignPath prerequisites are in place: see `docs/SIGNPATH.md`.
+- **Next action:** publish the first release. Run `git tag -a v0.1.0 -m "Xylem 0.1.0"` then `git push origin v0.1.0` (the user runs it or approves it). After that the user applies to SignPath.
 - **Open items:**
   - **Code signing needs the user's certificate.** Options: SignPath (free for OSS), Azure Trusted Signing, or a paid cert. Then set `XYLEM_SIGN_*` and run `tools/release.ps1`.
   - Scan-data RAM (~255–272 MB for C:).
