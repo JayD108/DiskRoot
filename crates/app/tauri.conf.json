@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Xylem",
+  "productName": "Xylem Web",
   "version": "0.1.0",
-  "identifier": "com.xylem.app",
+  "identifier": "com.xylem.web",
   "build": {
     "frontendDist": "ui"
   },
@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Xylem",
+        "title": "Xylem (web UI)",
         "width": 1320,
         "height": 840,
         "minWidth": 900,

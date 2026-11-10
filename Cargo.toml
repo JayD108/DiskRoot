@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/scan-walk", "crates/scan-mft", "crates/cli", "crates/bench", "crates/app"]
+members = ["crates/core", "crates/scan-walk", "crates/scan-mft", "crates/session", "crates/native", "crates/cli", "crates/bench", "crates/app"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,11 +11,16 @@ license = "MIT OR Apache-2.0"
 xylem-core = { path = "crates/core" }
 xylem-scan-walk = { path = "crates/scan-walk" }
 xylem-scan-mft = { path = "crates/scan-mft" }
+xylem-session = { path = "crates/session" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "accesskit"] }
 
 [profile.release]
-lto = "thin"
+# Small, fast release binaries. Unwinding stays on: the folder walker
+# catches panics per folder so one bad folder can't hang a scan.
+lto = "fat"
 codegen-units = 1
-debug = "line-tables-only"
+strip = true
+debug = false

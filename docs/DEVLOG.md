@@ -145,3 +145,34 @@ Accuracy vs WizTree: 279/309 top-level folders exact. The 12 GB gap was System V
   - Compare the Tauri app: 8.6 MB + WebView2, 7 processes, ~258 MB, 2 Microsoft connections.
   - eframe 0.37 API: `App::ui(&mut self, ui, frame)`, `egui::Panel::top/bottom/left(..).show(ui, ..)`.
 - **Proposal written:** `docs/UI-ARCHITECTURE.md` (native default + optional web add-on, shared `xylem-session` crate, one `xylem.exe` for UI + CLI + helper). Waiting for the user's go-ahead.
+
+### Same day, later: native app built (user approved "go with native")
+- **New `crates/session` (xylem-session):** the UI-agnostic engine API, extracted from the Tauri backend.
+  - `Scanned` provides view, list, crumbs, category_view, `cat_children` (new, for the tree-table), info, and `prepare_delete` → `PendingDelete::recycle` → `apply_delete`.
+  - Also holds `scan` / `scan_admin`, `elevate.rs`, `recycle.rs`, and **`helper.rs`**: the elevated helper is now `xylem.exe --helper-scan C: --save-index <file>`.
+    - It accepts only that exact command line and keeps the old guards (`xylem-*.idx` directly in `%TEMP%`, `create_new`).
+    - Exit codes 0/2/3/4 map to clear app errors.
+- **New `crates/native` (`xylem.exe`, the default app):** eframe 0.37 (glow + accesskit), modules main/app/map/theme/settings.
+  - Menu bar, toolbar, tree-table (virtualized rows, twisties, % bars, category column, context menu), map pane (sunburst meshes / squarified treemap, upright rotated labels, legend), details pane (safety + note + actions), status bar.
+  - Modal progress and delete confirmation; worker threads for scans and deletes.
+  - Settings in `%APPDATA%\Xylem\settings.json`; Segoe UI loaded from `C:\Windows\Fonts`; new growth-ring icon (`crates/native/assets`, also copied into the web add-on).
+  - Accessible tree rows (`Role::TreeItem` + selected state), which also make UI Automation tests possible.
+- **`crates/app` became the optional add-on `xylem-web.exe`** (identifier `com.xylem.web`), a thin layer over session. The folder couldn't be renamed (locked), so it stays `crates/app`.
+- **CLI binary renamed `xylem-cli.exe`;** its `--save-index` was removed (the helper lives in `xylem.exe` now).
+- **Release profile:** `lto = "fat"`, `strip = true`, `debug = false`. Sizes: **xylem.exe 6.78 MB**, xylem-web.exe 8.16 MB, xylem-cli.exe 0.82 MB, xylem-bench.exe 0.91 MB.
+- **Verified:**
+  - 40 tests, clippy clean.
+  - Native app on the home folder (location + category views).
+  - Delete end to end on `%TEMP%\xylem-demo3` (selected via accessibility → dialog → Recycle Bin; notes.txt kept).
+  - **Admin fast scan via UAC:** the helper exited, 1 process left, 0 leftover idx; C: 1,495,619 files in 3.28 s (first-raw-read variance).
+  - **Native with all of C: loaded: ~272 MB private, 1 process, 0 network connections, idle CPU 16 ms / 5 s.**
+  - Web add-on smoke-tested on the shared engine.
+- **Fixed during testing:**
+  - The details pane was too short.
+  - egui followed the Windows dark theme over the app's setting (`set_theme` + `set_visuals_of`).
+  - Seam line on full rings; "1 files" plurals.
+  - The user switched the app to dark mode and clicked a delete confirm while testing; settings persistence worked as designed.
+- **Follow-ups:**
+  - Port the v2 design into the web add-on's HTML.
+  - Reduce scan-data RAM (index + classification ≈ 200+ MB for 1.8M items).
+  - Investigate the first-raw-read flush cost.

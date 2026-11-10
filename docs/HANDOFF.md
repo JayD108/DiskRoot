@@ -3,17 +3,19 @@
 **Read this first, then the last section of `DEVLOG.md`.** Keep both up to date: after every milestone, add to `DEVLOG.md`, refresh this file, and commit.
 
 ## Where we are
-- **Phases 1–4 are done.** The project was **renamed Drishti → Xylem** on 2026-11-10 (folder `Storage/xylem`).
-- **Working:**
-  - The CLI (`xylem`): folder walk plus the MFT reader, CSV/JSON export, `--save-index`.
-  - The bench harness (`xylem-bench`).
-  - The Tauri app (`xylem-app`): sunburst, treemap, list, admin fast scan through the helper, By location / By category, notes and safety badges, Recycle-Bin delete.
-- `xylem-ui-prototype/` holds the proposed new UI design (static demo, open `index.html`). It is **not** wired into the app yet.
-- Every test passes and `cargo clippy --workspace --all-targets` is clean.
-- **Waiting on the user** (details at the end of DEVLOG session 2):
-  1. **Security.md:** consent screen and shield. Discuss before implementing, and keep the copy honest (WebView2 does contact Microsoft).
-  2. **UI plan in `docs/UI-ARCHITECTURE.md`:** a native egui UI by default (spike: 4.46 MB, ~59 MB, 0 network) plus an optional Tauri web UI add-on, both on a new `xylem-session` crate.
-  3. **Approve prototype v2** (`xylem-ui-prototype/`, "classic utility, modern finish"), then build the native UI to match it.
+- **Phases 1–4 are done, and the native app is built** (2026-11-10). Renamed Drishti → Xylem.
+- **Binaries:**
+  - `xylem.exe`: the native app (default). Also the elevated helper (`--helper-scan`).
+  - `xylem-web.exe`: optional web UI add-on (Tauri/WebView2, old look).
+  - `xylem-cli.exe`, `xylem-bench.exe`.
+- **Engine API** for both UIs: `crates/session`. Design reference: `xylem-ui-prototype/` (v2). Plan: `docs/UI-ARCHITECTURE.md`.
+- All 40 tests pass; clippy is clean.
+- **Open items (see the end of the DEVLOG):**
+  - Port the v2 design into the web add-on.
+  - Scan-data RAM.
+  - First-raw-read cost.
+  - The Security.md consent screen and shield (discuss first; keep the copy honest).
+  - Phase 5.
 
 ## Build and run
 ```powershell
@@ -22,8 +24,8 @@ $env:Path += ";$env:USERPROFILE\.cargo\bin"     # if cargo isn't found
 cargo test --workspace
 cargo clippy --workspace --all-targets
 cargo build --release --workspace               # app ~1.5 min, first time ~3 min
-.\target\release\xylem-app.exe
-.\target\release\xylem.exe scan C: --top 20   # admin shell => MFT mode
+.\target\release\xylem.exe            # native app
+.\target\release\xylem-cli.exe scan C: --top 20   # admin shell => MFT mode
 ```
 
 ## Environment quirks

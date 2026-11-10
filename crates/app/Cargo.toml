@@ -1,12 +1,12 @@
 [package]
-name = "xylem-app"
-description = "Xylem desktop app (Tauri)"
+name = "xylem-web"
+description = "Xylem web UI (optional add-on, Tauri + WebView2)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "xylem-app"
+name = "xylem-web"
 path = "src/main.rs"
 
 [build-dependencies]
@@ -15,7 +15,4 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 serde.workspace = true
-serde_json.workspace = true
-xylem-core.workspace = true
-xylem-scan-walk.workspace = true
-xylem-scan-mft.workspace = true
+xylem-session.workspace = true

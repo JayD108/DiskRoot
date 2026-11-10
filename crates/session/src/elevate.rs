@@ -1,5 +1,6 @@
-//! Runs `xylem.exe` elevated (UAC prompt) to do a fast MFT scan, then
-//! loads the index file it writes. The app itself never runs as admin.
+//! Starts `xylem.exe --helper-scan` elevated (UAC prompt) to do a fast MFT
+//! scan, then loads the index file it writes. The UI never runs as admin.
+//! The helper side is in `helper.rs`.
 
 use std::ffi::c_void;
 use std::fs::File;
@@ -86,7 +87,7 @@ pub fn scan_with_helper(drive: &str) -> Result<(Index, ScanStats, String), Strin
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let out = std::env::temp_dir().join(format!("xylem-{}-{nanos:x}.idx", std::process::id()));
-    let params = format!("scan {drive} --mode mft --top 0 --save-index \"{}\"", out.display());
+    let params = format!("--helper-scan {drive} --save-index \"{}\"", out.display());
 
     let (verb, file, args) = (wide("runas"), wide(&helper.to_string_lossy()), wide(&params));
     let mut info = ShellExecuteInfoW {
@@ -126,7 +127,11 @@ pub fn scan_with_helper(drive: &str) -> Result<(Index, ScanStats, String), Strin
     }
     let loaded = (|| {
         if code != 0 {
-            return Err(format!("The admin helper failed (exit code {code}). Is {drive} an NTFS drive?"));
+            return Err(match code {
+                c if c == crate::helper::SCAN_FAILED as u32 => format!("Fast scan couldn't read {drive}. Is it an NTFS drive?"),
+                c if c == crate::helper::WRITE_FAILED as u32 => "Fast scan couldn't write its result file.".into(),
+                c => format!("The admin helper failed (exit code {c})."),
+            });
         }
         let f = File::open(&out).map_err(|e| format!("Helper produced no result: {e}"))?;
         let len = f.metadata().map_err(|e| e.to_string())?.len();

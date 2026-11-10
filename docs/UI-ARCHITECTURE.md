@@ -1,6 +1,6 @@
 # UI architecture: native by default, web UI as an optional add-on
 
-**Status:** proposal (2026-11-10), waiting for the user's go-ahead.
+**Status:** approved and built (2026-11-10). `crates/session` + `crates/native` (`xylem.exe`) + `crates/app` (`xylem-web.exe`). Deviation: the CLI stays a separate `xylem-cli.exe`, because one Windows exe cannot be both a clean console tool and a window app.
 
 ## Goals
 1. **Light on the machine.** A disk tool shouldn't need a browser engine.

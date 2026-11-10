@@ -9,7 +9,7 @@ New-Item -ItemType Directory -Force $dir | Out-Null
 $mode    = if ($Admin) { "admin" } else { "user" }
 $out     = Join-Path $dir "compare-$mode.txt"
 $wiztree = "C:\Program Files\WizTree\WizTree64.exe"
-$xylem = Join-Path (Split-Path -Parent $PSScriptRoot) "target\release\xylem.exe"
+$xylem = Join-Path (Split-Path -Parent $PSScriptRoot) "target\release\xylem-cli.exe"
 $wtCsv   = Join-Path $dir "wt-$mode.csv"
 $drOut   = Join-Path $dir "xylem-$mode.txt"
 $adminArg = if ($Admin) { "/admin=1" } else { "/admin=0" }

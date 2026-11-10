@@ -1,0 +1,334 @@
+//! The map pane: a sunburst (a stem cross-section: pith in the middle,
+//! growth rings outward) or a squarified treemap, drawn from the pruned
+//! view the session returns. Layout is cached per (data, size), so an idle
+//! window costs nothing.
+
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
+
+use eframe::egui::{
+    Align2, Color32, CornerRadius, Mesh, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, emath::Rot2, epaint::TextShape,
+    pos2, vec2,
+};
+use xylem_session::Shape as Node;
+
+use crate::theme::{self, Tokens};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Sunburst,
+    Treemap,
+}
+
+pub struct Arc_ {
+    pub i: usize,
+    pub a0: f32,
+    pub a1: f32,
+    pub ri: f32,
+    pub ro: f32,
+    pub depth: u8,
+}
+
+pub struct Tile {
+    pub i: usize,
+    pub rect: Rect,
+    pub header: bool,
+    pub depth: u8,
+}
+
+pub enum Layout {
+    Sun { center: Pos2, r0: f32, arcs: Vec<Arc_> },
+    Tree { tiles: Vec<Tile> },
+}
+
+pub enum Hit {
+    Node(usize),
+    Pith,
+}
+
+/// Children of each view node (indices into the node list).
+pub fn children(nodes: &[Node]) -> Vec<Vec<usize>> {
+    let mut kids = vec![Vec::new(); nodes.len()];
+    for (i, n) in nodes.iter().enumerate().skip(1) {
+        if n.parent >= 0 {
+            kids[n.parent as usize].push(i);
+        }
+    }
+    kids
+}
+
+pub fn layout(kind: Kind, nodes: &[Node], kids: &[Vec<usize>], rect: Rect) -> Layout {
+    match kind {
+        Kind::Sunburst => layout_sun(nodes, kids, rect),
+        Kind::Treemap => layout_tree(nodes, kids, rect),
+    }
+}
+
+fn layout_sun(nodes: &[Node], kids: &[Vec<usize>], rect: Rect) -> Layout {
+    let center = rect.center();
+    let max_depth = nodes.iter().map(|n| n.depth).max().unwrap_or(1).clamp(1, 3);
+    let radius = (rect.width().min(rect.height()) / 2.0 - 10.0).max(60.0);
+    let r0 = (radius * 0.27).max(44.0);
+    let ring = (radius - r0) / f32::from(max_depth);
+    let mut arcs = Vec::new();
+    // Iterative walk: (node, a0, a1).
+    let mut stack = vec![(0usize, 0.0f32, TAU)];
+    while let Some((i, a0, a1)) = stack.pop() {
+        let n = &nodes[i];
+        if n.depth > 0 {
+            let d = f32::from(n.depth);
+            arcs.push(Arc_ { i, a0, a1, ri: r0 + (d - 1.0) * ring, ro: r0 + d * ring, depth: n.depth });
+        }
+        if n.depth >= max_depth || n.size == 0 {
+            continue;
+        }
+        let mut a = a0;
+        for &k in &kids[i] {
+            let span = (a1 - a0) * (nodes[k].size as f64 / n.size as f64) as f32;
+            stack.push((k, a, a + span));
+            a += span;
+        }
+    }
+    Layout::Sun { center, r0, arcs }
+}
+
+fn squarify(items: &mut [(usize, f64)], mut r: Rect, out: &mut Vec<(usize, Rect)>) {
+    items.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let total: f64 = items.iter().map(|x| x.1).sum();
+    if total <= 0.0 || r.width() <= 0.0 || r.height() <= 0.0 {
+        return;
+    }
+    let scale = f64::from(r.width() * r.height()) / total;
+    let mut i = 0;
+    while i < items.len() {
+        let short = f64::from(r.width().min(r.height()));
+        let max_a = items[i].1 * scale;
+        let (mut end, mut sum, mut best) = (i, 0.0, f64::INFINITY);
+        while end < items.len() {
+            let a = items[end].1 * scale;
+            let s = sum + a;
+            let worst = (short * short * max_a / (s * s)).max(s * s / (short * short * a));
+            if worst > best {
+                break;
+            }
+            (best, sum) = (worst, s);
+            end += 1;
+        }
+        if r.width() >= r.height() {
+            let w = (sum / f64::from(r.height())) as f32;
+            let mut y = r.min.y;
+            for it in &items[i..end] {
+                let h = (it.1 * scale) as f32 / w;
+                out.push((it.0, Rect::from_min_size(pos2(r.min.x, y), vec2(w, h))));
+                y += h;
+            }
+            r.min.x += w;
+        } else {
+            let h = (sum / f64::from(r.width())) as f32;
+            let mut x = r.min.x;
+            for it in &items[i..end] {
+                let w = (it.1 * scale) as f32 / h;
+                out.push((it.0, Rect::from_min_size(pos2(x, r.min.y), vec2(w, h))));
+                x += w;
+            }
+            r.min.y += h;
+        }
+        i = end;
+    }
+}
+
+fn layout_tree(nodes: &[Node], kids: &[Vec<usize>], rect: Rect) -> Layout {
+    let mut tiles = Vec::new();
+    let mut top = Vec::new();
+    let mut items: Vec<(usize, f64)> =
+        kids[0].iter().filter(|&&k| nodes[k].size > 0).map(|&k| (k, nodes[k].size as f64)).collect();
+    squarify(&mut items, rect.shrink(6.0), &mut top);
+    for (i, r) in top {
+        let nest = !kids[i].is_empty() && r.width() > 50.0 && r.height() > 44.0;
+        tiles.push(Tile { i, rect: r, header: nest, depth: 1 });
+        if nest {
+            let inner = Rect::from_min_max(pos2(r.min.x + 2.0, r.min.y + 20.0), pos2(r.max.x - 2.0, r.max.y - 2.0));
+            let mut sub: Vec<(usize, f64)> =
+                kids[i].iter().filter(|&&k| nodes[k].size > 0).map(|&k| (k, nodes[k].size as f64)).collect();
+            let mut placed = Vec::new();
+            squarify(&mut sub, inner, &mut placed);
+            tiles.extend(placed.into_iter().map(|(k, rr)| Tile { i: k, rect: rr, header: false, depth: 2 }));
+        }
+    }
+    Layout::Tree { tiles }
+}
+
+pub fn hit(layout: &Layout, p: Pos2) -> Option<Hit> {
+    match layout {
+        Layout::Sun { center, r0, arcs } => {
+            let d = p - *center;
+            let r = d.length();
+            if r < r0 - 3.0 {
+                return Some(Hit::Pith);
+            }
+            let mut a = d.y.atan2(d.x) + FRAC_PI_2;
+            if a < 0.0 {
+                a += TAU;
+            }
+            arcs.iter().find(|s| r >= s.ri && r < s.ro && a >= s.a0 && a < s.a1).map(|s| Hit::Node(s.i))
+        }
+        Layout::Tree { tiles } => tiles.iter().rev().find(|t| t.rect.contains(p)).map(|t| Hit::Node(t.i)),
+    }
+}
+
+fn color_of(n: &Node, depth: u8, t: &Tokens) -> Color32 {
+    let base = if n.cat == u8::MAX { theme::cat_color(9) } else { theme::cat_color(n.cat) };
+    let c = theme::tint(base, depth, t);
+    if n.id == -1 && n.key.is_empty() {
+        // "N small items": muted
+        let g = (u16::from(c.r()) + u16::from(c.g()) + u16::from(c.b())) / 3;
+        let m = |x: u8| ((u16::from(x) + g * 2) / 3) as u8;
+        return Color32::from_rgb(m(c.r()), m(c.g()), m(c.b()));
+    }
+    c
+}
+
+/// Ring segment as a triangle strip; `gap` px of negative space each side.
+fn ring_mesh(c: Pos2, ri: f32, ro: f32, a0: f32, a1: f32, color: Color32) -> Option<Mesh> {
+    // Negative space between neighbours; a full ring has no neighbours.
+    let gap_o = if a1 - a0 > TAU - 1e-3 { 0.0 } else { 0.75 / ro };
+    let (a0, a1) = (a0 + gap_o, a1 - gap_o);
+    if a1 <= a0 {
+        return None;
+    }
+    let (ri, ro) = (ri + 0.75, ro - 0.75);
+    let steps = (((a1 - a0) / TAU) * 220.0).ceil().max(1.0) as u32;
+    let mut mesh = Mesh::default();
+    for s in 0..=steps {
+        let a = a0 + (a1 - a0) * s as f32 / steps as f32 - FRAC_PI_2;
+        let (sn, cs) = a.sin_cos();
+        mesh.colored_vertex(pos2(c.x + cs * ri, c.y + sn * ri), color);
+        mesh.colored_vertex(pos2(c.x + cs * ro, c.y + sn * ro), color);
+        if s > 0 {
+            let b = s * 2;
+            mesh.add_triangle(b - 2, b - 1, b);
+            mesh.add_triangle(b - 1, b + 1, b);
+        }
+    }
+    Some(mesh)
+}
+
+fn ring_outline(c: Pos2, ri: f32, ro: f32, a0: f32, a1: f32) -> Vec<Pos2> {
+    let steps = (((a1 - a0) / TAU) * 220.0).ceil().max(1.0) as u32;
+    let at = |r: f32, a: f32| {
+        let (sn, cs) = (a - FRAC_PI_2).sin_cos();
+        pos2(c.x + cs * r, c.y + sn * r)
+    };
+    let mut pts: Vec<Pos2> = (0..=steps).map(|s| at(ro, a0 + (a1 - a0) * s as f32 / steps as f32)).collect();
+    pts.extend((0..=steps).rev().map(|s| at(ri, a0 + (a1 - a0) * s as f32 / steps as f32)));
+    pts
+}
+
+/// Shortens `text` with "…" to fit `max_w` points.
+pub fn fit(painter: &Painter, text: &str, size: f32, max_w: f32) -> Option<String> {
+    if max_w < 18.0 {
+        return None;
+    }
+    let w = |s: &str| painter.layout_no_wrap(s.to_owned(), theme::regular(size), Color32::WHITE).size().x;
+    if w(text) <= max_w {
+        return Some(text.to_owned());
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let (mut lo, mut hi) = (0usize, chars.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        let cand: String = chars[..mid].iter().collect::<String>() + "…";
+        if w(&cand) <= max_w { lo = mid } else { hi = mid - 1 }
+    }
+    (lo > 1).then(|| chars[..lo].iter().collect::<String>() + "…")
+}
+
+pub struct PaintCtx<'a> {
+    pub nodes: &'a [Node],
+    pub hover: Option<usize>,
+    pub selected: Option<usize>,
+    pub t: &'a Tokens,
+    pub center_title: &'a str,
+    pub center_value: &'a str,
+    pub can_go_up: bool,
+}
+
+pub fn paint(p: &Painter, layout: &Layout, cx: &PaintCtx) {
+    let t = cx.t;
+    match layout {
+        Layout::Sun { center, r0, arcs } => {
+            for s in arcs {
+                if s.a1 - s.a0 < 0.002 {
+                    continue;
+                }
+                if let Some(m) = ring_mesh(*center, s.ri, s.ro, s.a0, s.a1, color_of(&cx.nodes[s.i], s.depth, t)) {
+                    p.add(Shape::mesh(m));
+                }
+            }
+            for s in arcs {
+                if Some(s.i) == cx.hover || Some(s.i) == cx.selected {
+                    let pts = ring_outline(*center, s.ri + 0.75, s.ro - 0.75, s.a0, s.a1);
+                    p.add(Shape::closed_line(pts, Stroke::new(2.0, t.text)));
+                }
+            }
+            // Labels: tangential, turned upright on the lower half.
+            for s in arcs {
+                let rm = (s.ri + s.ro) / 2.0;
+                let len = (s.a1 - s.a0) * rm;
+                if len < 60.0 || s.ro - s.ri < 15.0 {
+                    continue;
+                }
+                let Some(label) = fit(p, &cx.nodes[s.i].name, 11.5, (len - 12.0).min(180.0)) else { continue };
+                let galley = p.layout_no_wrap(label, theme::regular(11.5), theme::ink(s.depth, t));
+                let mid = (s.a0 + s.a1) / 2.0 - FRAC_PI_2;
+                let mut rot = mid + FRAC_PI_2;
+                rot = rot.sin().atan2(rot.cos());
+                if rot.abs() > FRAC_PI_2 {
+                    rot += PI;
+                }
+                let at = *center + vec2(mid.cos(), mid.sin()) * rm;
+                let half = galley.size() / 2.0;
+                let pos = at - Rot2::from_angle(rot) * half;
+                let mut ts = TextShape::new(pos, galley, theme::ink(s.depth, t));
+                ts.angle = rot;
+                p.add(ts);
+            }
+            // Pith with faint growth rings.
+            p.circle_filled(*center, r0 - 3.0, t.panel);
+            for k in 1..=3 {
+                p.circle_stroke(*center, (r0 - 3.0) * (0.35 + k as f32 * 0.2), Stroke::new(1.0, t.line));
+            }
+            p.text(*center - vec2(0.0, 6.0), Align2::CENTER_CENTER, cx.center_value, theme::semibold(16.0), t.text);
+            if let Some(title) = fit(p, cx.center_title, 11.0, (r0 - 12.0) * 1.6) {
+                p.text(*center + vec2(0.0, 13.0), Align2::CENTER_CENTER, title, theme::regular(11.0), t.muted);
+            }
+            if cx.can_go_up {
+                p.text(*center + vec2(0.0, 28.0), Align2::CENTER_CENTER, "↑ up", theme::regular(10.5), t.faint);
+            }
+        }
+        Layout::Tree { tiles } => {
+            for tile in tiles {
+                let n = &cx.nodes[tile.i];
+                p.rect_filled(tile.rect, CornerRadius::ZERO, color_of(n, tile.depth, t));
+                p.rect_stroke(tile.rect, CornerRadius::ZERO, Stroke::new(2.0, t.panel), StrokeKind::Inside);
+                if Some(tile.i) == cx.hover || Some(tile.i) == cx.selected {
+                    p.rect_stroke(tile.rect.shrink(1.5), CornerRadius::ZERO, Stroke::new(2.0, t.text), StrokeKind::Inside);
+                }
+            }
+            for tile in tiles {
+                let r = tile.rect;
+                if r.width() < 54.0 || r.height() < 18.0 {
+                    continue;
+                }
+                let n = &cx.nodes[tile.i];
+                let ink = theme::ink(tile.depth, t);
+                let font = if tile.depth == 1 { theme::semibold(11.5) } else { theme::regular(11.5) };
+                if let Some(name) = fit(p, &n.name, 11.5, r.width() - 12.0) {
+                    p.text(r.min + vec2(6.0, 4.0), Align2::LEFT_TOP, name, font, ink);
+                }
+                if !tile.header && r.height() > 34.0 {
+                    p.text(r.min + vec2(6.0, 19.0), Align2::LEFT_TOP, crate::fmt_bytes(n.size), theme::regular(11.0), ink);
+                }
+            }
+        }
+    }
+}

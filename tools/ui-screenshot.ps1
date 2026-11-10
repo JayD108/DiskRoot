@@ -18,7 +18,7 @@ public static class Win {
 }
 "@
 [Win]::SetProcessDPIAware() | Out-Null
-$exe = Join-Path (Split-Path -Parent $PSScriptRoot) "target\release\xylem-app.exe"
+$exe = Join-Path (Split-Path -Parent $PSScriptRoot) "target\release\xylem.exe"
 if ($Launch) {
   # Start minimized-to-background is not possible for a fresh window, but we
   # never call SetForegroundWindow, so focus stays where Windows puts it.

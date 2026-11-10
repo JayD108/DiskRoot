@@ -4,7 +4,7 @@
 
 **WizTree-class speed. Something nicer to look at. It tells you what things *are*.**
 
-A Rust + Tauri disk analyzer for Windows. It reads the NTFS Master File Table directly, maps a 1.5 TB drive in about a second and a half, sorts every file into categories that mean something, and tells you what's safe to clean.
+A Rust disk analyzer for Windows with a native interface (no browser engine). It reads the NTFS Master File Table directly, maps a 1.5 TB drive in about a second and a half, sorts every file into categories that mean something, and tells you what's safe to clean.
 
 *Local only. No accounts, no telemetry, no uploads.*
 
@@ -20,6 +20,7 @@ A Rust + Tauri disk analyzer for Windows. It reads the NTFS Master File Table di
 | Peak RAM, MFT scan | **~255 MB** | 844 MB |
 | Total vs Windows' own "used space" (≈1,558 GB) | **1,558 GB** | 1,583 GB (counts hardlinks once per name) |
 | Bytes sorted into a real category | **95%** | n/a |
+| App download / app memory with C: loaded | **6.8 MB**, one process, ~272 MB, 0 network connections | |
 
 WizTree was used only as a black box: run normally and timed. Its license forbids reverse engineering, and none was done.
 
@@ -63,11 +64,12 @@ git clone <repo> xylem
 cd xylem
 cargo build --release --workspace          # Rust 1.88+, MSVC build tools
 
-.\target\release\xylem-app.exe             # desktop app
-.\target\release\xylem.exe scan C: --top 20   # command line (MFT mode when run as admin)
+.\target\release\xylem.exe                  # the app (native UI)
+.\target\release\xylem-cli.exe scan C: --top 20   # command line (MFT mode when run as admin)
+.\target\release\xylem-web.exe              # optional web UI add-on (needs Microsoft WebView2)
 ```
 
-In the app, pick a drive and press **Scan**, or **Fast scan (admin)** for whole NTFS drives. Switch between **By location** and **By category**, and between **Sunburst** and **Treemap**. Click to zoom in; the center, Backspace or the breadcrumbs go back up. Use 🗑 or right-click to move something to the Recycle Bin.
+In the app, type or pick a drive and press **Scan** (F5), or **Fast scan** (Ctrl+F5) for whole NTFS drives. The tree-table is the main view: expand folders, use the arrow keys, filter by name. The map beside it follows your selection, and clicking a ring or tile selects it. Switch **Location / Category** and **Sunburst / Treemap** in the toolbar or the View menu. The details pane says what the selected item is and whether it's safe to remove. *Move to Recycle Bin…* (or Delete, or right-click) asks first.
 
 CLI options: `--mode auto|mft|walk`, `--by disk|size`, `--json`, `--export all.csv`, `--threads N`.
 
@@ -76,16 +78,17 @@ CLI options: `--mode auto|mft|walk`, `--by disk|size`, `--json`, `--export all.c
 ## How it works
 
 ```
-                    ┌──────────────── xylem-app.exe (normal user) ──────────────────┐
- You ── clicks ───► │  UI (HTML/JS, Canvas 2D)  ◄── small JSON views ──  Rust backend│
-                    │   sunburst · treemap · list · delete dialog       Index + rules│
+                    ┌──────────────── xylem.exe (normal user, one process) ─────────┐
+ You ── clicks ───► │  native UI (egui)  ◄── calls ──  xylem-session (engine API)    │
+                    │  tree-table · map · details     Index + rules + classification │
                     └───────────────▲────────────────────────────────────┬──────────┘
                                     │ loads + validates index file       │ Fast scan
                                     │                                    ▼ (UAC prompt)
-                    ┌───────────────┴──── xylem.exe (admin, short-lived) ───────────┐
+                    ┌───────────────┴─ xylem.exe --helper-scan (admin, seconds) ─────┐
                     │  boot sector ─► $MFT runs ─► read + parse ─► tree ─► save, exit│
                     └────────────────────────────────────────────────────────────────┘
  Without admin: the app runs the folder-walk scanner itself (no prompt).
+ xylem-web.exe (optional) is the same engine behind an HTML UI in WebView2.
 ```
 
 ### 1. Roots: two scanners
@@ -119,9 +122,15 @@ Each file record becomes exactly one entry, so a hardlinked file is counted **on
 - **Extension rules** (`.mp4`, `.npy`, `.gguf`…) refine files only inside "weak" places (Desktop, Documents, unclassified folders), or anywhere if marked strong (model files).
 - **By-category view:** Category → Sub-type → **places** (the folders holding those bytes). Sizes add up exactly.
 
-### 4. Canopy: the app (`crates/app`)
-- **Backend:** Tauri commands (`scan`, `scan_admin`, `view`, `list`, `crumbs`, `category_view`, `info`, `delete`, `reveal`). The UI never holds the full tree.
-- **Frontend:** plain HTML/CSS/JS with no build step: a Canvas 2D sunburst and squarified treemap, a ranked list, tooltips with notes and safety badges, and a delete dialog.
+### 4. Canopy: the apps
+- **Engine API (`crates/session`):** one `Scanned` value answers every UI question: `view`, `list`, `crumbs`, `category_view`, `cat_children`, `info`, `prepare_delete` → `recycle` → `apply_delete`. Both UIs use it, so they behave the same, and neither holds the full tree.
+- **Native app (`crates/native`, `xylem.exe`, the default):**
+  - egui on OpenGL: one process, no browser engine, and it only redraws on input.
+  - The layout is "classic utility, modern finish": menu bar, toolbar, tree-table, map, details pane and status bar.
+  - Botanical palette, light and dark themes, Segoe UI loaded from Windows (not bundled), keyboard navigation, and accessible tree rows for screen readers.
+  - Scans and deletes run on worker threads, so the window never freezes.
+- **Web add-on (`crates/app`, `xylem-web.exe`, optional):** Tauri + WebView2 with an HTML/Canvas UI, for people who prefer it.
+- **Design prototype (`xylem-ui-prototype/`):** the static HTML reference both UIs follow.
 - **Safe delete:** `SHFileOperationW` with *allow undo*, so things go to the Recycle Bin, and Windows itself warns if something is too big to recycle. Protected items are refused **in the backend**, not just hidden in the UI.
 
 ## Accuracy rules
@@ -137,7 +146,7 @@ Each file record becomes exactly one entry, so a hardlinked file is counted **on
 ## Security & privacy
 
 - **Read-only disk access.** The volume is opened with read access only (`GENERIC_READ`, unbuffered, overlapped). The MFT code contains no write calls.
-- **Admin only when asked, only briefly.** `xylem-app.exe` never runs elevated. "Fast scan" starts `xylem.exe` through the Windows UAC prompt; it scans, writes its result, and exits (measured: no elevated process left behind).
+- **Admin only when asked, only briefly.** The app window never runs elevated. "Fast scan" starts `xylem.exe --helper-scan C: --save-index <file>` through the Windows UAC prompt. In that mode no window is created: it scans, writes its result, and exits (measured: no elevated process left behind). It accepts only that exact command line.
 - **Hardened handoff:**
   - The helper only writes a *new* file (`create_new`, so a planted file or link makes it fail rather than overwrite) named `xylem-*.idx`, directly in your temp folder.
   - The app loads it with full validation and deletes it.
@@ -146,7 +155,8 @@ Each file record becomes exactly one entry, so a hardlinked file is counted **on
 - **UI:** file names are escaped before display, and a Content Security Policy allows only the app's own files.
 - **Network:**
   - Xylem's code contains **no network code**. No HTTP client is compiled for Windows; Tauri's optional HTTP crates are for other platforms only.
-  - *Honest note:* the window is drawn by Microsoft **WebView2**, which was measured opening HTTPS connections to Microsoft for its own services. Your file data never goes there. See `docs/DEVLOG.md` for the measurements and the options being considered.
+  - **The native app was measured with 0 network connections.**
+  - *Honest note on the optional web add-on:* its window is drawn by Microsoft **WebView2**, which was measured opening HTTPS connections to Microsoft for its own services. Your file data never goes there, and the default native app doesn't use WebView2 at all.
 
 ## Project layout
 
@@ -156,10 +166,13 @@ xylem/
 │  ├─ core/        Index, store, view, classify (+ rules.json), report, format
 │  ├─ scan-walk/   folder-walk scanner (Windows FFI in ffi.rs)
 │  ├─ scan-mft/    MFT reader: volume.rs, record.rs, scan.rs
-│  ├─ cli/         xylem.exe (also the admin helper)
-│  ├─ bench/       xylem-bench.exe: gen | run | time | verify | modes
-│  └─ app/         Tauri app: src/ (Rust) + ui/ (HTML/CSS/JS)
-├─ xylem-ui-prototype/   standalone design prototype for the next UI (open index.html)
+│  ├─ session/     engine API shared by both UIs; the elevated helper; Recycle Bin
+│  ├─ native/      xylem.exe: native UI (egui) + helper mode   <- the app
+│  ├─ app/         xylem-web.exe: optional web UI add-on (Tauri + WebView2)
+│  ├─ cli/         xylem-cli.exe: command line
+│  └─ bench/       xylem-bench.exe: gen | run | time | verify | modes
+├─ xylem-ui-prototype/   standalone design reference (open index.html)
+├─ spikes/        throwaway experiments (native UI size spike)
 ├─ tools/          benchmark + UI-test scripts
 └─ docs/           PRD, TECHSTACK, DEVLOG (history), HANDOFF (start here)
 ```
@@ -189,7 +202,8 @@ The tests cover:
 |---|---|
 | ✅ 1–3 | Folder walk, MFT reader, desktop app with sunburst, treemap and admin helper |
 | ✅ 4 | Categories, by-category view, notes and safety badges, Recycle-Bin delete |
+| ✅ UI | Native app (default) + optional web add-on on one engine API |
 | ⏭ 5 | Instant reopen (index cache + USN journal), "what changed" snapshots |
-| Later | Show every name of hardlinked files; installer into Program Files + code signing; Explorer context menu; new UI (see `xylem-ui-prototype/`) |
+| Later | Port the v2 design into the web add-on; show every name of hardlinked files; lower scan-data RAM; installer into Program Files + code signing; Explorer context menu |
 
 *Xylem was called "Drishti" until 10 Nov 2026.*

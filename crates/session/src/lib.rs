@@ -1,0 +1,512 @@
+//! UI-agnostic engine API shared by the native UI (`xylem.exe`) and the
+//! optional web UI (`xylem-web.exe`).
+//!
+//! A [`Scanned`] holds one scan: the tree, its classification and category
+//! totals. Every UI question ("what's inside this folder", "draw this
+//! folder", "is this safe to delete") is a method here, so both UIs behave
+//! identically. The UIs never hold the full tree.
+
+pub mod elevate;
+pub mod helper;
+pub mod recycle;
+
+use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+use std::time::Instant;
+
+use serde::Serialize;
+use xylem_core::classify::{CATEGORIES, CatCrumb, CatKey, CatModel, CatStats, Classification, NCAT, Rules};
+use xylem_core::view::{Children, ViewLimits, ViewNode, ancestors, build_view};
+use xylem_core::{Index, NO_PARENT, ScanStats, flags};
+use xylem_scan_mft::{Mode, Used, scan_auto};
+
+pub use xylem_core::classify::{Category, RuleInfo, Safety, SubType};
+pub use xylem_core::view::ViewNode as Shape;
+
+/// The built-in classification rules (compiled in, not editable at runtime).
+pub static RULES: LazyLock<Rules> = LazyLock::new(Rules::builtin);
+
+pub fn categories() -> &'static [Category] {
+    &CATEGORIES
+}
+
+/// Drive roots that exist, e.g. `["C:\\", "D:\\"]`.
+pub fn drives() -> Vec<String> {
+    ('A'..='Z').map(|c| format!("{c}:\\")).filter(|d| Path::new(d).exists()).collect()
+}
+
+fn mode_text(used: &Used) -> String {
+    match used {
+        Used::Mft => "MFT (direct read)".into(),
+        Used::Walk { fallback_reason: None } => "folder walk".into(),
+        Used::Walk { fallback_reason: Some(r) } => format!("folder walk ({r})"),
+    }
+}
+
+/// Scans a drive or folder in this process (MFT if possible, else walk).
+/// Blocking: call it from a worker thread.
+pub fn scan(path: &str) -> Result<Scanned, String> {
+    let threads = xylem_scan_walk::default_threads();
+    let (s, used) = scan_auto(Path::new(path), Mode::Auto, threads).map_err(|e| format!("Scan failed: {e}"))?;
+    Ok(Scanned::new(s.index, s.stats, mode_text(&used)))
+}
+
+/// Fast MFT scan through the elevated helper (shows the UAC prompt).
+/// Blocking: call it from a worker thread.
+pub fn scan_admin(drive: &str) -> Result<Scanned, String> {
+    let (index, stats, mode) = elevate::scan_with_helper(drive)?;
+    Ok(Scanned::new(index, stats, mode))
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Summary {
+    pub root: String,
+    pub mode: String,
+    pub elapsed_ms: f64,
+    pub classify_ms: f64,
+    pub files: u64,
+    pub dirs: u64,
+    pub unreadable: u64,
+    pub size: u64,
+    pub on_disk: u64,
+    /// Share of bytes in a real category (not Other).
+    pub categorized: f64,
+    pub admin_hint: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Item {
+    pub id: u32,
+    pub name: String,
+    pub size: u64,
+    pub on_disk: u64,
+    pub files: u32,
+    pub dir: bool,
+    pub link: bool,
+    pub cloud: bool,
+    /// Colour category (dominant inside folders), own sub-type and rule.
+    pub cat: u8,
+    pub own_cat: u8,
+    pub sub: u16,
+    pub rule: u16,
+    pub protected: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ListOut {
+    /// All children of the folder (the list may be cut at `limit`).
+    pub total: usize,
+    pub items: Vec<Item>,
+    /// Bytes per category inside this folder, biggest first.
+    pub breakdown: Vec<(u8, u64)>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Crumb {
+    pub id: u32,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CatViewOut {
+    pub nodes: Vec<ViewNode>,
+    pub crumbs: Vec<CatCrumb>,
+}
+
+/// One row of the by-category tree: a category, a sub-type, or a place
+/// (a real folder/file holding bytes of that sub-type).
+#[derive(Clone, Debug, Serialize)]
+pub struct CatRow {
+    /// "cat:3" / "sub:12" for groups; empty for places.
+    pub key: String,
+    /// Index node of a place.
+    pub node: Option<u32>,
+    pub name: String,
+    pub bytes: u64,
+    pub files: u64,
+    pub cat: u8,
+    pub sub: u16,
+    pub rule: u16,
+    pub has_children: bool,
+}
+
+/// Everything the details pane and delete dialog show.
+#[derive(Clone, Debug, Serialize)]
+pub struct ItemInfo {
+    pub id: u32,
+    pub name: String,
+    pub path: String,
+    pub dir: bool,
+    pub on_disk: u64,
+    pub size: u64,
+    pub files: u32,
+    pub cat: u8,
+    pub sub: u16,
+    pub rule: u16,
+    pub protected: Option<String>,
+    /// The folder to open for this item (itself, or its parent for files).
+    pub folder: u32,
+    pub parent: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DeleteOut {
+    pub freed: u64,
+    pub name: String,
+    pub cancelled: bool,
+}
+
+/// One scan, classified, ready to answer UI questions.
+pub struct Scanned {
+    index: Index,
+    children: Children,
+    cls: Classification,
+    cats: CatStats,
+    stats: ScanStats,
+    mode: String,
+    classify_ms: f64,
+    /// Folders deleted through Xylem (files come from the live totals).
+    removed_dirs: u64,
+}
+
+impl Scanned {
+    pub fn new(index: Index, stats: ScanStats, mode: String) -> Self {
+        let t = Instant::now();
+        let children = Children::build(&index);
+        let cls = Classification::run(&index, &RULES);
+        let cats = CatStats::compute(&index, &cls, RULES.subs.len());
+        let classify_ms = t.elapsed().as_secs_f64() * 1000.0;
+        Self { index, children, cls, cats, stats, mode, classify_ms, removed_dirs: 0 }
+    }
+
+    fn model(&self) -> CatModel<'_> {
+        CatModel { idx: &self.index, cls: &self.cls, stats: &self.cats, rules: &RULES }
+    }
+
+    /// Ok if `node` exists and wasn't deleted.
+    pub fn check(&self, node: u32) -> Result<(), String> {
+        if (node as usize) < self.index.len() && self.index.flags(node) & flags::DELETED == 0 {
+            Ok(())
+        } else {
+            Err(format!("No such item: {node}"))
+        }
+    }
+
+    /// Adds category data to view nodes of real items.
+    fn decorate(&self, nodes: &mut [ViewNode]) {
+        for n in nodes.iter_mut().filter(|n| n.id >= 0 && n.key.is_empty()) {
+            let i = n.id as usize;
+            if n.cat == u8::MAX {
+                n.cat = self.cats.dominant[i];
+            }
+            (n.own_cat, n.sub, n.rule) = (self.cls.cat[i], self.cls.sub[i], self.cls.rule[i]);
+        }
+    }
+
+    pub fn summary(&self) -> Summary {
+        let total: u64 = self.cats.cat_total.iter().sum();
+        let other = self.cats.cat_total[xylem_core::classify::CAT_OTHER as usize];
+        Summary {
+            root: self.index.name(0).to_owned(),
+            mode: self.mode.clone(),
+            elapsed_ms: self.stats.elapsed.as_secs_f64() * 1000.0,
+            classify_ms: self.classify_ms,
+            // Live counts, so they stay right after deleting things.
+            files: u64::from(self.index.files(0)),
+            dirs: self.stats.dirs.saturating_sub(self.removed_dirs),
+            unreadable: self.stats.unreadable,
+            size: self.index.size(0),
+            on_disk: self.index.alloc(0),
+            categorized: if total > 0 { (total - other) as f64 / total as f64 } else { 0.0 },
+            admin_hint: self.mode.contains("administrator"),
+        }
+    }
+
+    /// Pruned shapes for drawing folder `node` (sunburst/treemap).
+    pub fn view(&self, node: u32, depth: u8) -> Result<Vec<ViewNode>, String> {
+        self.check(node)?;
+        let lim = ViewLimits { max_depth: depth.clamp(1, 10), ..ViewLimits::default() };
+        let mut nodes = build_view(&self.index, &self.children, node, &lim);
+        self.decorate(&mut nodes);
+        Ok(nodes)
+    }
+
+    fn item(&self, c: u32) -> Item {
+        let idx = &self.index;
+        Item {
+            id: c,
+            name: idx.name(c).to_owned(),
+            size: idx.size(c),
+            on_disk: idx.alloc(c),
+            files: idx.files(c),
+            dir: idx.is_dir(c),
+            link: idx.flags(c) & flags::LINK != 0,
+            cloud: idx.flags(c) & flags::CLOUD != 0,
+            cat: self.cats.dominant[c as usize],
+            own_cat: self.cls.cat[c as usize],
+            sub: self.cls.sub[c as usize],
+            rule: self.cls.rule[c as usize],
+            protected: self.cls.protection(idx, &RULES, c).is_some(),
+        }
+    }
+
+    /// The node itself as a list row (for the tree root).
+    pub fn item_of(&self, node: u32) -> Result<Item, String> {
+        self.check(node)?;
+        Ok(self.item(node))
+    }
+
+    /// Children of folder `node`, biggest first, plus its category breakdown.
+    pub fn list(&self, node: u32, limit: usize) -> Result<ListOut, String> {
+        self.check(node)?;
+        let kids: Vec<u32> = self.children.live(&self.index, node).collect();
+        let items = kids.iter().take(limit).map(|&c| self.item(c)).collect();
+        Ok(ListOut { total: kids.len(), items, breakdown: self.breakdown(node) })
+    }
+
+    /// Bytes per category inside `node`, biggest first.
+    pub fn breakdown(&self, node: u32) -> Vec<(u8, u64)> {
+        let mut b: Vec<(u8, u64)> = self
+            .cats
+            .breakdown(node)
+            .into_iter()
+            .enumerate()
+            .filter(|&(_, v)| v > 0)
+            .map(|(c, v)| (c as u8, v))
+            .collect();
+        b.sort_unstable_by_key(|&(_, v)| std::cmp::Reverse(v));
+        b
+    }
+
+    pub fn crumbs(&self, node: u32) -> Result<Vec<Crumb>, String> {
+        self.check(node)?;
+        Ok(ancestors(&self.index, node).into_iter().map(|(id, name)| Crumb { id, name }).collect())
+    }
+
+    /// The by-category diagram rooted at `key` ("", "cat:3", "sub:12").
+    pub fn category_view(&self, key: &str) -> Result<CatViewOut, String> {
+        let k = CatKey::parse(key, &RULES).ok_or("Unknown category")?;
+        let m = self.model();
+        let mut nodes = m.view(k, 0.002);
+        self.decorate(&mut nodes);
+        Ok(CatViewOut { nodes, crumbs: m.crumbs(k) })
+    }
+
+    /// Bytes and files of a category key ("" = everything).
+    pub fn cat_total(&self, key: &str) -> (u64, u64) {
+        match CatKey::parse(key, &RULES) {
+            Some(CatKey::Cat(c)) => (self.cats.cat_total[c as usize], self.cats.cat_files[c as usize]),
+            Some(CatKey::Sub(s)) => (self.cats.sub_total[s as usize], self.cats.sub_files[s as usize]),
+            _ => (self.cats.cat_total.iter().sum(), self.cats.cat_files.iter().sum()),
+        }
+    }
+
+    /// Rows under a by-category key: "" -> categories, "cat:N" -> sub-types,
+    /// "sub:N" -> places (all of them, biggest first).
+    pub fn cat_children(&self, key: &str, limit: usize) -> Result<Vec<CatRow>, String> {
+        let k = CatKey::parse(key, &RULES).ok_or("Unknown category")?;
+        let st = &self.cats;
+        let rows = match k {
+            CatKey::All => {
+                let mut cats: Vec<u8> = (0..NCAT as u8).filter(|&c| st.cat_total[c as usize] > 0).collect();
+                cats.sort_unstable_by_key(|&c| std::cmp::Reverse(st.cat_total[c as usize]));
+                cats.into_iter()
+                    .map(|c| CatRow {
+                        key: CatKey::Cat(c).key(),
+                        node: None,
+                        name: CATEGORIES[c as usize].name.to_owned(),
+                        bytes: st.cat_total[c as usize],
+                        files: st.cat_files[c as usize],
+                        cat: c,
+                        sub: u16::MAX,
+                        rule: u16::MAX,
+                        has_children: true,
+                    })
+                    .collect()
+            }
+            CatKey::Cat(c) => {
+                let mut subs: Vec<u16> = (0..RULES.subs.len() as u16)
+                    .filter(|&s| RULES.sub_cat(s) == c && st.sub_total[s as usize] > 0)
+                    .collect();
+                subs.sort_unstable_by_key(|&s| std::cmp::Reverse(st.sub_total[s as usize]));
+                subs.into_iter()
+                    .map(|s| CatRow {
+                        key: CatKey::Sub(s).key(),
+                        node: None,
+                        name: RULES.subs[s as usize].name.clone(),
+                        bytes: st.sub_total[s as usize],
+                        files: st.sub_files[s as usize],
+                        cat: c,
+                        sub: s,
+                        rule: u16::MAX,
+                        has_children: true,
+                    })
+                    .collect()
+            }
+            CatKey::Sub(s) => st.places_by_sub[s as usize]
+                .iter()
+                .filter(|p| self.index.flags(p.node) & flags::DELETED == 0)
+                .take(limit)
+                .map(|p| CatRow {
+                    key: String::new(),
+                    node: Some(p.node),
+                    name: self.index.name(p.node).to_owned(),
+                    bytes: p.bytes,
+                    files: u64::from(p.files),
+                    cat: RULES.sub_cat(s),
+                    sub: s,
+                    rule: self.cls.rule[p.node as usize],
+                    has_children: false,
+                })
+                .collect(),
+        };
+        Ok(rows)
+    }
+
+    pub fn info(&self, node: u32) -> Result<ItemInfo, String> {
+        self.check(node)?;
+        let idx = &self.index;
+        let i = node as usize;
+        let parent = idx.parent(node);
+        Ok(ItemInfo {
+            id: node,
+            name: idx.name(node).to_owned(),
+            path: idx.path(node),
+            dir: idx.is_dir(node),
+            on_disk: idx.alloc(node),
+            size: idx.size(node),
+            files: idx.files(node),
+            cat: self.cls.cat[i],
+            sub: self.cls.sub[i],
+            rule: self.cls.rule[i],
+            protected: self.cls.protection(idx, &RULES, node),
+            folder: if idx.is_dir(node) || parent == NO_PARENT { node } else { parent },
+            parent: (parent != NO_PARENT).then_some(parent),
+        })
+    }
+
+    /// Step 1 of a delete: everything needed to recycle `node`, or why not.
+    /// Protection is enforced here, not just in the UI.
+    pub fn prepare_delete(&self, node: u32) -> Result<PendingDelete, String> {
+        let info = self.info(node)?;
+        if let Some(why) = info.protected {
+            return Err(why);
+        }
+        Ok(PendingDelete { node, path: PathBuf::from(info.path), name: info.name, freed: info.on_disk })
+    }
+
+    /// Step 3 of a delete: after the Recycle Bin move succeeded, drop the
+    /// item from the tree and refresh category totals.
+    pub fn apply_delete(&mut self, node: u32) {
+        let mut stack = vec![node];
+        while let Some(x) = stack.pop() {
+            if self.index.is_dir(x) && self.index.flags(x) & flags::DELETED == 0 {
+                self.removed_dirs += 1;
+            }
+            stack.extend(self.children.live(&self.index, x));
+        }
+        self.index.remove_subtree(node, &self.children);
+        self.cats = CatStats::compute(&self.index, &self.cls, RULES.subs.len());
+    }
+
+    /// Full path of a node (for Explorer, copying, etc.).
+    pub fn path(&self, node: u32) -> Result<String, String> {
+        self.check(node)?;
+        Ok(self.index.path(node))
+    }
+}
+
+/// A delete that passed the protection check (see [`Scanned::prepare_delete`]).
+pub struct PendingDelete {
+    pub node: u32,
+    pub path: PathBuf,
+    pub name: String,
+    pub freed: u64,
+}
+
+impl PendingDelete {
+    /// Step 2: move it to the Recycle Bin. Blocking (Windows may show its
+    /// own progress or "too big to recycle" prompt): use a worker thread.
+    pub fn recycle(&self) -> Result<DeleteOut, String> {
+        let outcome = recycle::to_recycle_bin(&self.path)?;
+        Ok(DeleteOut {
+            freed: if matches!(outcome, recycle::Outcome::Cancelled) { 0 } else { self.freed },
+            name: self.name.clone(),
+            cancelled: matches!(outcome, recycle::Outcome::Cancelled),
+        })
+    }
+}
+
+/// Shows `path` selected in Windows Explorer.
+pub fn reveal(path: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    if path.contains('"') {
+        return Err("Path contains a quote character".into());
+    }
+    std::process::Command::new("explorer.exe")
+        .raw_arg(format!("/select,\"{path}\""))
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Could not open Explorer: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn demo() -> Scanned {
+        let mut idx = Index::new("C:\\");
+        let users = idx.push(0, "Users", 0, 0, flags::DIR);
+        let me = idx.push(users, "me", 0, 0, flags::DIR);
+        let proj = idx.push(me, "proj", 0, 0, flags::DIR);
+        let nm = idx.push(proj, "node_modules", 0, 0, flags::DIR);
+        idx.push(nm, "a.js", 4096, 4096, 0);
+        idx.push(me, "movie.mp4", 9000, 9000, 0);
+        let win = idx.push(0, "Windows", 0, 0, flags::DIR);
+        idx.push(win, "x.dll", 100, 100, 0);
+        idx.compute_totals();
+        Scanned::new(idx, ScanStats::default(), "test".into())
+    }
+
+    #[test]
+    fn answers_ui_questions() {
+        let s = demo();
+        let l = s.list(0, 10).unwrap();
+        assert_eq!(l.total, 2);
+        assert_eq!(l.items[0].name, "Users");
+        assert!(s.list(999, 10).is_err());
+        let crumbs = s.crumbs(4).unwrap();
+        assert_eq!(crumbs.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["C:\\", "Users", "me", "proj", "node_modules"]);
+        assert!(s.view(0, 3).unwrap().len() > 3);
+        assert!(s.info(7).unwrap().protected.is_some(), "Windows is protected");
+        assert!(s.prepare_delete(7).is_err());
+        assert!(s.prepare_delete(4).is_ok(), "node_modules can be deleted");
+    }
+
+    #[test]
+    fn category_rows_drill_down() {
+        let s = demo();
+        let cats = s.cat_children("", 100).unwrap();
+        assert!(cats.iter().all(|r| r.key.starts_with("cat:") && r.has_children));
+        let total: u64 = cats.iter().map(|r| r.bytes).sum();
+        assert_eq!(total, s.summary().on_disk);
+        let dev = cats.iter().find(|r| r.name == "Dev stuff").unwrap();
+        let subs = s.cat_children(&dev.key, 100).unwrap();
+        let places = s.cat_children(&subs[0].key, 100).unwrap();
+        assert_eq!(places[0].name, "node_modules");
+        assert_eq!(places[0].node, Some(4));
+        assert!(s.cat_children("bogus", 1).is_err());
+    }
+
+    #[test]
+    fn apply_delete_updates_everything() {
+        let mut s = demo();
+        let before = s.summary();
+        s.apply_delete(4);
+        let after = s.summary();
+        assert_eq!(before.on_disk - after.on_disk, 4096);
+        assert_eq!(after.files, before.files - 1);
+        assert!(s.check(4).is_err());
+        assert!(s.cat_children("", 100).unwrap().iter().all(|r| r.name != "Dev stuff"));
+    }
+}

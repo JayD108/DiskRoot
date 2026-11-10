@@ -1,0 +1,12 @@
+[package]
+name = "xylem-session"
+description = "UI-agnostic engine API shared by the native and web UIs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+xylem-core.workspace = true
+xylem-scan-walk.workspace = true
+xylem-scan-mft.workspace = true
+serde.workspace = true

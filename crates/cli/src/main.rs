@@ -42,9 +42,6 @@ struct ScanArgs {
     /// Also write every file and folder to this CSV file
     #[arg(long)]
     export: Option<PathBuf>,
-    /// Save the scanned tree to this file (used by the app's admin helper)
-    #[arg(long)]
-    save_index: Option<PathBuf>,
     /// auto: read the MFT for whole NTFS drives when running as admin,
     /// otherwise walk folders
     #[arg(long, value_enum, default_value_t = ModeArg::Auto)]
@@ -99,14 +96,6 @@ fn run_scan(args: &ScanArgs) -> std::io::Result<()> {
     if let Some(path) = &args.export {
         export_csv(idx, path)?;
     }
-    if let Some(path) = &args.save_index {
-        check_index_path(path)?;
-        // create_new: never overwrite. This may run elevated, so a planted
-        // file or link at this path must make it fail, not overwrite.
-        let mut w = BufWriter::with_capacity(1 << 20, File::create_new(path)?);
-        idx.save(&s.stats, &mode_text, &mut w)?;
-        w.flush()?;
-    }
     let peak = sys::peak_memory_bytes().unwrap_or(0);
 
     if args.json {
@@ -147,23 +136,6 @@ fn run_scan(args: &ScanArgs) -> std::io::Result<()> {
     };
     print_table(&format!("Top {} folders (by {what})", folders.len()), &folders, true);
     print_table(&format!("Top {} files (by {what})", files.len()), &files, false);
-    Ok(())
-}
-
-/// `--save-index` exists for the app's admin helper, which runs elevated.
-/// Only allow writing `xylem-*.idx` directly inside the user's temp folder,
-/// so an elevated run can't be pointed at system locations.
-fn check_index_path(path: &Path) -> std::io::Result<()> {
-    let refuse = |why: &str| Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, why.to_owned()));
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if !(name.starts_with("xylem-") && name.ends_with(".idx")) {
-        return refuse("--save-index file must be named xylem-*.idx");
-    }
-    let parent = path.parent().map(std::fs::canonicalize).transpose()?;
-    let temp = std::fs::canonicalize(std::env::temp_dir())?;
-    if parent.as_deref() != Some(temp.as_path()) {
-        return refuse("--save-index file must be directly inside the temp folder");
-    }
     Ok(())
 }
 
@@ -221,17 +193,3 @@ fn print_table(title: &str, rows: &[Entry], with_files: bool) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn index_path_is_restricted_to_temp() {
-        let temp = std::env::temp_dir();
-        assert!(check_index_path(&temp.join("xylem-123-abc.idx")).is_ok());
-        assert!(check_index_path(&temp.join("evil.dll")).is_err(), "wrong name");
-        assert!(check_index_path(&temp.join("xylem-1.dll")).is_err(), "wrong extension");
-        assert!(check_index_path(Path::new(r"C:\Windows\xylem-1.idx")).is_err(), "outside temp");
-        assert!(check_index_path(&temp.join("sub").join("xylem-1.idx")).is_err(), "not directly in temp");
-    }
-}
