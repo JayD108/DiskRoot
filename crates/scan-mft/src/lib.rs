@@ -7,7 +7,7 @@
 //! folder-walk scanner otherwise.
 
 #[cfg(not(windows))]
-compile_error!("drishti-scan-mft only supports Windows");
+compile_error!("xylem-scan-mft only supports Windows");
 
 mod record;
 mod scan;
@@ -16,7 +16,7 @@ mod volume;
 use std::io;
 use std::path::Path;
 
-use drishti_core::Scan;
+use xylem_core::Scan;
 pub use scan::scan_drive;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,8 +59,8 @@ fn mft_error_reason(e: &io::Error) -> String {
 /// Scans `path` with the chosen mode.
 pub fn scan_auto(path: &Path, mode: Mode, threads: usize) -> io::Result<(Scan, Used)> {
     let walk = |reason: Option<String>| {
-        let opts = drishti_scan_walk::ScanOptions { threads };
-        drishti_scan_walk::scan(path, &opts).map(|s| (s, Used::Walk { fallback_reason: reason }))
+        let opts = xylem_scan_walk::ScanOptions { threads };
+        xylem_scan_walk::scan(path, &opts).map(|s| (s, Used::Walk { fallback_reason: reason }))
     };
     let letter = drive_letter(path);
     match (mode, letter) {

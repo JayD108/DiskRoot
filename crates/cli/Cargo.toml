@@ -1,17 +1,17 @@
 [package]
-name = "drishti-cli"
+name = "xylem-cli"
 description = "Command-line disk analyzer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "drishti"
+name = "xylem"
 path = "src/main.rs"
 
 [dependencies]
-drishti-core.workspace = true
-drishti-scan-walk.workspace = true
+xylem-core.workspace = true
+xylem-scan-walk.workspace = true
 clap.workspace = true
 serde_json.workspace = true
-drishti-scan-mft.workspace = true
+xylem-scan-mft.workspace = true

@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use crate::{Columns, Index, ScanStats, flags};
 
-const MAGIC: &[u8; 8] = b"DRSHIDX1";
+const MAGIC: &[u8; 8] = b"XYLMIDX1";
 /// Refuse absurd sizes from a corrupt file before allocating.
 const MAX_NODES: u64 = 1 << 32;
 const MAX_NAME_BYTES: u64 = 16 << 30;
@@ -74,7 +74,7 @@ impl Index {
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
         if &magic != MAGIC {
-            return Err(bad("not a drishti index"));
+            return Err(bad("not a xylem index"));
         }
         let mut head = [0u64; 7];
         for v in &mut head {
@@ -165,7 +165,7 @@ mod tests {
         assert!(Index::load_checked(&mut buf.as_slice(), buf.len() as u64).is_ok(), "exact length accepted");
         assert!(Index::load_checked(&mut buf.as_slice(), buf.len() as u64 + 1).is_err(), "length mismatch");
         let mut wrong = buf.clone();
-        wrong[0] = b'X';
+        wrong[0] ^= 0xFF; // any byte that differs from the magic
         assert!(Index::load(&mut wrong.as_slice()).is_err(), "bad magic");
         let mut huge = buf.clone();
         huge[8..16].copy_from_slice(&u64::MAX.to_le_bytes());

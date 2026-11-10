@@ -1,7 +1,7 @@
 # PRD: Visual Disk Analyzer for Windows
 
 **Owner:** Mrittunjay Dubey · **Status:** Draft v1 · **Date:** 10 Nov 2026
-**Working name:** TBD (ideas: *Drishti*, *DiskMap*)
+**Name:** Xylem (renamed from the working name "Drishti" on 10 Nov 2026)
 
 ---
 

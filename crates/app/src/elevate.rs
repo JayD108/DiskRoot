@@ -1,4 +1,4 @@
-//! Runs `drishti.exe` elevated (UAC prompt) to do a fast MFT scan, then
+//! Runs `xylem.exe` elevated (UAC prompt) to do a fast MFT scan, then
 //! loads the index file it writes. The app itself never runs as admin.
 
 use std::ffi::c_void;
@@ -7,7 +7,7 @@ use std::io::BufReader;
 use std::path::PathBuf;
 use std::ptr::null_mut;
 
-use drishti_core::{Index, ScanStats};
+use xylem_core::{Index, ScanStats};
 
 const SEE_MASK_NOCLOSEPROCESS: u32 = 0x0000_0040;
 const SW_HIDE: i32 = 0;
@@ -49,19 +49,19 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// `drishti.exe` next to the app.
+/// `xylem.exe` next to the app.
 ///
 /// Security: this exe is launched with admin rights, so its location must
-/// not be redirectable. The `DRISHTI_HELPER` override exists only in debug
+/// not be redirectable. The `XYLEM_HELPER` override exists only in debug
 /// builds. (An installer that puts the app in Program Files, where normal
 /// users can't replace files, plus code signing, closes the remaining gap.)
 fn helper_path() -> Result<PathBuf, String> {
     #[cfg(debug_assertions)]
-    if let Some(p) = std::env::var_os("DRISHTI_HELPER") {
+    if let Some(p) = std::env::var_os("XYLEM_HELPER") {
         return Ok(p.into());
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let p = exe.with_file_name("drishti.exe");
+    let p = exe.with_file_name("xylem.exe");
     if p.exists() { Ok(p) } else { Err(format!("Helper not found: {}", p.display())) }
 }
 
@@ -85,7 +85,7 @@ pub fn scan_with_helper(drive: &str) -> Result<(Index, ScanStats, String), Strin
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let out = std::env::temp_dir().join(format!("drishti-{}-{nanos:x}.idx", std::process::id()));
+    let out = std::env::temp_dir().join(format!("xylem-{}-{nanos:x}.idx", std::process::id()));
     let params = format!("scan {drive} --mode mft --top 0 --save-index \"{}\"", out.display());
 
     let (verb, file, args) = (wide("runas"), wide(&helper.to_string_lossy()), wide(&params));

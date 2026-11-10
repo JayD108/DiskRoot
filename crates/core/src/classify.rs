@@ -182,7 +182,7 @@ fn glob_ci(pattern: &str, text: &str) -> bool {
 }
 
 impl Rules {
-    /// The rules shipped with Drishti.
+    /// The rules shipped with Xylem.
     pub fn builtin() -> Self {
         Self::from_json(include_str!("rules.json")).expect("built-in rules.json is valid")
     }
@@ -396,7 +396,7 @@ impl Classification {
         self.bits[i] = MATCHED_HERE | if rule.weak { WEAK } else { 0 };
     }
 
-    /// Why `id` must not be deleted from Drishti, if it mustn't.
+    /// Why `id` must not be deleted from Xylem, if it mustn't.
     pub fn protection(&self, idx: &Index, rules: &Rules, id: u32) -> Option<String> {
         if id == 0 {
             return Some("This is the scanned folder itself.".into());
@@ -898,7 +898,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "speed benchmark: cargo test --release -p drishti-core -- --ignored --nocapture"]
+    #[ignore = "speed benchmark: cargo test --release -p xylem-core -- --ignored --nocapture"]
     fn classify_speed() {
         let rules = Rules::builtin();
         let mut idx = Index::new("C:\\");

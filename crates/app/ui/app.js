@@ -5,7 +5,7 @@
 // ---------------------------------------------------------------------------
 const tauri = window.__TAURI__;
 const invoke = (cmd, args) =>
-  tauri ? tauri.core.invoke(cmd, args) : Promise.reject(new Error('Open this page inside the Drishti app.'));
+  tauri ? tauri.core.invoke(cmd, args) : Promise.reject(new Error('Open this page inside the Xylem app.'));
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('canvas');
@@ -54,6 +54,7 @@ function fmtBytes(n) {
   return `${s} ${units[i]}`;
 }
 const fmtCount = (n) => n.toLocaleString('en-US');
+const fmtFiles = (n) => `${fmtCount(n)} ${n === 1 ? 'file' : 'files'}`;
 function fmtPct(part, whole) {
   if (!whole) return '0%';
   const p = (part / whole) * 100;
@@ -257,7 +258,7 @@ function drawSunburst(g) {
   ctx.fillText(fmtBytes(root.size), g.cx, g.cy + 4);
   ctx.font = `11px ${theme.font}`;
   ctx.fillStyle = theme.muted;
-  ctx.fillText(`${fmtCount(root.files)} files`, g.cx, g.cy + 24);
+  ctx.fillText(`${fmtFiles(root.files)}`, g.cx, g.cy + 24);
   if (canGoUp()) ctx.fillText('↑ up', g.cx, g.cy + 40);
 }
 
@@ -493,7 +494,7 @@ function listRows() {
 function renderList() {
   const root = state.view[0];
   $('sideTitle').textContent = root ? root.name : 'Nothing scanned yet';
-  $('sideSub').textContent = root ? `${fmtBytes(root.size)} on disk · ${fmtCount(root.files)} files` : '';
+  $('sideSub').textContent = root ? `${fmtBytes(root.size)} on disk · ${fmtFiles(root.files)}` : '';
   const total = root ? root.size : 0;
   const ol = $('list');
   ol.replaceChildren();
@@ -506,7 +507,7 @@ function renderList() {
     li.className = opens && !it.group ? 'dir' : '';
     const tags = (it.link ? '<span class="tag">link</span>' : '') + (it.cloud ? '<span class="tag">cloud</span>' : '');
     const icon = it.key ? ICON_CAT : it.dir ? ICON_DIR : ICON_FILE;
-    const sub = state.cmode === 'category' && it.hint ? escapeHtml(it.hint) : `${fmtPct(it.on_disk, total)}${it.dir || it.key ? ` · ${fmtCount(it.files)} files` : ''}`;
+    const sub = state.cmode === 'category' && it.hint ? escapeHtml(it.hint) : `${fmtPct(it.on_disk, total)}${it.dir || it.key ? ` · ${fmtFiles(it.files)}` : ''}`;
     const canDelete = it.id >= 0 && !it.key && !it.group && (state.cmode === 'category' || !it.protected);
     li.innerHTML =
       `<span class="cdot">${icon}${it.cat !== undefined && it.cat !== 255 ? catDot(it.cat) : ''}</span>` +
@@ -784,12 +785,12 @@ async function askDelete(id) {
     `<div class="path">${escapeHtml(info.path)}</div>` +
     `<div class="facts">` +
     `<span>Frees</span><b>${fmtBytes(info.on_disk)}</b>` +
-    (info.dir ? `<span>Contains</span><b>${fmtCount(info.files)} files</b>` : '') +
+    (info.dir ? `<span>Contains</span><b>${fmtFiles(info.files)}</b>` : '') +
     `<span>What it is</span><b>${catDot(info.cat)} ${escapeHtml(catLabel(info.cat, info.sub))}${safetyBadge(info.rule)}</b>` +
     `</div>` +
     (rule && rule.note ? `<div class="note">${escapeHtml(rule.note)}</div>` : '') +
     (info.protected
-      ? `<div class="warn">Drishti won't delete this. ${escapeHtml(info.protected)}</div>`
+      ? `<div class="warn">Xylem won't delete this. ${escapeHtml(info.protected)}</div>`
       : `<div class="note">It goes to the Recycle Bin, so you can restore it. If Windows can't recycle it (too big for the bin), Windows will ask before deleting it permanently.</div>`);
   $('mOk').classList.toggle('hidden', !!info.protected);
   $('mCancel').textContent = info.protected ? 'Close' : 'Cancel';

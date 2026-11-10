@@ -770,63 +770,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "drishti-app"
-version = "0.1.0"
-dependencies = [
- "drishti-core",
- "drishti-scan-mft",
- "drishti-scan-walk",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
-]
-
-[[package]]
-name = "drishti-bench"
-version = "0.1.0"
-dependencies = [
- "clap",
- "drishti-core",
- "drishti-scan-mft",
- "drishti-scan-walk",
-]
-
-[[package]]
-name = "drishti-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "drishti-core",
- "drishti-scan-mft",
- "drishti-scan-walk",
- "serde_json",
-]
-
-[[package]]
-name = "drishti-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "drishti-scan-mft"
-version = "0.1.0"
-dependencies = [
- "drishti-core",
- "drishti-scan-walk",
-]
-
-[[package]]
-name = "drishti-scan-walk"
-version = "0.1.0"
-dependencies = [
- "drishti-core",
-]
-
-[[package]]
 name = "dtoa"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4519,6 +4462,63 @@ dependencies = [
  "libc",
  "once_cell",
  "pkg-config",
+]
+
+[[package]]
+name = "xylem-app"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "xylem-core",
+ "xylem-scan-mft",
+ "xylem-scan-walk",
+]
+
+[[package]]
+name = "xylem-bench"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "xylem-core",
+ "xylem-scan-mft",
+ "xylem-scan-walk",
+]
+
+[[package]]
+name = "xylem-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "serde_json",
+ "xylem-core",
+ "xylem-scan-mft",
+ "xylem-scan-walk",
+]
+
+[[package]]
+name = "xylem-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "xylem-scan-mft"
+version = "0.1.0"
+dependencies = [
+ "xylem-core",
+ "xylem-scan-walk",
+]
+
+[[package]]
+name = "xylem-scan-walk"
+version = "0.1.0"
+dependencies = [
+ "xylem-core",
 ]
 
 [[package]]

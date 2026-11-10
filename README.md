@@ -1,8 +1,8 @@
-# Drishti: a fast, visual disk analyzer for Windows
+# Xylem: a fast, visual disk analyzer for Windows
 
-*(Drishti is a working name.)* Drishti answers the questions people ask when their drive is full: **where** is the space going, **what** is it, and *(soon)* **what changed**. It scans a whole drive in about a second and draws the result as an interactive sunburst or treemap.
+*(Xylem is a working name.)* Xylem answers the questions people ask when their drive is full: **where** is the space going, **what** is it, and *(soon)* **what changed**. It scans a whole drive in about a second and draws the result as an interactive sunburst or treemap.
 
-| On the author's laptop (C:, 1.56 TB used, 1.77M files) | Drishti | WizTree 4.33 |
+| On the author's laptop (C:, 1.56 TB used, 1.77M files) | Xylem | WizTree 4.33 |
 |---|---|---|
 | Full scan + CSV export, as admin | **1.7–1.8 s** | 12.5–15.8 s |
 | Peak RAM | **290 MB** | 844 MB |
@@ -16,11 +16,11 @@ WizTree was used only as a black box: run normally and timed. Its license forbid
 ## 1. Quick start
 
 ```powershell
-cd "C:\Users\Mrittunjay Dubey\Storage\drishti"
+cd "C:\Users\Mrittunjay Dubey\Storage\xylem"
 cargo build --release --workspace
 
-.\target\release\drishti-app.exe                  # the desktop app
-.\target\release\drishti.exe scan C: --top 20     # command line
+.\target\release\xylem-app.exe                  # the desktop app
+.\target\release\xylem.exe scan C: --top 20     # command line
 ```
 
 In the app, pick a drive and press **Scan**. For a whole NTFS drive, press **Fast scan (admin)**: Windows asks for permission once, then the scan takes about a second.
@@ -35,13 +35,13 @@ The command line also offers:
 ## 2. The big picture
 
 ```
-                    ┌──────────────── drishti-app.exe (normal user) ────────────────┐
+                    ┌──────────────── xylem-app.exe (normal user) ────────────────┐
  You ── clicks ───► │  UI (HTML/JS, Canvas)  ◄── small JSON views ──  Rust backend   │
                     │   sunburst · treemap · list                    holds the Index │
                     └───────────────▲────────────────────────────────────┬──────────┘
                                     │ loads index file                   │ "Fast scan"
                                     │                                    ▼ (UAC prompt)
-                    ┌───────────────┴─── drishti.exe (admin, short-lived) ──────────┐
+                    ┌───────────────┴─── xylem.exe (admin, short-lived) ──────────┐
                     │  MFT reader: raw disk ─► parse records ─► tree ─► save index   │
                     └────────────────────────────────────────────────────────────────┘
  Without admin:  the app itself runs the folder-walk scanner (no prompt).
@@ -126,13 +126,13 @@ Other pieces in `core`:
 - Colors: each top-level branch gets a hue, and deeper levels and siblings get small shade shifts.
 
 **Admin helper flow (`src/elevate.rs`):**
-1. The app picks a random name `%TEMP%\drishti-<pid>-<time>.idx`.
-2. It runs `drishti.exe scan C: --mode mft --save-index <that file>` through `ShellExecuteExW("runas")`, which shows the UAC prompt, and waits.
+1. The app picks a random name `%TEMP%\xylem-<pid>-<time>.idx`.
+2. It runs `xylem.exe scan C: --mode mft --save-index <that file>` through `ShellExecuteExW("runas")`, which shows the UAC prompt, and waits.
 3. It loads the file, checking its length against the header, then deletes it.
 
 ## 6. Accuracy rules
 
-| Situation | What Drishti does |
+| Situation | What Xylem does |
 |---|---|
 | Hardlinks (one file, several names) | MFT mode counts it once. The folder walk can't tell, so it counts each name (like other tools). |
 | Compressed / sparse / CompactOS files | Size on disk = bytes actually used |
@@ -144,9 +144,9 @@ Other pieces in `core`:
 ## 7. Security model
 - **The app never runs as admin.** Only the short-lived helper does, and only after you approve the UAC prompt.
 - **The helper writes only where it should:**
-  - `--save-index` accepts only a `drishti-*.idx` file directly in your temp folder.
+  - `--save-index` accepts only a `xylem-*.idx` file directly in your temp folder.
   - It creates the file *new* (`create_new`), so a planted file or link makes it fail rather than overwrite something.
-- **The helper's location can't be redirected.** It's always `drishti.exe` next to the app; the `DRISHTI_HELPER` override exists only in debug builds.
+- **The helper's location can't be redirected.** It's always `xylem.exe` next to the app; the `XYLEM_HELPER` override exists only in debug builds.
   - Remaining gap: if the app folder is writable by normal users, someone could swap the helper. The fix is an installer into Program Files plus code signing.
 - **All parsing of disk data and index files is bounds-checked** and validated in safe Rust, and corrupt input is rejected.
 - **The UI:**
@@ -157,13 +157,13 @@ Other pieces in `core`:
 ## 8. Project layout
 
 ```
-drishti/
+xylem/
 ├─ crates/
 │  ├─ core/        Index, store (save/load), view (pruning), report, format, win (attribute flags)
 │  ├─ scan-walk/   folder-walk scanner (Windows FFI in ffi.rs, logic in walker.rs)
 │  ├─ scan-mft/    MFT reader: volume.rs (disk), record.rs (parsing), scan.rs (pipeline + tree)
-│  ├─ cli/         drishti.exe (also the admin helper)
-│  ├─ bench/       drishti-bench.exe: gen | run | time | verify | modes
+│  ├─ cli/         xylem.exe (also the admin helper)
+│  ├─ bench/       xylem-bench.exe: gen | run | time | verify | modes
 │  └─ app/         Tauri app: src/ (Rust backend), ui/ (HTML/CSS/JS), icons/
 ├─ tools/          benchmark + UI-test scripts (see below)
 └─ docs/           PRD.md, TECHSTACK.md, DEVLOG.md (history), HANDOFF.md (start here)
@@ -174,11 +174,11 @@ drishti/
 ```powershell
 cargo test --workspace                     # unit + integration tests
 cargo clippy --workspace --all-targets     # lint (kept at zero warnings)
-cargo test --release -p drishti-scan-mft -- --ignored --nocapture   # tree-build speed benchmark
+cargo test --release -p xylem-scan-mft -- --ignored --nocapture   # tree-build speed benchmark
 
-.\target\release\drishti-bench.exe verify "C:\Program Files"   # exact match vs a plain std::fs walk
-.\target\release\drishti-bench.exe run C: --runs 5             # timing
-.\target\release\drishti-bench.exe modes C:                    # MFT vs walk, folder by folder (admin)
+.\target\release\xylem-bench.exe verify "C:\Program Files"   # exact match vs a plain std::fs walk
+.\target\release\xylem-bench.exe run C: --runs 5             # timing
+.\target\release\xylem-bench.exe modes C:                    # MFT vs walk, folder by folder (admin)
 .\tools\admin-bench.ps1                                        # all admin benchmarks + WizTree (admin shell)
 ```
 

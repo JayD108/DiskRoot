@@ -23,8 +23,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, mpsc};
 use std::thread;
 use std::time::Instant;
 
-use drishti_core::win::{FILE_ATTRIBUTE_REPARSE_POINT, node_flags};
-use drishti_core::{Index, Scan, ScanStats, flags};
+use xylem_core::win::{FILE_ATTRIBUTE_REPARSE_POINT, node_flags};
+use xylem_core::{Index, Scan, ScanStats, flags};
 
 use crate::ffi::*;
 
@@ -221,6 +221,21 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> io::Result<Scan> {
     Ok(Scan { index, stats })
 }
 
+/// Expands 8.3 short names ("MRITTU~1") to the real folder names, so paths
+/// shown to the user and matched by classification rules are the real ones.
+/// Falls back to the input if Windows can't resolve it.
+fn long_form(p: PathBuf) -> PathBuf {
+    let Ok(c) = std::fs::canonicalize(&p) else { return p };
+    let s = c.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        c
+    }
+}
+
 /// Returns (display path, NT path like `\??\C:\` as UTF-16) for the scan root.
 fn prepare_root(root: &Path) -> io::Result<(String, Vec<u16>)> {
     // "C:" on its own means "current folder on C:"; users mean the drive root.
@@ -229,7 +244,7 @@ fn prepare_root(root: &Path) -> io::Result<(String, Vec<u16>)> {
         Some(s) if s.len() == 2 && s.ends_with(':') => PathBuf::from(format!("{s}\\")),
         _ => root.to_path_buf(),
     };
-    let abs = std::path::absolute(&root)?;
+    let abs = long_form(std::path::absolute(&root)?);
     if !std::fs::metadata(&abs)?.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -413,7 +428,7 @@ fn rd_u64(b: &[u8], at: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use drishti_core::win::FILE_ATTRIBUTE_DIRECTORY;
+    use xylem_core::win::FILE_ATTRIBUTE_DIRECTORY;
 
     #[test]
     fn parses_a_synthetic_buffer() {

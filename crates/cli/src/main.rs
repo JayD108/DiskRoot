@@ -4,14 +4,14 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use drishti_core::format::{bytes, count};
-use drishti_core::{Index, NO_PARENT};
-use drishti_core::report::{self, Entry, SortBy};
-use drishti_scan_mft::{Mode, Used, scan_auto};
-use drishti_scan_walk::{default_threads, sys};
+use xylem_core::format::{bytes, count};
+use xylem_core::{Index, NO_PARENT};
+use xylem_core::report::{self, Entry, SortBy};
+use xylem_scan_mft::{Mode, Used, scan_auto};
+use xylem_scan_walk::{default_threads, sys};
 
 #[derive(Parser)]
-#[command(name = "drishti", version, about = "Fast disk space analyzer for Windows")]
+#[command(name = "xylem", version, about = "Fast disk space analyzer for Windows")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -151,13 +151,13 @@ fn run_scan(args: &ScanArgs) -> std::io::Result<()> {
 }
 
 /// `--save-index` exists for the app's admin helper, which runs elevated.
-/// Only allow writing `drishti-*.idx` directly inside the user's temp folder,
+/// Only allow writing `xylem-*.idx` directly inside the user's temp folder,
 /// so an elevated run can't be pointed at system locations.
 fn check_index_path(path: &Path) -> std::io::Result<()> {
     let refuse = |why: &str| Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, why.to_owned()));
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if !(name.starts_with("drishti-") && name.ends_with(".idx")) {
-        return refuse("--save-index file must be named drishti-*.idx");
+    if !(name.starts_with("xylem-") && name.ends_with(".idx")) {
+        return refuse("--save-index file must be named xylem-*.idx");
     }
     let parent = path.parent().map(std::fs::canonicalize).transpose()?;
     let temp = std::fs::canonicalize(std::env::temp_dir())?;
@@ -228,10 +228,10 @@ mod tests {
     #[test]
     fn index_path_is_restricted_to_temp() {
         let temp = std::env::temp_dir();
-        assert!(check_index_path(&temp.join("drishti-123-abc.idx")).is_ok());
+        assert!(check_index_path(&temp.join("xylem-123-abc.idx")).is_ok());
         assert!(check_index_path(&temp.join("evil.dll")).is_err(), "wrong name");
-        assert!(check_index_path(&temp.join("drishti-1.dll")).is_err(), "wrong extension");
-        assert!(check_index_path(Path::new(r"C:\Windows\drishti-1.idx")).is_err(), "outside temp");
-        assert!(check_index_path(&temp.join("sub").join("drishti-1.idx")).is_err(), "not directly in temp");
+        assert!(check_index_path(&temp.join("xylem-1.dll")).is_err(), "wrong extension");
+        assert!(check_index_path(Path::new(r"C:\Windows\xylem-1.idx")).is_err(), "outside temp");
+        assert!(check_index_path(&temp.join("sub").join("xylem-1.idx")).is_err(), "not directly in temp");
     }
 }

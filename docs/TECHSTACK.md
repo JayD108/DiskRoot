@@ -206,7 +206,7 @@ That's about 40–60 bytes per node including the name, so **1M files ≈ 50–8
 - **Timeline chart (E3):** drive totals and per-category totals from each snapshot.
 - **Output beyond the app:**
   - **Self-contained HTML report:** one file with an interactive sunburst and top lists, so you can send it to someone. No competitor offers this for free.
-  - CLI: `drishti scan C: --json | --csv | --top 50 | --diff last`
+  - CLI: `xylem scan C: --json | --csv | --top 50 | --diff last`
   - **"Reclaimable now" summary:** "You can safely free 23.4 GB: node_modules 9.1 GB, npm cache 3.2 GB, Temp 2.8 GB…"
 
 ---
@@ -237,7 +237,7 @@ That's about 40–60 bytes per node including the name, so **1M files ≈ 50–8
 ## 10. Project layout
 
 ```
-drishti/
+xylem/
 ├─ crates/
 │  ├─ core/        # index, aggregation, classifier, snapshot, diff, layout
 │  ├─ scan-mft/    # raw MFT reader (used by helper)

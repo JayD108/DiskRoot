@@ -1,4 +1,4 @@
-//! Drishti desktop app: Tauri backend.
+//! Xylem desktop app: Tauri backend.
 //!
 //! Holds the scanned tree, its classification and category totals in
 //! memory, and answers small queries from the UI: a pruned view for the
@@ -14,10 +14,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, RwLock};
 use std::time::Instant;
 
-use drishti_core::classify::{CATEGORIES, CatCrumb, CatKey, CatModel, CatStats, Category, Classification, RuleInfo, Rules, SubType};
-use drishti_core::view::{Children, ViewLimits, ViewNode, ancestors, build_view};
-use drishti_core::{Index, ScanStats, flags};
-use drishti_scan_mft::{Mode, Used, scan_auto};
+use xylem_core::classify::{CATEGORIES, CatCrumb, CatKey, CatModel, CatStats, Category, Classification, RuleInfo, Rules, SubType};
+use xylem_core::view::{Children, ViewLimits, ViewNode, ancestors, build_view};
+use xylem_core::{Index, ScanStats, flags};
+use xylem_scan_mft::{Mode, Used, scan_auto};
 use serde::Serialize;
 use tauri::State;
 
@@ -31,6 +31,8 @@ struct Loaded {
     stats: ScanStats,
     mode: String,
     classify_ms: f64,
+    /// Folders deleted through Xylem (files come from the live totals).
+    removed_dirs: u64,
 }
 
 impl Loaded {
@@ -40,7 +42,7 @@ impl Loaded {
         let cls = Classification::run(&index, &RULES);
         let cats = CatStats::compute(&index, &cls, RULES.subs.len());
         let classify_ms = t.elapsed().as_secs_f64() * 1000.0;
-        Self { index, children, cls, cats, stats, mode, classify_ms }
+        Self { index, children, cls, cats, stats, mode, classify_ms, removed_dirs: 0 }
     }
 
     fn model(&self) -> CatModel<'_> {
@@ -108,14 +110,15 @@ struct Summary {
 
 fn summary(l: &Loaded) -> Summary {
     let total: u64 = l.cats.cat_total.iter().sum();
-    let other = l.cats.cat_total[drishti_core::classify::CAT_OTHER as usize];
+    let other = l.cats.cat_total[xylem_core::classify::CAT_OTHER as usize];
     Summary {
         root: l.index.name(0).to_owned(),
         mode: l.mode.clone(),
         elapsed_ms: l.stats.elapsed.as_secs_f64() * 1000.0,
         classify_ms: l.classify_ms,
-        files: l.stats.files,
-        dirs: l.stats.dirs,
+        // Live counts, so they stay right after deleting things.
+        files: u64::from(l.index.files(0)),
+        dirs: l.stats.dirs.saturating_sub(l.removed_dirs),
         unreadable: l.stats.unreadable,
         size: l.index.size(0),
         on_disk: l.index.alloc(0),
@@ -162,7 +165,7 @@ fn mode_text(used: &Used) -> String {
 #[tauri::command]
 async fn scan(state: State<'_, AppState>, path: String) -> Result<Summary, String> {
     let loaded = tauri::async_runtime::spawn_blocking(move || {
-        let threads = drishti_scan_walk::default_threads();
+        let threads = xylem_scan_walk::default_threads();
         let (s, used) = scan_auto(Path::new(&path), Mode::Auto, threads).map_err(|e| format!("Scan failed: {e}"))?;
         Ok::<_, String>(Loaded::new(s.index, s.stats, mode_text(&used)))
     })
@@ -326,7 +329,7 @@ fn item_info(l: &Loaded, node: u32) -> ItemInfo {
         sub: l.cls.sub[i],
         rule: l.cls.rule[i],
         protected: l.cls.protection(idx, &RULES, node),
-        folder: if idx.is_dir(node) || parent == drishti_core::NO_PARENT { node } else { parent },
+        folder: if idx.is_dir(node) || parent == xylem_core::NO_PARENT { node } else { parent },
     }
 }
 
@@ -364,6 +367,13 @@ async fn delete(state: State<'_, AppState>, node: u32) -> Result<DeleteOut, Stri
         return Ok(DeleteOut { freed: 0, name, cancelled: true });
     }
     state.write(|l| {
+        let mut stack = vec![node];
+        while let Some(x) = stack.pop() {
+            if l.index.is_dir(x) && l.index.flags(x) & flags::DELETED == 0 {
+                l.removed_dirs += 1;
+            }
+            stack.extend(l.children.live(&l.index, x));
+        }
         l.index.remove_subtree(node, &l.children);
         l.cats = CatStats::compute(&l.index, &l.cls, RULES.subs.len());
         Ok(())
@@ -408,5 +418,5 @@ fn main() {
             reveal
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Drishti");
+        .expect("error while running Xylem");
 }

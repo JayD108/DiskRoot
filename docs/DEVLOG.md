@@ -35,7 +35,7 @@ More threads were slower: P/E cores plus NTFS contention.
 
 ### WizTree head-to-head (both writing a full CSV)
 
-| Mode | WizTree | drishti |
+| Mode | WizTree | xylem |
 |---|---|---|
 | User | 26–30 s, 790 MB | 4.0–4.9 s, 117 MB |
 | Admin | 15–18 s, 844 MB | 4.1–6.4 s, 165 MB (still folder walk at that point) |
@@ -49,7 +49,7 @@ Accuracy vs WizTree: 279/309 top-level folders exact. The 12 GB gap was System V
   - About 0.36 s of that is the first raw MFT read (likely NTFS flushing its cache, which can't be avoided).
   - Read+parse runs at ~3.2 GB/s, the SSD's limit.
 - **Accuracy:** MFT on-disk total 1,557.98 GB vs Windows used space ~1,558.2 GB. The folder walk says 1,563.9 GB and WizTree 1,583 GB, because both count hardlinks once per name.
-- Head-to-head (admin, CSV): **drishti 1.68–1.82 s, 290 MB vs WizTree 12.5–15.8 s, 844 MB**.
+- Head-to-head (admin, CSV): **xylem 1.68–1.82 s, 290 MB vs WizTree 12.5–15.8 s, 844 MB**.
 
 ### Speed round 2
 - Synthetic `build_tree` benchmark (1.77M records, random parents): 0.705 s → **0.209 s**.
@@ -60,7 +60,7 @@ Accuracy vs WizTree: 279/309 top-level folders exact. The 12 GB gap was System V
 ### Phase 3: Tauri app (`crates/app`)
 - Vanilla HTML/JS/CSS UI with no build step: Canvas 2D sunburst, squarified treemap, side list, breadcrumbs, tooltip.
 - Rust sends only a pruned view: depth ≤ 6, items under 0.2% grouped, at most 120 children per folder.
-- Admin fast scan: `ShellExecuteExW("runas")` runs `drishti.exe scan C: --mode mft --save-index <temp>`, then the app loads the validated index.
+- Admin fast scan: `ShellExecuteExW("runas")` runs `xylem.exe scan C: --mode mft --save-index <temp>`, then the app loads the validated index.
 - Verified with window-only screenshots plus UI Automation (`tools/ui-*.ps1`): sunburst, treemap, the admin flow end to end (1.29 s), and the folder-only error toast.
 - Fixed:
   - The full-ring seam line.
@@ -71,9 +71,9 @@ Accuracy vs WizTree: 279/309 top-level folders exact. The 12 GB gap was System V
 ### Review pass (before Phase 4)
 - **Security, elevated helper:**
   - `--save-index` uses `create_new` (no overwrite through planted links).
-  - The path must be `drishti-*.idx` directly in `%TEMP%`.
+  - The path must be `xylem-*.idx` directly in `%TEMP%`.
   - The app uses a random file name and loads with a header-vs-file-length check.
-  - The `DRISHTI_HELPER` override works in debug builds only.
+  - The `XYLEM_HELPER` override works in debug builds only.
 - **UI:**
   - A navigation sequence token, so stale responses can't overwrite newer ones.
   - The list says "+ N smaller items not listed" when cut at 400.

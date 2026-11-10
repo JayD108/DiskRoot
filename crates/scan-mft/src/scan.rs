@@ -17,8 +17,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Instant;
 
-use drishti_core::win::{FILE_ATTRIBUTE_DIRECTORY, node_flags};
-use drishti_core::{Columns, Index, NO_PARENT, Scan, ScanStats, flags};
+use xylem_core::win::{FILE_ATTRIBUTE_DIRECTORY, node_flags};
+use xylem_core::{Columns, Index, NO_PARENT, Scan, ScanStats, flags};
 
 use crate::record::{NO_REC, Parsed, parse_record};
 use crate::volume::{AlignedBuf, Extent, Volume, VolumeInfo, mft_extents};
@@ -97,7 +97,7 @@ pub fn scan_drive(letter: char, threads: usize) -> io::Result<Scan> {
     let t_read = start.elapsed();
     let (index, mut stats) = build_tree(letter, chunks, total as usize);
     stats.elapsed = start.elapsed();
-    if std::env::var_os("DRISHTI_TRACE").is_some() {
+    if std::env::var_os("XYLEM_TRACE").is_some() {
         eprintln!(
             "[mft] {} records, {} MB MFT, {} extents, {} jobs, {threads} threads: open {:.3} s, boot {:.3} s, extents {:.3} s, read+parse {:.3} s, build {:.3} s",
             total,
@@ -154,7 +154,7 @@ fn get<'a>(chunks: &'a [ChunkOut], slot: &[u64], rec: u32) -> Option<&'a Parsed>
 }
 
 fn build_tree(letter: char, mut chunks: Vec<ChunkOut>, total: usize) -> (Index, ScanStats) {
-    let trace = std::env::var_os("DRISHTI_TRACE").is_some();
+    let trace = std::env::var_os("XYLEM_TRACE").is_some();
     let t0 = Instant::now();
     let lap = |what: &str| {
         if trace {
@@ -403,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "speed benchmark: cargo test --release -p drishti-scan-mft -- --ignored --nocapture"]
+    #[ignore = "speed benchmark: cargo test --release -p xylem-scan-mft -- --ignored --nocapture"]
     fn build_speed() {
         let n = 1_770_000;
         let mut best = f64::MAX;

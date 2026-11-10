@@ -1,17 +1,17 @@
 # Usage (admin PowerShell for -Admin): .\tools\compare-wiztree.ps1 [-Admin] [-Runs 3]
-# Results: %TEMP%\drishti-tools\compare-<mode>.txt
+# Results: %TEMP%\xylem-tools\compare-<mode>.txt
 param([switch]$Admin, [int]$Runs = 3)
-# Times WizTree and drishti the same way: wall clock from process start to
+# Times WizTree and xylem the same way: wall clock from process start to
 # exit, plus peak RAM, sampled every 20 ms. One warm-up run each first.
 
-$dir     = Join-Path $env:TEMP "drishti-tools"
+$dir     = Join-Path $env:TEMP "xylem-tools"
 New-Item -ItemType Directory -Force $dir | Out-Null
 $mode    = if ($Admin) { "admin" } else { "user" }
 $out     = Join-Path $dir "compare-$mode.txt"
 $wiztree = "C:\Program Files\WizTree\WizTree64.exe"
-$drishti = Join-Path (Split-Path -Parent $PSScriptRoot) "target\release\drishti.exe"
+$xylem = Join-Path (Split-Path -Parent $PSScriptRoot) "target\release\xylem.exe"
 $wtCsv   = Join-Path $dir "wt-$mode.csv"
-$drOut   = Join-Path $dir "drishti-$mode.txt"
+$drOut   = Join-Path $dir "xylem-$mode.txt"
 $adminArg = if ($Admin) { "/admin=1" } else { "/admin=0" }
 
 function Measure-Run($exe, $argList, $stdout) {
@@ -35,7 +35,7 @@ $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIde
 
 $tools = @(
     @{ Name = "WizTree"; Exe = $wiztree; Args = @("C:", "/export=`"$wtCsv`"", $adminArg); Out = $null },
-    @{ Name = "drishti"; Exe = $drishti; Args = @("scan", "C:", "--top", "50", "--export", "`"$(Join-Path $dir "dr-$mode.csv")`""); Out = $drOut }
+    @{ Name = "xylem"; Exe = $xylem; Args = @("scan", "C:", "--top", "50", "--export", "`"$(Join-Path $dir "dr-$mode.csv")`""); Out = $drOut }
 )
 foreach ($t in $tools) { $null = Measure-Run $t.Exe $t.Args $t.Out }   # warm-up
 for ($i = 1; $i -le $Runs; $i++) {

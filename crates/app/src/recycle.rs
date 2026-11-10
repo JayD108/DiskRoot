@@ -3,7 +3,7 @@
 //! Uses SHFileOperationW with FOF_ALLOWUNDO (Recycle Bin, never a permanent
 //! delete) and FOF_WANTNUKEWARNING: if something can't go to the Recycle Bin
 //! (too big, network drive...), Windows itself asks before deleting it
-//! permanently. Drishti has already asked the user, so the normal
+//! permanently. Xylem has already asked the user, so the normal
 //! "are you sure" prompt is skipped (FOF_NOCONFIRMATION).
 
 use std::ffi::c_void;
@@ -81,16 +81,16 @@ mod tests {
     fn refuses_bad_paths() {
         assert!(to_recycle_bin(Path::new("relative\\x")).is_err());
         assert!(to_recycle_bin(Path::new("C:\\a*b")).is_err());
-        assert!(to_recycle_bin(Path::new("C:\\definitely-not-here-drishti-test")).is_err());
+        assert!(to_recycle_bin(Path::new("C:\\definitely-not-here-xylem-test")).is_err());
     }
 
     /// Really moves a temp file to the Recycle Bin, so it's opt-in:
-    /// cargo test -p drishti-app -- --ignored recycles_a_temp_file
+    /// cargo test -p xylem-app -- --ignored recycles_a_temp_file
     #[test]
     #[ignore = "puts a small test file in the user's Recycle Bin"]
     fn recycles_a_temp_file() {
-        let p = std::env::temp_dir().join(format!("drishti-recycle-test-{}.txt", std::process::id()));
-        std::fs::write(&p, b"drishti test file - safe to delete").unwrap();
+        let p = std::env::temp_dir().join(format!("xylem-recycle-test-{}.txt", std::process::id()));
+        std::fs::write(&p, b"xylem test file - safe to delete").unwrap();
         assert!(matches!(to_recycle_bin(&p), Ok(Outcome::Recycled)));
         assert!(!p.exists());
     }

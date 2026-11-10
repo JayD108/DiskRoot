@@ -5,8 +5,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use drishti_core::{Index, flags};
-use drishti_scan_walk::{ScanOptions, scan};
+use xylem_core::{Index, flags};
+use xylem_scan_walk::{ScanOptions, scan};
 
 struct TempTree(PathBuf);
 
@@ -29,7 +29,7 @@ fn find(idx: &Index, name: &str) -> u32 {
 }
 
 fn build_tree(tag: &str) -> TempTree {
-    let root = std::env::temp_dir().join(format!("drishti-test-{tag}-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("xylem-test-{tag}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("a").join("b")).unwrap();
     fs::create_dir_all(root.join("empty")).unwrap();

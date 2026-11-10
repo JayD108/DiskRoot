@@ -1,6 +1,6 @@
-"""Compare folder sizes in WizTree's CSV vs drishti's CSV (top 2 levels).
+"""Compare folder sizes in WizTree's CSV vs xylem's CSV (top 2 levels).
 
-Usage: python tools/compare-csv.py wiztree.csv drishti.csv
+Usage: python tools/compare-csv.py wiztree.csv xylem.csv
 """
 import csv
 import sys
@@ -24,7 +24,7 @@ def load_wiztree(path):
     return out
 
 
-def load_drishti(path):
+def load_xylem(path):
     out = {}
     with open(path, encoding="utf-8", errors="replace", newline="") as f:
         for row in csv.DictReader(f):
@@ -33,7 +33,7 @@ def load_drishti(path):
     return out
 
 
-wt, dr = load_wiztree(wt_path), load_drishti(dr_path)
+wt, dr = load_wiztree(wt_path), load_xylem(dr_path)
 gb = 1024 ** 3
 rows = []
 for p in set(wt) | set(dr):
@@ -43,13 +43,13 @@ for p in set(wt) | set(dr):
 rows.sort(reverse=True)
 
 wroot, droot = wt.get("c:"), dr.get("c:")
-print(f"Whole drive  WizTree: {wroot[0]/gb:,.2f} GB, {wroot[2]:,} files | drishti: {droot[0]/gb:,.2f} GB, {droot[2]:,} files")
+print(f"Whole drive  WizTree: {wroot[0]/gb:,.2f} GB, {wroot[2]:,} files | xylem: {droot[0]/gb:,.2f} GB, {droot[2]:,} files")
 print(f"Folders compared (top {MAX_DEPTH} levels): {len(rows)}")
 exact = sum(1 for r in rows if r[2] and r[3] and r[2][0] == r[3][0] and r[2][2] == r[3][2])
 within = sum(1 for r in rows if r[2] and r[3] and abs(r[2][0] - r[3][0]) <= max(1, 0.001 * r[2][0]))
 print(f"Exact match (size + file count): {exact}/{len(rows)}   within 0.1%: {within}/{len(rows)}")
 print("\nBiggest differences (logical size):")
-print(f"{'WizTree':>12} {'drishti':>12} {'diff':>10}  files(wt/dr)        path")
+print(f"{'WizTree':>12} {'xylem':>12} {'diff':>10}  files(wt/dr)        path")
 for diff, p, w, d in rows[:15]:
     if diff == 0:
         break

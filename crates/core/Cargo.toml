@@ -1,5 +1,5 @@
 [package]
-name = "drishti-core"
+name = "xylem-core"
 description = "Flat file-tree index, size roll-up and reports"
 version.workspace = true
 edition.workspace = true

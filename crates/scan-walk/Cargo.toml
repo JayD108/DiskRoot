@@ -1,9 +1,9 @@
 ﻿[package]
-name = "drishti-scan-walk"
+name = "xylem-scan-walk"
 description = "Parallel user-mode folder scanner for Windows (no admin needed)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-drishti-core.workspace = true
+xylem-core.workspace = true
