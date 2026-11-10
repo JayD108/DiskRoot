@@ -1,147 +1,192 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Xylem: UI prototype</title>
+  <title>Xylem: UI prototype v2</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <!-- ============ Header ============ -->
-  <header class="header">
-    <div class="brand" aria-label="Xylem">
-      <!-- Logo: cross-section of a vascular bundle; rings of vessel cells around the pith -->
-      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
-        <circle cx="16" cy="16" r="14.5" fill="none" stroke="var(--c-ai)" stroke-width="1.6" opacity=".55"/>
-        <circle cx="16" cy="16" r="10.5" fill="none" stroke="var(--c-dev)" stroke-width="1.6" opacity=".8"/>
-        <circle cx="16" cy="16" r="3.4" fill="var(--text)"/>
-        <circle cx="16" cy="6.2" r="1.9" fill="var(--c-dev)"/>
-        <circle cx="24.5" cy="11" r="1.6" fill="var(--c-media)"/>
-        <circle cx="24.5" cy="21" r="1.9" fill="var(--c-temp)"/>
-        <circle cx="16" cy="25.8" r="1.6" fill="var(--c-ai)"/>
-        <circle cx="7.5" cy="21" r="1.9" fill="var(--c-system)"/>
-        <circle cx="7.5" cy="11" r="1.6" fill="var(--c-dev)"/>
+  <!-- The page shows the app inside a desktop window so it can be judged as a program. -->
+  <div class="window" id="win">
+
+    <!-- Title bar -->
+    <div class="titlebar">
+      <svg class="app-icon" viewBox="0 0 16 16" aria-hidden="true">
+        <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <circle cx="8" cy="8" r="4.2" fill="none" stroke="var(--accent)" stroke-width="1.2"/>
+        <circle cx="8" cy="8" r="1.6" fill="currentColor"/>
       </svg>
-      <span class="wordmark">xylem</span>
-    </div>
-
-    <label class="drive" title="Drive to scan">
-      <span class="sr-only">Drive</span>
-      <select id="drive">
-        <option value="C">C:&nbsp;&nbsp;Windows</option>
-        <option value="D">D:&nbsp;&nbsp;Data</option>
-      </select>
-      <span class="drive-meter" aria-hidden="true"><i style="width:82%"></i></span>
-      <span class="drive-meta num">1.53 / 1.86 TB</span>
-    </label>
-
-    <div class="actions">
-      <button class="btn ghost" id="scanBtn" type="button">Scan</button>
-      <button class="btn primary" id="fastBtn" type="button" title="Reads the drive's Master File Table directly, read-only. Windows asks for admin permission.">
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9 1 3 9h4l-1 6 6-8H8z" fill="currentColor"/></svg>
-        Fast Scan <span class="tag">Admin</span>
-      </button>
-    </div>
-
-    <div class="header-right">
-      <button class="icon-btn" id="shieldBtn" type="button" aria-label="Security and privacy" title="Security &amp; privacy">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 4 5.5v6c0 5 3.4 8.9 8 10 4.6-1.1 8-5 8-10v-6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="m8.5 12 2.4 2.4 4.6-4.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-    </div>
-  </header>
-
-  <!-- ============ Toolbar ============ -->
-  <nav class="toolbar">
-    <ol class="crumbs" id="crumbs"></ol>
-    <div class="toggles">
-      <div class="seg" role="group" aria-label="Group by">
-        <button type="button" data-group="location" aria-pressed="false">By location</button>
-        <button type="button" data-group="category" aria-pressed="true">By category</button>
-      </div>
-      <div class="seg" role="group" aria-label="Diagram">
-        <button type="button" data-view="sunburst" aria-pressed="true">Sunburst</button>
-        <button type="button" data-view="treemap" aria-pressed="false">Treemap</button>
+      <span class="title" id="winTitle">Xylem: C:\</span>
+      <div class="caption-btns" aria-hidden="true">
+        <span>&#xE921;</span><span>&#xE922;</span><span class="close">&#xE8BB;</span>
       </div>
     </div>
-  </nav>
 
-  <!-- ============ Main ============ -->
-  <main class="main">
-    <section class="stage" id="stage">
-      <div class="vessels" aria-hidden="true"></div>
-      <canvas id="dummy-sunburst" aria-label="Disk usage diagram"></canvas>
-
-      <div class="scan-overlay hidden" id="scanOverlay" aria-live="polite">
-        <div class="capillary"><i id="sap"></i></div>
-        <div class="scan-text">
-          <div class="scan-title" id="scanTitle">Drawing up from the roots…</div>
-          <div class="scan-sub num" id="scanSub">reading Master File Table · read-only</div>
+    <!-- Menu bar -->
+    <nav class="menubar" id="menubar">
+      <div class="menu" data-menu="file"><button type="button">File</button>
+        <div class="dropdown">
+          <button type="button" data-act="scan">Scan drive<span class="kbd">F5</span></button>
+          <button type="button" data-act="fast">Fast scan (MFT, admin)<span class="kbd">Ctrl+F5</span></button>
+          <button type="button" data-act="open">Scan folder…<span class="kbd">Ctrl+O</span></button>
+          <hr>
+          <button type="button" data-act="export">Export list as CSV…</button>
+          <hr>
+          <button type="button" disabled>Exit</button>
         </div>
       </div>
-    </section>
-
-    <aside class="sidebar">
-      <div class="side-head">
-        <div class="side-title" id="sideTitle">C:\ by category</div>
-        <div class="side-sub num" id="sideSub"></div>
-        <div class="tissue" id="tissue" aria-label="Share by category"></div>
+      <div class="menu" data-menu="view"><button type="button">View</button>
+        <div class="dropdown">
+          <button type="button" data-set="view" data-val="sunburst">Sunburst map</button>
+          <button type="button" data-set="view" data-val="treemap">Treemap</button>
+          <hr>
+          <button type="button" data-set="group" data-val="location">Group by location</button>
+          <button type="button" data-set="group" data-val="category">Group by category</button>
+          <hr>
+          <button type="button" data-set="theme" data-val="light">Light theme</button>
+          <button type="button" data-set="theme" data-val="dark">Dark theme</button>
+        </div>
       </div>
+      <div class="menu" data-menu="tools"><button type="button">Tools</button>
+        <div class="dropdown">
+          <button type="button" disabled>Compare with last scan</button>
+          <button type="button" disabled>Clean-up suggestions</button>
+          <hr>
+          <button type="button" disabled>Options…</button>
+        </div>
+      </div>
+      <div class="menu" data-menu="help"><button type="button">Help</button>
+        <div class="dropdown">
+          <button type="button" data-act="privacy">Security &amp; privacy</button>
+          <button type="button" data-act="about">About Xylem</button>
+        </div>
+      </div>
+    </nav>
 
-      <ol class="rank" id="rank"></ol>
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <select id="drive" aria-label="Drive">
+        <option>C:  Windows (NTFS)</option>
+        <option>D:  Data (NTFS)</option>
+        <option>E:  USB (exFAT)</option>
+      </select>
+      <button type="button" class="tb" data-act="scan" title="Scan (F5)">
+        <svg viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5z"/></svg>Scan
+      </button>
+      <button type="button" class="tb strong" data-act="fast" title="Fast scan: reads the Master File Table, read-only. Needs admin.">
+        <svg viewBox="0 0 16 16"><path d="M9.2 1.5 3.5 9h4L6.8 14.5 12.5 7h-4z"/></svg>Fast scan
+      </button>
+      <span class="sep"></span>
+      <button type="button" class="tb icon" data-act="up" title="Up one level (Backspace)">
+        <svg viewBox="0 0 16 16"><path d="M8 3 3 8h3v5h4V8h3z"/></svg>
+      </button>
+      <span class="sep"></span>
+      <div class="seg" role="group" aria-label="Map type">
+        <button type="button" data-set="view" data-val="sunburst" title="Sunburst">
+          <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2" class="o"/><circle cx="8" cy="8" r="3.6" class="o"/><circle cx="8" cy="8" r="1.2"/></svg>
+        </button>
+        <button type="button" data-set="view" data-val="treemap" title="Treemap">
+          <svg viewBox="0 0 16 16"><rect x="1.8" y="2.5" width="7" height="11" class="o"/><rect x="8.8" y="2.5" width="5.4" height="5" class="o"/><rect x="8.8" y="7.5" width="5.4" height="6" class="o"/></svg>
+        </button>
+      </div>
+      <div class="seg text" role="group" aria-label="Group by">
+        <button type="button" data-set="group" data-val="location">Location</button>
+        <button type="button" data-set="group" data-val="category">Category</button>
+      </div>
+      <div class="spacer"></div>
+      <label class="filter">
+        <svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.3" class="o"/><path d="m10.2 10.2 3.3 3.3" class="o"/></svg>
+        <input id="filter" type="search" placeholder="Filter by name" aria-label="Filter by name">
+      </label>
+    </div>
 
-      <section class="inspector" id="inspector" aria-live="polite">
-        <div class="insp-empty">Select something to see what it is and whether it's safe to remove.</div>
+    <!-- Body: tree-table | map, details below -->
+    <div class="body">
+      <section class="pane tree-pane">
+        <div class="table-head">
+          <span class="c-name">Name</span>
+          <span class="c-size">Size on disk</span>
+          <span class="c-bar">% of parent</span>
+          <span class="c-files">Files</span>
+          <span class="c-cat">Category</span>
+        </div>
+        <div class="rows" id="rows" role="tree" tabindex="0" aria-label="Folders and files"></div>
       </section>
-    </aside>
-  </main>
 
-  <!-- ============ Status bar ============ -->
-  <footer class="status num">
-    <span><b id="stFiles">1,473,330</b> files</span>
-    <span><b>293,930</b> folders</span>
-    <span>MFT direct read · <b>1.48 s</b></span>
-    <span><b>95%</b> classified</span>
-    <span class="local"><i></i>Local only</span>
-    <button type="button" class="linkish" id="welcomeLink">Show welcome screen</button>
-  </footer>
+      <div class="splitter" aria-hidden="true"></div>
 
-  <!-- ============ Tooltip ============ -->
-  <div class="tip hidden" id="tip" role="tooltip"></div>
+      <section class="pane map-pane">
+        <div class="pane-title">
+          <span id="mapTitle">Map</span>
+          <span class="muted num" id="mapSub"></span>
+        </div>
+        <div class="map" id="map">
+          <canvas id="dummy-sunburst" aria-label="Disk usage map"></canvas>
+        </div>
+        <div class="legend" id="legend"></div>
+      </section>
+    </div>
 
-  <!-- ============ First-launch consent ============ -->
-  <div class="modal hidden" id="consent">
-    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="consentTitle">
-      <div class="dialog-art" aria-hidden="true"></div>
-      <h2 id="consentTitle">Before your first scan</h2>
-      <ul class="points">
-        <li><b>Everything stays on this PC.</b> Xylem has no network code and never uploads anything about your files.</li>
-        <li><b>Fast Scan is read-only.</b> Windows asks for admin permission; a small helper reads the drive's file table for about 1–5 seconds, hands the result to Xylem, and exits.</li>
-        <li><b>Deleting is reversible.</b> Everything goes to the Recycle Bin, and Windows and app folders are locked.</li>
-      </ul>
-      <div class="dialog-actions">
-        <button type="button" class="btn primary" id="consentOk">I understand, continue</button>
+    <!-- Details -->
+    <section class="details" id="details"></section>
+
+    <!-- Status bar -->
+    <footer class="statusbar">
+      <span class="st grow" id="stMsg">Ready</span>
+      <span class="st num">1,473,330 files</span>
+      <span class="st num">293,930 folders</span>
+      <span class="st num">MFT · 1.48 s</span>
+      <span class="st num">95% classified</span>
+      <span class="st"><i class="ok"></i>Read-only</span>
+    </footer>
+
+    <!-- Tooltip -->
+    <div class="tip hidden" id="tip" role="tooltip"></div>
+
+    <!-- Dialogs -->
+    <div class="modal hidden" id="dlgPrivacy">
+      <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dpTitle">
+        <div class="dlg-title" id="dpTitle">Security &amp; privacy</div>
+        <div class="dlg-body">
+          <table class="kv">
+            <tr><th>Network</th><td>Xylem's code makes no network connections and sends nothing anywhere.</td></tr>
+            <tr><th>Disk access</th><td>Drives are opened for reading only. Xylem has no code that writes to the disk.</td></tr>
+            <tr><th>Admin rights</th><td>Only for Fast scan, after the Windows prompt. A helper reads the file table (about 1–5 s) and exits.</td></tr>
+            <tr><th>Deleting</th><td>Always to the Recycle Bin. Windows, program folders and your profile folders are locked.</td></tr>
+          </table>
+        </div>
+        <div class="dlg-actions"><button type="button" class="btn default" data-close>OK</button></div>
       </div>
     </div>
-  </div>
 
-  <!-- ============ Security & privacy ============ -->
-  <div class="modal hidden" id="shield">
-    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="shieldTitle">
-      <h2 id="shieldTitle">Security &amp; privacy</h2>
-      <dl class="facts">
-        <dt>Offline</dt>
-        <dd>Xylem's code makes no network connections. The page is locked by a Content Security Policy that only allows its own files.</dd>
-        <dt>Read-only disk access</dt>
-        <dd>The drive is opened for reading only. Xylem contains no code that writes to the disk.</dd>
-        <dt>Admin, briefly</dt>
-        <dd>Only the scan helper runs as admin, after you approve the Windows prompt. It exits when the scan ends, usually in 1–5 seconds.</dd>
-        <dt>Safe delete</dt>
-        <dd>Everything goes to the Recycle Bin. System and program folders are locked in the app's backend, not just hidden in the UI.</dd>
-        <dt>Honest note</dt>
-        <dd>The window is drawn by Microsoft WebView2, which can contact Microsoft for its own updates and configuration, like Edge does. Xylem's data never goes there.</dd>
-      </dl>
-      <div class="dialog-actions">
-        <button type="button" class="btn ghost" id="shieldClose">Close</button>
+    <div class="modal hidden" id="dlgAbout">
+      <div class="dialog small" role="dialog" aria-modal="true" aria-labelledby="daTitle">
+        <div class="dlg-title" id="daTitle">About Xylem</div>
+        <div class="dlg-body about">
+          <svg viewBox="0 0 16 16" class="about-icon" aria-hidden="true">
+            <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width=".8"/>
+            <circle cx="8" cy="8" r="4.2" fill="none" stroke="var(--accent)" stroke-width=".8"/>
+            <circle cx="8" cy="8" r="1.6" fill="currentColor"/>
+          </svg>
+          <div>
+            <b>Xylem 0.1</b><br>
+            Disk space analyzer for Windows.<br>
+            <span class="muted">Xylem is the plant tissue that carries water up from the roots. This app carries your drive's file table up into a map.</span>
+          </div>
+        </div>
+        <div class="dlg-actions"><button type="button" class="btn default" data-close>OK</button></div>
+      </div>
+    </div>
+
+    <div class="modal hidden" id="dlgScan">
+      <div class="dialog small" role="dialog" aria-modal="true" aria-labelledby="dsTitle">
+        <div class="dlg-title" id="dsTitle">Scanning C:\</div>
+        <div class="dlg-body">
+          <div id="scanStep">Reading the Master File Table (read-only)…</div>
+          <div class="progress"><i id="scanBar"></i></div>
+          <div class="muted num" id="scanCount">0 records</div>
+        </div>
       </div>
     </div>
   </div>

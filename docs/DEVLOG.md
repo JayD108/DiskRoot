@@ -131,3 +131,17 @@ Accuracy vs WizTree: 279/309 top-level folders exact. The 12 GB gap was System V
 
 ### Tooling note
 - A screen-region capture once grabbed the user's browser. `ui-screenshot.ps1` now uses PrintWindow (app pixels only, no focus steal).
+
+### Same day, later: UI direction v2 + native spike
+- **User feedback on prototype v1:** "looks like AI-slop webpage, not a tool". Wants a legacy-styled + modern, clean, simple UI with Xylem DNA, a smaller size, and **both** a native UI and an optional web UI.
+- **Prototype v2** (`xylem-ui-prototype/`, replaces v1; v1 is in git history):
+  - A classic utility structure (menu bar, toolbar, tree-table with columns, map pane, legend, details pane, status bar) with a modern finish.
+  - Botanical palette, moss-green accent, light and dark themes, no glows or gradients.
+  - Working menus, expand/collapse, keyboard nav, filter, synced hover/selection, a fake scan dialog.
+  - URL switches `?dark&category&treemap&about`.
+  - Rendered and checked with headless Edge. Fixed: invisible bar fills, clipped details pane, dark-theme label contrast.
+- **Native UI spike** (`spikes/native-egui`, eframe 0.37 + glow, LTO + strip):
+  - **4.46 MB exe, 1 process, ~59 MB private memory, 0 network connections**, idle CPU ~1% of one core.
+  - Compare the Tauri app: 8.6 MB + WebView2, 7 processes, ~258 MB, 2 Microsoft connections.
+  - eframe 0.37 API: `App::ui(&mut self, ui, frame)`, `egui::Panel::top/bottom/left(..).show(ui, ..)`.
+- **Proposal written:** `docs/UI-ARCHITECTURE.md` (native default + optional web add-on, shared `xylem-session` crate, one `xylem.exe` for UI + CLI + helper). Waiting for the user's go-ahead.
