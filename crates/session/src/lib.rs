@@ -6,6 +6,7 @@
 //! folder", "is this safe to delete") is a method here, so the UI never
 //! holds the full tree.
 
+pub mod dupes;
 pub mod elevate;
 pub mod helper;
 pub mod integrity;
@@ -589,6 +590,28 @@ impl Scanned {
         v.into_iter()
             .map(|(a, id)| FileRow { id, name: idx.name(id).to_owned(), path: idx.path(id), on_disk: a, cat: self.cls.cat[id as usize] })
             .collect()
+    }
+
+    /// Files that could be duplicates: same size (≥ `min_size`), at least
+    /// two of them, not cloud placeholders. From the scan only: no file is
+    /// opened here. Biggest sizes first.
+    pub fn duplicate_candidates(&self, min_size: u64) -> Vec<(u64, Vec<(u32, String)>)> {
+        let idx = &self.index;
+        let mut by_size: std::collections::HashMap<u64, Vec<u32>> = std::collections::HashMap::new();
+        for id in 1..idx.len() as u32 {
+            let f = idx.flags(id);
+            if idx.is_dir(id) || f & (flags::DELETED | flags::CLOUD | flags::LINK) != 0 || idx.size(id) < min_size {
+                continue;
+            }
+            by_size.entry(idx.size(id)).or_default().push(id);
+        }
+        let mut v: Vec<(u64, Vec<(u32, String)>)> = by_size
+            .into_iter()
+            .filter(|(_, ids)| ids.len() > 1)
+            .map(|(size, ids)| (size, ids.into_iter().map(|id| (id, idx.path(id))).collect()))
+            .collect();
+        v.sort_unstable_by_key(|g| std::cmp::Reverse(g.0));
+        v
     }
 
     /// Bytes and file counts per file extension (lowercase, "" = none),

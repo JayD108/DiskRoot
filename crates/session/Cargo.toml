@@ -11,3 +11,4 @@ xylem-scan-walk.workspace = true
 xylem-scan-mft.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+blake3 = { version = "1", default-features = false, features = ["std"] }

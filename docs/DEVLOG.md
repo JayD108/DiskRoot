@@ -410,3 +410,22 @@ User asked: "go for next step and also add the security measures ... and think o
   - Verified: games +25 MB, cache −30 MB, root −5 MB.
 - **Start screen:** one card per drive (name, "324 GB free of 1.86 TB", used bar: accent / amber > 75% / red > 90%). Click to scan.
 - **Ctrl+F** focuses the filter box (hint text says so).
+
+### 11 Nov (night): Phase 7 finished, overnight fuzzing started
+- **Coverage-guided fuzzing (cargo-fuzz + libFuzzer + AddressSanitizer):**
+  - `fuzz/` crate with 6 targets: mft_record, run_list, boot_sector, mft_tree (many records → `build_tree`), index_file, snapshot_file. Entry points: `xylem_scan_mft::fuzzing` (doc-hidden).
+  - Seeds come from `write_fuzz_seeds` (ignored test).
+  - `tools/fuzz-overnight.ps1` finds the MSVC ASan runtime, runs all targets in parallel and writes `fuzz/logs/_status.txt`.
+  - Started 01:06 for 10 h per target, ~1,500–44,000 runs/s each. No VM needed: fuzzing is non-destructive.
+  - The laptop is Windows 11 Home, so there is no Hyper-V or Sandbox. Destructive VM tests are proposed for disposable GitHub runners.
+- **Multi-select delete:**
+  - Ctrl+click (or Space) marks rows; marked rows show an amber edge.
+  - Delete, the context menu or the details-pane button "Move N marked…" opens one `ConfirmMany` dialog: every item is prepared and armed individually, refused ones are listed with reasons, items inside another marked folder are skipped, warnings are combined (ack required).
+  - Recycles sequentially on a worker and applies each success.
+- **Duplicate finder** (`session::dupes`, View → Find duplicate files…):
+  - Opt-in, with an explanation (the only feature that reads contents).
+  - Steps: same-size candidates from the scan (no cloud/link/deleted) → hardlinks collapsed by file ID → BLAKE3 of the first+last 64 KB → full BLAKE3. Online-only/offline/locked files are skipped.
+  - Progress + Cancel. The kept copy is the "original-looking" one (`copy_score`). "Mark extra copies" feeds the multi-delete.
+  - Verified end to end: 3 identical 12 MB files + a 1-byte-different decoy → 1 set found, 2 copies recycled, decoy and original kept, both logged.
+- **Hardlink names:** `safety::hardlink_names` (FindFirstFileNameW, no admin, any scan mode). The details pane shows "· 3 names (hardlinks)" with the other names on hover and a note that deleting one frees nothing.
+- New dependency: `blake3` (Apache-2.0); cargo-deny licences ok.

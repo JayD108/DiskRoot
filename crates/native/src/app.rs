@@ -3,7 +3,7 @@
 //! modern finish"). All data comes from `xylem_session`; scans and deletes
 //! run on worker threads so the window never freezes.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -55,6 +55,7 @@ enum JobKind {
     Delete(String),
     Reopen(String),
     Export(String),
+    DeleteMany(usize),
 }
 
 /// A remembered scan opened at startup: the scan, when it was made, the
@@ -72,6 +73,7 @@ enum Done {
     Deleted(u32, Result<DeleteOut, String>),
     Reopened(Box<Option<Reopened>>),
     Exported(Result<std::path::PathBuf, String>),
+    DeletedMany(Vec<(u32, Result<DeleteOut, String>)>),
 }
 
 struct Job {
@@ -90,8 +92,20 @@ enum Dialog {
     History(Vec<LogEntry>),
     Changes(Box<Changes>),
     Files(Box<FilesView>),
+    Dupes(Box<DupesView>),
     Message(String, String),
     ConfirmDelete(Box<Confirm>),
+    ConfirmMany(Box<ConfirmMany>),
+}
+
+/// Deleting several marked items at once: each one prepared and armed on
+/// its own (all the usual checks), plus the ones Xylem refused and why.
+struct ConfirmMany {
+    items: Vec<PendingDelete>,
+    refused: Vec<(String, String)>,
+    bytes: u64,
+    warnings: DeleteWarnings,
+    ack: bool,
 }
 
 /// Result of the background "remember" step: what changed, and the previous
@@ -106,6 +120,17 @@ struct DriveBar {
     scanned: u64,
     /// The 5 biggest top-level items: (node, name, bytes on disk, colour category).
     top: Vec<(u32, String, u64, u8)>,
+}
+
+/// A running duplicate search: shared progress, the cancel flag, and where
+/// the result arrives.
+type DupesRun = (Arc<xylem_session::dupes::Progress>, Arc<AtomicBool>, Receiver<Vec<xylem_session::dupes::DupGroup>>);
+
+/// The duplicate finder window: intro, running (progress), or results.
+struct DupesView {
+    min_mb: u64,
+    running: Option<DupesRun>,
+    groups: Option<Vec<xylem_session::dupes::DupGroup>>,
 }
 
 /// "Largest files & file types": the search text and current results.
@@ -174,6 +199,10 @@ pub struct XylemApp {
     drive_bar: Option<DriveBar>,
     /// Folder sizes from the previous scan (for the tree's change column).
     prev_sizes: Option<PrevSizes>,
+    /// Items marked with Ctrl+click for deleting several at once.
+    marked: BTreeSet<u32>,
+    /// Hardlink names of the selected file: (node, all its names).
+    links_cache: Option<(u32, Vec<String>)>,
     scroll_to_selected: bool,
 }
 
@@ -206,6 +235,8 @@ impl XylemApp {
             remembered_at: None,
             drive_bar: None,
             prev_sizes: None,
+            marked: BTreeSet::new(),
+            links_cache: None,
             scroll_to_selected: false,
         };
         if !app.settings.seen_notice {
@@ -348,6 +379,7 @@ impl XylemApp {
             Ok(Done::Scanned(r)) => self.finish_scan(*r),
             Ok(Done::Deleted(node, r)) => self.finish_delete(node, r),
             Ok(Done::Reopened(r)) => self.finish_reopen(*r),
+            Ok(Done::DeletedMany(results)) => self.finish_delete_many(results),
             Ok(Done::Exported(r)) => {
                 self.job = None;
                 match r {
@@ -396,6 +428,7 @@ impl XylemApp {
     }
 
     fn show_scan(&mut self, s: Scanned, sum: Summary) {
+        self.marked.clear();
         self.summary = Some(sum);
         self.scanned = Some(s);
         self.expanded.clear();
@@ -755,6 +788,10 @@ impl XylemApp {
                     }
                     ui.close();
                 }
+                if ui.add_enabled(self.scanned.is_some(), egui::Button::new("Find duplicate files…")).clicked() {
+                    self.dialog = Some(Dialog::Dupes(Box::new(DupesView { min_mb: 10, running: None, groups: None })));
+                    ui.close();
+                }
                 if ui.add_enabled(self.scanned.is_some(), egui::Button::new("Largest files & file types…")).clicked() {
                     self.open_files();
                     ui.close();
@@ -799,6 +836,7 @@ impl XylemApp {
     }
 
     fn regroup(&mut self) {
+        self.marked.clear();
         self.settings.save();
         self.expanded.clear();
         let root = self.root_key();
@@ -886,6 +924,7 @@ impl XylemApp {
         ui.horizontal_centered(|ui| {
             let msg = match &self.status {
                 Some((m, at)) if at.elapsed() < Duration::from_secs(8) => m.clone(),
+                _ if !self.marked.is_empty() => format!("{} marked (Ctrl+click) · press Delete to move them to the Recycle Bin", self.marked.len()),
                 _ => "Ready".into(),
             };
             ui.label(msg);
@@ -1089,7 +1128,11 @@ impl XylemApp {
                     // Accessible name + state for screen readers (and UI Automation).
                     let label = r.name.clone();
                     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::TreeItem, true, selected, &label));
-                    if selected {
+                    let marked = matches!(r.key, Key_::Node(n) if self.marked.contains(&n));
+                    if marked {
+                        p.rect_filled(rect, CornerRadius::ZERO, t.sel);
+                        p.rect_filled(Rect::from_min_size(rect.min, vec2(4.0, ROW_H)), CornerRadius::ZERO, theme::WARN);
+                    } else if selected {
                         p.rect_filled(rect, CornerRadius::ZERO, t.sel);
                         p.rect_filled(Rect::from_min_size(rect.min, vec2(2.0, ROW_H)), CornerRadius::ZERO, t.accent);
                     } else if resp.hovered() || self.hover_map.is_some_and(|h| self.map_index(&r.key) == Some(h)) {
@@ -1206,9 +1249,23 @@ impl XylemApp {
             // Apply interactions after drawing.
             if let Some((i, twisty)) = clicked {
                 self.tree_focus = true;
+                let ctrl = ui.input(|inp| inp.modifiers.ctrl);
                 if twisty && rows[i].expandable {
                     toggled = Some(i);
+                } else if ctrl && let Key_::Node(n) = rows[i].key {
+                    // Ctrl+click: mark / unmark for deleting several at once.
+                    if self.marked.is_empty()
+                        && let Some(Key_::Node(cur)) = self.selected
+                        && cur != 0
+                    {
+                        self.marked.insert(cur);
+                    }
+                    if n != 0 && !self.marked.remove(&n) {
+                        self.marked.insert(n);
+                    }
+                    self.select(rows[i].key.clone());
                 } else if rows[i].more == 0 {
+                    self.marked.clear();
                     self.select(rows[i].key.clone());
                 }
             }
@@ -1240,6 +1297,12 @@ impl XylemApp {
     }
 
     fn ask_delete(&mut self, n: u32) {
+        // Anything marked (Ctrl+click, Space, "Mark extra copies"): Delete
+        // means "the marked items", whatever row is selected.
+        if !self.marked.is_empty() && (self.marked.len() > 1 || self.marked.contains(&n) || n == 0) {
+            self.ask_delete_many();
+            return;
+        }
         let Some(s) = &self.scanned else { return };
         // Protected items still open the dialog (it explains why). Others are
         // prepared and armed now: warnings computed, file identities taken.
@@ -1256,6 +1319,78 @@ impl XylemApp {
                 self.dialog = Some(Dialog::ConfirmDelete(Box::new(Confirm { info, warnings, ack: false, pending: Some(p) })));
             }
             (Ok(_), Err(e)) | (Err(e), _) => self.dialog = Some(Dialog::Message("Can't delete this".into(), e)),
+        }
+    }
+
+    /// Prepares every marked item (skipping ones inside another marked
+    /// folder), arms each, and asks once.
+    fn ask_delete_many(&mut self) {
+        let Some(s) = &self.scanned else { return };
+        let marked: Vec<u32> = self.marked.iter().copied().collect();
+        let inside_other = |n: u32| {
+            s.crumbs(n).map(|c| c.iter().rev().skip(1).any(|a| self.marked.contains(&a.id))).unwrap_or(false)
+        };
+        let (mut items, mut refused) = (Vec::new(), Vec::new());
+        let mut warnings = DeleteWarnings::default();
+        for n in marked.into_iter().filter(|&n| !inside_other(n)) {
+            let name = s.info(n).map(|i| i.name).unwrap_or_default();
+            match s.prepare_delete(n).and_then(|mut p| p.arm().map(|()| p)) {
+                Ok(p) => {
+                    let w = &p.warnings;
+                    warnings.cloud |= w.cloud;
+                    warnings.git_repos += w.git_repos;
+                    warnings.large |= w.large;
+                    warnings.no_recycle_bin |= w.no_recycle_bin;
+                    items.push(p);
+                }
+                Err(why) => refused.push((name, why)),
+            }
+        }
+        let bytes: u64 = items.iter().map(|p| p.freed).sum();
+        let files: u64 = items.iter().map(|p| u64::from(p.files)).sum();
+        warnings.large |= bytes >= xylem_session::safety::LARGE_BYTES || files >= u64::from(xylem_session::safety::LARGE_FILES);
+        self.dialog = Some(Dialog::ConfirmMany(Box::new(ConfirmMany { items, refused, bytes, warnings, ack: false })));
+    }
+
+    fn start_delete_many(&mut self, items: Vec<PendingDelete>) {
+        let (tx, rx) = mpsc::channel();
+        let n = items.len();
+        std::thread::spawn(move || {
+            let results = items.into_iter().map(|p| (p.node, p.recycle())).collect();
+            let _ = tx.send(Done::DeletedMany(results));
+        });
+        self.job = Some(Job { kind: JobKind::DeleteMany(n), started: Instant::now(), rx, cancel: Arc::default() });
+    }
+
+    fn finish_delete_many(&mut self, results: Vec<(u32, Result<DeleteOut, String>)>) {
+        self.job = None;
+        self.marked.clear();
+        let (mut done, mut freed, mut failed) = (0, 0u64, Vec::new());
+        if let Some(s) = &mut self.scanned {
+            remember::forget_index(&s.summary().root);
+            for (node, r) in results {
+                match r {
+                    Ok(out) if !out.cancelled => {
+                        s.apply_delete(node);
+                        done += 1;
+                        freed += out.freed;
+                    }
+                    Ok(_) => {}
+                    Err(e) => failed.push(e),
+                }
+            }
+            self.summary = Some(s.summary());
+        }
+        self.invalidate();
+        self.refresh_drive_bar();
+        self.selected = Some(self.root_key());
+        if failed.is_empty() {
+            self.say(format!("Moved {done} items to the Recycle Bin · {} freed", fmt_bytes(freed)));
+        } else {
+            self.dialog = Some(Dialog::Message(
+                format!("Moved {done} items; {} couldn't be moved", failed.len()),
+                failed.join("\n\n"),
+            ));
         }
     }
 
@@ -1481,6 +1616,16 @@ impl XylemApp {
     }
 
     fn details_pane(&mut self, ui: &mut Ui) {
+        // Hardlink names of the selected file: asked once per selection.
+        if let (Some(Key_::Node(n)), Some(s)) = (&self.selected, &self.scanned)
+            && self.links_cache.as_ref().is_none_or(|c| c.0 != *n)
+        {
+            let names = match s.info(*n) {
+                Ok(i) if !i.dir => xylem_session::safety::hardlink_names(std::path::Path::new(&i.path)),
+                _ => Vec::new(),
+            };
+            self.links_cache = Some((*n, names));
+        }
         let t = self.tokens();
         Self::pane_frame(&t).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
             ui.set_min_size(ui.available_size());
@@ -1489,6 +1634,18 @@ impl XylemApp {
                 return;
             };
             let mut action: Option<(&'static str, u32)> = None;
+            if !self.marked.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("{} items marked", self.marked.len())).font(theme::semibold(13.0)).color(theme::WARN));
+                    if ui.add_enabled(self.job.is_none(), egui::Button::new(format!("Move {} marked to Recycle Bin…", self.marked.len()))).clicked() {
+                        action = Some(("delete-marked", 0));
+                    }
+                    if ui.button("Clear marks").clicked() {
+                        action = Some(("clear-marks", 0));
+                    }
+                });
+                ui.add_space(4.0);
+            }
             match &self.selected {
                 Some(Key_::Node(n)) => {
                     let Ok(info) = s.info(*n) else { return };
@@ -1517,7 +1674,17 @@ impl XylemApp {
                                 if let Some(ps) = parent_size {
                                     size += &format!(" · {} of its folder", fmt_pct(info.on_disk, ps));
                                 }
-                                ui.label(size);
+                                let links = self.links_cache.as_ref().filter(|c| c.0 == *n && c.1.len() > 1);
+                                if let Some((_, names)) = links {
+                                    ui.horizontal(|ui| {
+                                        ui.label(size);
+                                        let others = names.iter().filter(|x| !x.eq_ignore_ascii_case(&info.path)).map(|x| visible(x)).collect::<Vec<_>>().join("\n");
+                                        ui.label(RichText::new(format!("· {} names (hardlinks)", names.len())).color(theme::WARN))
+                                            .on_hover_text(format!("This file is stored once but has {} names. Deleting this one frees nothing while the others exist.\n\nOther names:\n{others}", names.len()));
+                                    });
+                                } else {
+                                    ui.label(size);
+                                }
                                 ui.end_row();
                                 key(ui, "Category");
                                 ui.horizontal(|ui| {
@@ -1565,7 +1732,15 @@ impl XylemApp {
                 None => {}
             }
             if let Some((a, n)) = action {
-                if a == "reveal" { self.reveal_in_explorer(n) } else { self.ask_delete(n) }
+                match a {
+                    "reveal" => self.reveal_in_explorer(n),
+                    "delete-marked" => self.ask_delete_many(),
+                    "clear-marks" => {
+                        self.marked.clear();
+                        self.rows = None;
+                    }
+                    _ => self.ask_delete(n),
+                }
             }
         });
     }
@@ -1584,6 +1759,7 @@ impl XylemApp {
                 JobKind::Delete(n) => (format!("Moving \"{n}\" to the Recycle Bin"), "Windows is moving the files…".to_owned()),
                 JobKind::Reopen(p) => (format!("Opening the remembered scan of {p}"), "Loading the last scan from this PC…".to_owned()),
                 JobKind::Export(p) => ("Exporting to CSV".to_owned(), format!("Writing {p}…")),
+                JobKind::DeleteMany(n) => (format!("Moving {n} items to the Recycle Bin"), "Each item is re-checked on disk first…".to_owned()),
             };
             Modal::new(egui::Id::unique("xylem-job")).show(ctx, |ui| {
                 // Fixed size from the first frame, so the dialog doesn't jump.
@@ -1627,7 +1803,9 @@ impl XylemApp {
         let mut confirm: Option<u32> = None;
         let mut action: Option<&'static str> = None;
         let mut jump: Option<String> = None;
-        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_));
+        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_));
+        let mut dupes_start = false;
+        let mut dupes_mark: Option<Vec<u32>> = None;
         let mut requery: Option<String> = None;
         let mut jump_node: Option<u32> = None;
         // One window id per dialog kind, so a dialog never inherits another
@@ -1648,7 +1826,7 @@ impl XylemApp {
                     ui.label(RichText::new("Before you start, here is exactly what Xylem does on your computer:").color(t.muted));
                     ui.add_space(8.0);
                     facts(ui, &t, &[
-                        ("Reads", "File names and sizes. It never opens or reads what's inside your files."),
+                        ("Reads", "File names and sizes. It doesn't read what's inside your files, except when you start View → Find duplicate files."),
                         ("Stays offline", "No network connections, no accounts, no telemetry."),
                         ("Asks first", "Admin rights only for Fast scan, through the Windows prompt. The helper exits after the scan."),
                         ("Deletes carefully", "Only when you confirm, always to the Recycle Bin, re-checked on disk first. Windows and system folders are locked."),
@@ -1758,6 +1936,106 @@ impl XylemApp {
                                 }
                             });
                         });
+                    }
+                }
+                Dialog::ConfirmMany(c) => {
+                    ui.label(RichText::new(format!("Move {} items to the Recycle Bin?", c.items.len())).font(theme::semibold(15.0)));
+                    ui.label(format!("Frees {} in total", fmt_bytes(c.bytes)));
+                    ui.add_space(6.0);
+                    egui::ScrollArea::vertical().id_salt("many").max_height(160.0).show(ui, |ui| {
+                        for p in &c.items {
+                            ui.horizontal(|ui| {
+                                ui.add_sized(vec2(70.0, 18.0), egui::Label::new(RichText::new(fmt_bytes(p.freed)).color(t.muted)));
+                                ui.add(egui::Label::new(visible(&p.path.display().to_string())).truncate());
+                            });
+                        }
+                    });
+                    if !c.refused.is_empty() {
+                        ui.add_space(6.0);
+                        ui.label(RichText::new(format!("Skipped ({}): Xylem won't delete these", c.refused.len())).font(theme::semibold(13.0)).color(theme::cat_color(5)));
+                        for (name, why) in &c.refused {
+                            ui.add(egui::Label::new(RichText::new(format!("{}: {why}", visible(name))).color(t.muted)).wrap());
+                        }
+                    }
+                    ui.add_space(6.0);
+                    let w = &c.warnings;
+                    let mut notes = Vec::new();
+                    if w.cloud {
+                        notes.push("Some items are synced with OneDrive: deleting them also deletes them from OneDrive and your other devices.".to_owned());
+                    }
+                    if w.git_repos > 0 {
+                        notes.push(format!("They contain {} Git repositor{}: unpushed work exists only here.", w.git_repos, if w.git_repos == 1 { "y" } else { "ies" }));
+                    }
+                    if w.no_recycle_bin {
+                        notes.push("Some are on a USB drive or network share: Windows may delete them permanently (it asks first).".to_owned());
+                    }
+                    if w.large {
+                        notes.push("This is a lot of data. Windows may offer to delete items permanently if they're too big for the Recycle Bin.".to_owned());
+                    }
+                    for n in &notes {
+                        egui::Frame::new().fill(theme::WARN.gamma_multiply(if t.dark { 0.22 } else { 0.14 })).corner_radius(CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.add(egui::Label::new(RichText::new(n).color(t.text)).wrap());
+                        });
+                        ui.add_space(4.0);
+                    }
+                    if !notes.is_empty() {
+                        ui.checkbox(&mut c.ack, "I understand. Move them to the Recycle Bin.");
+                    }
+                }
+                Dialog::Dupes(dv) => {
+                    ui.label(RichText::new("Find duplicate files").font(theme::semibold(16.0)));
+                    ui.add_space(4.0);
+                    // Results arrived?
+                    if let Some((_, _, rx)) = &dv.running
+                        && let Ok(g) = rx.try_recv()
+                    {
+                        dv.groups = Some(g);
+                        dv.running = None;
+                    }
+                    if let Some((prog, cancel, _)) = &dv.running {
+                        let read = prog.read.load(Ordering::Relaxed);
+                        let total = prog.total.load(Ordering::Relaxed).max(1);
+                        ui.label(RichText::new(format!("Comparing files… {} of about {} read", fmt_bytes(read), fmt_bytes(total))).color(t.muted));
+                        ui.add(egui::ProgressBar::new((read as f32 / total as f32).min(1.0)).desired_width(ui.available_width()));
+                        ui.ctx().request_repaint_after(Duration::from_millis(100));
+                        if ui.button("Cancel").clicked() {
+                            cancel.store(true, Ordering::Relaxed);
+                        }
+                    } else if let Some(groups) = &dv.groups {
+                        let wasted: u64 = groups.iter().map(|g| g.wasted()).sum();
+                        ui.label(format!("{} {} of identical files · {} could be freed by keeping one copy of each", fmt_count(groups.len() as u64), if groups.len() == 1 { "set" } else { "sets" }, fmt_bytes(wasted)));
+                        ui.add_space(6.0);
+                        egui::ScrollArea::vertical().id_salt("dupes").max_height(380.0).show(ui, |ui| {
+                            for g in groups.iter().take(300) {
+                                ui.label(RichText::new(format!("{} × {}  ·  {} extra", g.files.len(), fmt_bytes(g.size), fmt_bytes(g.wasted()))).font(theme::semibold(12.5)));
+                                for (id, path) in &g.files {
+                                    let r = ui.add(egui::Label::new(RichText::new(format!("    {}", visible(path))).color(t.muted)).truncate().sense(Sense::click()));
+                                    if r.on_hover_text("Click to show it in the tree").clicked() {
+                                        jump_node = Some(*id);
+                                    }
+                                }
+                                ui.add_space(4.0);
+                            }
+                        });
+                        if !groups.is_empty() {
+                            ui.add_space(6.0);
+                            ui.label(RichText::new("\"Mark extra copies\" keeps the first file of each set (the original-looking one: not named \"copy\" or \"(1)\", not in a backup, old or Downloads folder) and marks the others. Then press Delete to review them in one confirmation.").color(t.muted).size(11.5));
+                            if ui.button("Mark extra copies").clicked() {
+                                dupes_mark = Some(groups.iter().flat_map(|g| g.files.iter().skip(1).map(|f| f.0)).collect());
+                            }
+                        }
+                    } else {
+                        ui.add(egui::Label::new(RichText::new("This is the only part of Xylem that reads file contents: it compares files of the same size, first by their beginning and end, then in full. Nothing leaves your PC. Online-only cloud files are skipped (reading them would download them), and hardlinks (one file with two names) aren't counted as copies.").color(t.muted)).wrap());
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            ui.label("Only files of at least");
+                            ui.add(egui::DragValue::new(&mut dv.min_mb).range(1..=100_000).suffix(" MB"));
+                        });
+                        ui.add_space(6.0);
+                        if ui.add(egui::Button::new(RichText::new("Start").color(t.accent_ink)).fill(t.accent)).clicked() {
+                            dupes_start = true;
+                        }
                     }
                 }
                 Dialog::Files(fv) => {
@@ -1872,6 +2150,18 @@ impl XylemApp {
                         }
                         return;
                     }
+                    Dialog::ConfirmMany(c) => {
+                        let needs = c.warnings.needs_ack();
+                        let ready = !c.items.is_empty() && (c.ack || !needs);
+                        let b = egui::Button::new(RichText::new(format!("Move {} to Recycle Bin", c.items.len())).color(Color32::WHITE)).fill(theme::cat_color(5));
+                        if ui.add_enabled(ready, b).clicked() {
+                            action = Some("delete-many");
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close = true;
+                        }
+                        return;
+                    }
                     Dialog::Welcome => {
                         let b = egui::Button::new(RichText::new("Got it").color(t.accent_ink)).fill(t.accent).min_size(vec2(90.0, 26.0));
                         if ui.add(b).clicked() {
@@ -1897,6 +2187,9 @@ impl XylemApp {
                 }
             });
         });
+        if close && let Some(Dialog::Dupes(dv)) = &self.dialog && let Some((_, c, _)) = &dv.running {
+            c.store(true, Ordering::Relaxed);
+        }
         // Escape / click outside closes everything except the first-run notice.
         if resp.should_close() && !matches!(self.dialog, Some(Dialog::Welcome)) {
             close = true;
@@ -1910,12 +2203,40 @@ impl XylemApp {
                     self.start_scan(false);
                 }
             }
+            Some("delete-many") => {
+                if let Some(Dialog::ConfirmMany(c)) = self.dialog.take() {
+                    self.start_delete_many(c.items);
+                }
+            }
             Some("open-log") => {
                 if let Some(p) = xylem_session::safety::log_path() {
                     let _ = xylem_session::reveal(&p.display().to_string());
                 }
             }
             _ => {}
+        }
+        if dupes_start
+            && let (Some(s), Some(Dialog::Dupes(dv))) = (&self.scanned, &mut self.dialog)
+        {
+            let cands = s.duplicate_candidates(dv.min_mb << 20);
+            let prog = Arc::new(xylem_session::dupes::Progress::default());
+            let cancel = Arc::new(AtomicBool::new(false));
+            let (tx, rx) = mpsc::channel();
+            let (p2, c2) = (Arc::clone(&prog), Arc::clone(&cancel));
+            std::thread::spawn(move || {
+                let _ = tx.send(xylem_session::dupes::find(cands, &c2, &p2));
+            });
+            dv.running = Some((prog, cancel, rx));
+        }
+        if let Some(ids) = dupes_mark {
+            self.dialog = None;
+            if self.settings.by_category {
+                self.settings.by_category = false;
+                self.regroup();
+            }
+            self.marked = ids.into_iter().collect();
+            self.say(format!("{} extra copies marked · press Delete to review and move them to the Recycle Bin", self.marked.len()));
+            self.rows = None;
         }
         if let (Some(q), Some(s), Some(Dialog::Files(fv))) = (requery, &self.scanned, &mut self.dialog) {
             fv.top = s.top_files(100, &q);
@@ -1977,6 +2298,7 @@ impl XylemApp {
                 i.key_pressed(Key::Delete),
             )
         });
+        let space = ctx.input(|i| i.key_pressed(Key::Space));
         if f5 {
             self.start_scan(ctrl);
         }
@@ -2011,7 +2333,15 @@ impl XylemApp {
         } else if del
             && let Key_::Node(n) = row_key {
                 self.ask_delete(n);
+            } else if space
+            && let Key_::Node(n) = row_key
+            && n != 0
+        {
+            // Space marks / unmarks the selected row (like Ctrl+click).
+            if !self.marked.remove(&n) {
+                self.marked.insert(n);
             }
+        }
     }
 
     fn update_title(&mut self, ctx: &egui::Context) {

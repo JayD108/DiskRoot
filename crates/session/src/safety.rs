@@ -118,7 +118,7 @@ impl WideLen for std::ffi::OsStr {
 
 /// Identity of a file or folder on disk: volume serial number + file index.
 /// Survives renames; a different item at the same path has another id.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FileId {
     volume: u32,
     index: u64,
@@ -220,6 +220,43 @@ pub fn hard_lock(path: &Path) -> Option<String> {
     None
 }
 
+/// Every name of a hardlinked file (including `path` itself), as full paths.
+/// Empty if the file has a single name or can't be queried. Asks Windows
+/// live (FindFirstFileNameW), so it works for any scan mode and needs no
+/// admin rights.
+pub fn hardlink_names(path: &Path) -> Vec<String> {
+    #[link(name = "kernel32", kind = "raw-dylib")]
+    unsafe extern "system" {
+        fn FindFirstFileNameW(name: *const u16, flags: u32, len: *mut u32, link: *mut u16) -> *mut std::ffi::c_void;
+        fn FindNextFileNameW(find: *mut std::ffi::c_void, len: *mut u32, link: *mut u16) -> i32;
+        fn FindClose(find: *mut std::ffi::c_void) -> i32;
+    }
+    let s = path.to_string_lossy();
+    let Some(drive) = s.get(..2).filter(|d| d.ends_with(':')) else { return Vec::new() };
+    let w: Vec<u16> = s.encode_utf16().chain([0]).collect();
+    let mut buf = vec![0u16; 32_768];
+    let mut out = Vec::new();
+    let mut len = buf.len() as u32;
+    // SAFETY: NUL-terminated path, buffer and its length passed together;
+    // the find handle is closed below.
+    let h = unsafe { FindFirstFileNameW(w.as_ptr(), 0, &mut len, buf.as_mut_ptr()) };
+    if h.is_null() || h == -1isize as *mut std::ffi::c_void {
+        return out;
+    }
+    loop {
+        let n = (len as usize).saturating_sub(1).min(buf.len()); // len includes the NUL
+        out.push(format!("{drive}{}", String::from_utf16_lossy(&buf[..n])));
+        len = buf.len() as u32;
+        // SAFETY: as above.
+        if unsafe { FindNextFileNameW(h, &mut len, buf.as_mut_ptr()) } == 0 || out.len() >= 64 {
+            break;
+        }
+    }
+    // SAFETY: valid find handle from FindFirstFileNameW.
+    unsafe { FindClose(h) };
+    if out.len() < 2 { Vec::new() } else { out }
+}
+
 /// Makes a name safe to show: control characters, bidirectional overrides
 /// (U+202E can make `fdp.exe` look like `exe.pdf`) and zero-width characters
 /// are shown as `<U+XXXX>`, so the dialog and log show what's really there.
@@ -316,6 +353,20 @@ mod tests {
         assert_eq!(format_utc(0), "1970-01-01 00:00:00");
         assert_eq!(format_utc(1_762_800_000), "2025-11-10 18:40:00");
         assert_eq!(format_utc(951_782_400), "2000-02-29 00:00:00", "leap day");
+    }
+
+    #[test]
+    fn lists_hardlink_names() {
+        let dir = std::env::temp_dir().join(format!("xylem-links-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.txt"), b"x").unwrap();
+        assert!(hardlink_names(&dir.join("a.txt")).is_empty(), "single name");
+        std::fs::hard_link(dir.join("a.txt"), dir.join("sub").join("b.txt")).unwrap();
+        let names = hardlink_names(&dir.join("a.txt"));
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert!(names.iter().any(|n| n.to_lowercase().ends_with(r"sub\b.txt")), "{names:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

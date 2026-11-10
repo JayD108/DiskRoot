@@ -1,0 +1,63 @@
+[package]
+name = "xylem-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+xylem-core = { path = "../crates/core" }
+xylem-scan-mft = { path = "../crates/scan-mft" }
+xylem-session = { path = "../crates/session" }
+
+# Not part of the main workspace (needs nightly + libFuzzer).
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "mft_record"
+path = "fuzz_targets/mft_record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "run_list"
+path = "fuzz_targets/run_list.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "boot_sector"
+path = "fuzz_targets/boot_sector.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mft_tree"
+path = "fuzz_targets/mft_tree.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "index_file"
+path = "fuzz_targets/index_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "snapshot_file"
+path = "fuzz_targets/snapshot_file.rs"
+test = false
+doc = false
+bench = false

@@ -173,3 +173,37 @@ fn tree_build_survives_random_parent_links() {
         assert!(idx.size(0) >= idx.size(idx.len() as u32 - 1));
     }
 }
+
+/// Writes seed inputs for the coverage-guided fuzzers in `fuzz/`:
+/// `cargo test -p xylem-scan-mft write_fuzz_seeds -- --ignored`
+#[test]
+#[ignore = "writes files into fuzz/corpus; run by hand"]
+fn write_fuzz_seeds() {
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/corpus");
+    let put = |target: &str, name: &str, data: &[u8]| {
+        let dir = base.join(target);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(name), data).unwrap();
+    };
+    let recs = seed_records();
+    for (i, r) in recs.iter().enumerate() {
+        put("mft_record", &format!("rec{i}"), r);
+    }
+    put("mft_tree", "four", &recs.concat());
+    put("run_list", "two", &[0x21, 0x10, 0x00, 0x01, 0x11, 0x08, 0xF0, 0x01, 0x04, 0x00]);
+    let mut boot = vec![0u8; 512];
+    boot[3..11].copy_from_slice(b"NTFS    ");
+    boot[0x0B..0x0D].copy_from_slice(&512u16.to_le_bytes());
+    boot[0x0D] = 8;
+    boot[0x30..0x38].copy_from_slice(&786_432u64.to_le_bytes());
+    boot[0x40] = (-10i8) as u8;
+    put("boot_sector", "ntfs", &boot);
+    let mut idx = xylem_core::Index::new("C:\\");
+    let d = idx.push(0, "dir", 0, 0, xylem_core::flags::DIR);
+    idx.push(d, "a.bin", 100, 4096, 0);
+    idx.push(0, "b.txt", 7, 0, xylem_core::flags::CLOUD);
+    idx.compute_totals();
+    let mut buf = Vec::new();
+    idx.save(&xylem_core::ScanStats::default(), "MFT", &mut buf).unwrap();
+    put("index_file", "small", &buf);
+}
