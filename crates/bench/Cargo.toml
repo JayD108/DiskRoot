@@ -1,0 +1,16 @@
+[package]
+name = "drishti-bench"
+description = "Benchmark harness: synthetic trees, timing, accuracy checks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "drishti-bench"
+path = "src/main.rs"
+
+[dependencies]
+drishti-core.workspace = true
+drishti-scan-walk.workspace = true
+clap.workspace = true
+drishti-scan-mft.workspace = true

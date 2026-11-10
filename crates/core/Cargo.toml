@@ -1,0 +1,9 @@
+[package]
+name = "drishti-core"
+description = "Flat file-tree index, size roll-up and reports"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true

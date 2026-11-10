@@ -1,0 +1,10 @@
+[package]
+name = "drishti-scan-mft"
+description = "Reads the NTFS Master File Table directly (admin) for very fast scans"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+drishti-core.workspace = true
+drishti-scan-walk.workspace = true
