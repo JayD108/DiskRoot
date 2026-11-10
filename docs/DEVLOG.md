@@ -387,3 +387,11 @@ User asked: "go for next step and also add the security measures ... and think o
   - `FileRow`/`TypeRow` types and a test.
 - App: **View → Largest files & file types…** Two columns: the top 100 files with a search box (re-queries as you type) and coloured category dots; file types with size and count. Clicking a file jumps to it in the tree (switching to the location view if needed). Names go through `visible()`.
 - Verified on C:\Windows (172k files): .msi installer caches 922 MB each, .dll 23.7 GB in 35,736 files.
+
+### 11 Nov: Phase 7, CSV export in the app and an Explorer right-click entry
+- The CSV writer moved from the CLI to `xylem_core::report::write_csv` (shared; skips items deleted through Xylem; the formula-injection note is documented). The CLI uses it; verified on C:\Windows\Fonts (535 rows).
+- App: **File → Export to CSV** writes `Documents\Xylem\<root> <UTC time>.csv` on a worker thread (`Scanned::export_csv`), then shows it in Explorer.
+- Installer: optional section **"Explorer right-click: Analyze with Xylem"**, writing HKLM `Software\Classes\{Directory, Directory\Background, Drive}\shell\Xylem` → `"xylem.exe" "%V"`. Removed on uninstall.
+  - main.rs drops the stray `"` that `"C:\"` turns into under Windows' argument rules.
+  - The CI install test now checks the entries are added and removed.
+- 64 tests, clippy clean.

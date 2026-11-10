@@ -85,7 +85,13 @@ fn main() {
             .with_icon(Arc::new(icon)),
         ..Default::default()
     };
-    let start = args.get(1).map(|a| a.trim()).filter(|a| !a.is_empty() && !a.starts_with('-')).map(str::to_owned);
+    // Explorer's right-click menu passes "%V"; for a drive that is "C:\",
+    // which Windows' argument rules turn into `C:"`. Drop the stray quote.
+    let start = args
+        .get(1)
+        .map(|a| a.trim().trim_end_matches('"'))
+        .filter(|a| !a.is_empty() && !a.starts_with('-'))
+        .map(str::to_owned);
     let result = eframe::run_native("Xylem", options, Box::new(move |cc| Ok(Box::new(app::XylemApp::new(cc, start)))));
     if let Err(e) = result {
         eprintln!("Xylem could not start: {e}");

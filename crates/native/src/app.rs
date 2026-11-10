@@ -54,6 +54,7 @@ enum JobKind {
     Fast(String),
     Delete(String),
     Reopen(String),
+    Export(String),
 }
 
 /// A remembered scan opened at startup: the scan, when it was made, the
@@ -69,6 +70,7 @@ enum Done {
     Scanned(Box<Result<Scanned, String>>),
     Deleted(u32, Result<DeleteOut, String>),
     Reopened(Box<Option<Reopened>>),
+    Exported(Result<std::path::PathBuf, String>),
 }
 
 struct Job {
@@ -318,6 +320,16 @@ impl XylemApp {
             Ok(Done::Scanned(r)) => self.finish_scan(*r),
             Ok(Done::Deleted(node, r)) => self.finish_delete(node, r),
             Ok(Done::Reopened(r)) => self.finish_reopen(*r),
+            Ok(Done::Exported(r)) => {
+                self.job = None;
+                match r {
+                    Ok(p) => {
+                        self.say(format!("Exported to {}", p.display()));
+                        let _ = xylem_session::reveal(&p.display().to_string());
+                    }
+                    Err(e) => self.dialog = Some(Dialog::Message("Couldn't export".into(), e)),
+                }
+            }
         }
     }
 
@@ -679,6 +691,10 @@ impl XylemApp {
                         Err(e) => self.say(format!("Couldn't delete the remembered scans: {e}")),
                     }
                     self.changes = None;
+                    ui.close();
+                }
+                if ui.add_enabled(self.scanned.is_some() && self.job.is_none(), egui::Button::new("Export to CSV")).on_hover_text("Every file and folder of this scan, saved in Documents\\Xylem").clicked() {
+                    self.start_export();
                     ui.close();
                 }
                 ui.separator();
@@ -1072,6 +1088,27 @@ impl XylemApp {
         self.dialog = Some(Dialog::Security(Box::new(xylem_session::integrity::check_current_exe())));
     }
 
+    /// Writes the scan to Documents\Xylem\<root> <date>.csv on a worker thread.
+    fn start_export(&mut self) {
+        let Some(s) = &self.scanned else { return };
+        let (idx, _, _) = s.remember_parts();
+        let root = s.summary().root;
+        let docs = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from).unwrap_or_default().join("Documents").join("Xylem");
+        let safe: String = root.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
+        let stamp = xylem_session::safety::utc_now().replace([':', ' '], "-");
+        let path = docs.join(format!("{} {stamp}.csv", safe.trim_matches('_')));
+        let (tx, rx) = mpsc::channel();
+        let shown = path.display().to_string();
+        std::thread::spawn(move || {
+            let r = std::fs::create_dir_all(&docs)
+                .and_then(|()| Scanned::export_csv(&idx, &path))
+                .map(|()| path)
+                .map_err(|e| e.to_string());
+            let _ = tx.send(Done::Exported(r));
+        });
+        self.job = Some(Job { kind: JobKind::Export(shown), started: Instant::now(), rx, cancel: Arc::default() });
+    }
+
     fn open_files(&mut self) {
         let Some(s) = &self.scanned else { return };
         let view = FilesView { query: String::new(), top: s.top_files(100, ""), types: s.file_types(40) };
@@ -1366,6 +1403,7 @@ impl XylemApp {
                 ),
                 JobKind::Delete(n) => (format!("Moving \"{n}\" to the Recycle Bin"), "Windows is moving the files…".to_owned()),
                 JobKind::Reopen(p) => (format!("Opening the remembered scan of {p}"), "Loading the last scan from this PC…".to_owned()),
+                JobKind::Export(p) => ("Exporting to CSV".to_owned(), format!("Writing {p}…")),
             };
             Modal::new(egui::Id::unique("xylem-job")).show(ctx, |ui| {
                 ui.set_width(420.0);

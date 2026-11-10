@@ -110,6 +110,18 @@ Section "Xylem (required)" SecApp
   WriteRegDWORD HKLM "${UNINST_KEY}" "EstimatedSize" 7500
 SectionEnd
 
+Section "Explorer right-click: Analyze with Xylem" SecExplorer
+  ; Runs as the signed-in user (Explorer launches it), never elevated.
+  !macro XylemVerb ROOT ARG
+    WriteRegStr HKLM "Software\Classes\${ROOT}\shell\Xylem" "" "Analyze with Xylem"
+    WriteRegStr HKLM "Software\Classes\${ROOT}\shell\Xylem" "Icon" '"$INSTDIR\xylem.exe"'
+    WriteRegStr HKLM "Software\Classes\${ROOT}\shell\Xylem\command" "" '"$INSTDIR\xylem.exe" "${ARG}"'
+  !macroend
+  !insertmacro XylemVerb "Directory" "%V"
+  !insertmacro XylemVerb "Directory\Background" "%V"
+  !insertmacro XylemVerb "Drive" "%V"
+SectionEnd
+
 Section "Command-line tool (xylem-cli)" SecCli
   SetOutPath "$INSTDIR"
   File "${SRCDIR}\xylem-cli.exe"
@@ -123,6 +135,7 @@ SectionEnd
   !insertmacro MUI_DESCRIPTION_TEXT ${SecApp} "The Xylem app, including the Fast scan helper."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecCli} "xylem-cli.exe: scan from the command line and export CSV."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "A Xylem shortcut on the desktop."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecExplorer} "Adds \"Analyze with Xylem\" when you right-click a folder or drive."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
@@ -136,4 +149,7 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\Xylem.lnk"
   Delete "$DESKTOP\Xylem.lnk"
   DeleteRegKey HKLM "${UNINST_KEY}"
+  DeleteRegKey HKLM "Software\Classes\Directory\shell\Xylem"
+  DeleteRegKey HKLM "Software\Classes\Directory\Background\shell\Xylem"
+  DeleteRegKey HKLM "Software\Classes\Drive\shell\Xylem"
 SectionEnd

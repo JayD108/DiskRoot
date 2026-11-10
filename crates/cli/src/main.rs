@@ -1,11 +1,10 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use xylem_core::format::{bytes, count};
-use xylem_core::{Index, NO_PARENT};
 use xylem_core::report::{self, Entry, SortBy};
 use xylem_scan_mft::{Mode, Used, scan_auto};
 use xylem_scan_walk::{default_threads, sys};
@@ -94,7 +93,9 @@ fn run_scan(args: &ScanArgs) -> std::io::Result<()> {
     let folders = report::top_folders(idx, args.top, by);
     let files = report::top_files(idx, args.top, by);
     if let Some(path) = &args.export {
-        export_csv(idx, path)?;
+        let mut w = BufWriter::with_capacity(1 << 20, File::create(path)?);
+        report::write_csv(idx, &mut w)?;
+        w.flush()?;
     }
     let peak = sys::peak_memory_bytes().unwrap_or(0);
 
@@ -137,37 +138,6 @@ fn run_scan(args: &ScanArgs) -> std::io::Result<()> {
     print_table(&format!("Top {} folders (by {what})", folders.len()), &folders, true);
     print_table(&format!("Top {} files (by {what})", files.len()), &files, false);
     Ok(())
-}
-
-/// Writes one CSV row per file and folder: path, size, on disk, files, kind.
-/// Folder paths are cached (parents always come before children), so each
-/// row costs one string join instead of a walk up to the root.
-fn export_csv(idx: &Index, path: &Path) -> std::io::Result<()> {
-    let mut w = BufWriter::with_capacity(1 << 20, File::create(path)?);
-    writeln!(w, "Path,Size,OnDisk,Files,Kind")?;
-    let mut dir_paths: Vec<Option<Box<str>>> = vec![None; idx.len()];
-    let mut buf = String::new();
-    for i in 0..idx.len() as u32 {
-        buf.clear();
-        let parent = idx.parent(i);
-        if parent == NO_PARENT {
-            buf.push_str(idx.name(i));
-        } else {
-            let p = dir_paths[parent as usize].as_deref().expect("parent folder seen first");
-            buf.push_str(p);
-            if !p.ends_with('\\') {
-                buf.push('\\');
-            }
-            buf.push_str(idx.name(i));
-        }
-        let is_dir = idx.is_dir(i);
-        write!(w, "\"{}\",{},{},{},{}", buf.replace('"', "\"\""), idx.size(i), idx.alloc(i), idx.files(i), if is_dir { "dir" } else { "file" })?;
-        w.write_all(b"\n")?;
-        if is_dir {
-            dir_paths[i as usize] = Some(buf.as_str().into());
-        }
-    }
-    w.flush()
 }
 
 fn print_table(title: &str, rows: &[Entry], with_files: bool) {

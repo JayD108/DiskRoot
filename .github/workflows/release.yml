@@ -90,12 +90,14 @@ jobs:
           if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Xylem.lnk")) { throw "no Start Menu shortcut" }
           $key = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Xylem'
           if ((Get-ItemProperty $key).DisplayVersion -ne $v) { throw "uninstall entry missing or wrong version" }
+          foreach ($k in "Directory","Directory\Background","Drive") { if (-not (Test-Path "HKLM:\Software\Classes\$k\shell\Xylem\command")) { throw "no right-click entry for $k" } }
           & "$dir\xylem-cli.exe" --version
           if ($LASTEXITCODE) { throw "installed xylem-cli failed" }
           Start-Process "$dir\uninstall.exe" -ArgumentList '/S' -Wait
           for ($i = 0; $i -lt 60 -and (Test-Path $dir); $i++) { Start-Sleep 1 }
           if (Test-Path $dir) { throw "install folder left behind" }
           if (Test-Path $key) { throw "uninstall entry left behind" }
+          foreach ($k in "Directory","Directory\Background","Drive") { if (Test-Path "HKLM:\Software\Classes\$k\shell\Xylem") { throw "right-click entry left behind ($k)" } }
           if (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Xylem.lnk") { throw "shortcut left behind" }
           "install/uninstall OK"
 

@@ -59,6 +59,43 @@ fn top(idx: &Index, n: usize, by: SortBy, keep: impl Fn(u32) -> bool) -> Vec<Ent
         .collect()
 }
 
+/// Writes one CSV row per file and folder: path, size, on disk, files,
+/// kind. Folder paths are cached (parents always come before children), so
+/// each row costs one string join instead of a walk up to the root. Items
+/// deleted through Xylem are left out. Every path starts with the drive or
+/// share (never `=`, `+`, `-`, `@`) and is quoted, so spreadsheet apps
+/// can't treat a cell as a formula.
+pub fn write_csv(idx: &Index, w: &mut impl std::io::Write) -> std::io::Result<()> {
+    use crate::{NO_PARENT, flags};
+    writeln!(w, "Path,Size,OnDisk,Files,Kind")?;
+    let mut dir_paths: Vec<Option<Box<str>>> = vec![None; idx.len()];
+    let mut buf = String::new();
+    for i in 0..idx.len() as u32 {
+        if idx.flags(i) & flags::DELETED != 0 {
+            continue;
+        }
+        buf.clear();
+        let parent = idx.parent(i);
+        if parent == NO_PARENT {
+            buf.push_str(idx.name(i));
+        } else {
+            let Some(p) = dir_paths[parent as usize].as_deref() else { continue };
+            buf.push_str(p);
+            if !p.ends_with('\\') {
+                buf.push('\\');
+            }
+            buf.push_str(idx.name(i));
+        }
+        let is_dir = idx.is_dir(i);
+        write!(w, "\"{}\",{},{},{},{}", buf.replace('"', "\"\""), idx.size(i), idx.alloc(i), idx.files(i), if is_dir { "dir" } else { "file" })?;
+        w.write_all(b"\n")?;
+        if is_dir {
+            dir_paths[i as usize] = Some(buf.as_str().into());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -594,6 +594,15 @@ impl Scanned {
         v
     }
 
+    /// Writes the whole scan as CSV to `path` (see `report::write_csv`).
+    /// Blocking: use a worker thread (via `remember_parts`' index).
+    pub fn export_csv(index: &Index, path: &Path) -> std::io::Result<()> {
+        use std::io::Write;
+        let mut w = std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(path)?);
+        xylem_core::report::write_csv(index, &mut w)?;
+        w.flush()
+    }
+
     /// Heap bytes per data structure (for memory work).
     pub fn memory_report(&self) -> Vec<(&'static str, usize)> {
         let mut v = self.index.heap_columns();
