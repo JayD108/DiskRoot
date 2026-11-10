@@ -1,18 +1,20 @@
 //! The elevated scan helper, built into `xylem.exe`.
 //!
 //! When the app needs a fast MFT scan it starts itself through the UAC
-//! prompt as `xylem.exe --helper-scan C: --save-index <file>`. In that mode
-//! no window is created: it scans, writes the index file, and exits.
+//! prompt as `xylem.exe --helper-scan C: --pipe \\.\pipe\xylem-...`. In that
+//! mode no window is created: it scans and sends the index through the
+//! app's private pipe, then exits.
 //!
-//! This code runs with admin rights, so it only accepts exactly that
-//! command line, only writes a NEW `xylem-*.idx` file directly inside the
-//! user's temp folder (never overwrites: a planted file or link makes it
-//! fail), and opens the drive read-only.
+//! This code runs with admin rights, so it:
+//! - only accepts exactly that command line;
+//! - opens the drive read-only;
+//! - **writes nothing to disk** (no temp file; see `elevate.rs` for why);
+//! - connects to the pipe with `SECURITY_IDENTIFICATION`, so even a fake
+//!   pipe server could never act with the helper's admin rights.
 
-use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::path::Path;
 
+use xylem_core::{Index, ScanStats};
 use xylem_scan_mft::scan_drive;
 
 /// Exit codes of the helper process.
@@ -28,32 +30,25 @@ pub fn run_if_helper(args: &[String]) -> Option<i32> {
         return None;
     }
     let code = match (args.get(2), args.get(3).map(String::as_str), args.get(4), args.len()) {
-        (Some(drive), Some("--save-index"), Some(out), 5) => run(drive, Path::new(out)),
+        (Some(drive), Some("--pipe"), Some(pipe), 5) => run(drive, pipe),
         _ => BAD_ARGS,
     };
     Some(code)
 }
 
-fn run(drive: &str, out: &Path) -> i32 {
+fn run(drive: &str, pipe: &str) -> i32 {
     let Some(letter) = drive_letter(drive) else { return BAD_ARGS };
-    if check_index_path(out).is_err() {
+    if check_pipe_name(pipe).is_err() {
         return BAD_ARGS;
     }
     let scan = match scan_drive(letter, xylem_scan_walk::default_threads()) {
         Ok(s) => s,
         Err(_) => return SCAN_FAILED,
     };
-    let write = || -> std::io::Result<()> {
-        // create_new: never overwrite (see module docs).
-        let mut w = BufWriter::with_capacity(1 << 20, File::create_new(out)?);
-        scan.index.save(&scan.stats, "MFT (direct read)", &mut w)?;
-        w.flush()
-    };
-    if write().is_err() {
-        let _ = std::fs::remove_file(out);
-        return WRITE_FAILED;
+    match send_to_pipe(pipe, &scan.index, &scan.stats, "MFT (direct read)") {
+        Ok(()) => OK,
+        Err(_) => WRITE_FAILED,
     }
-    OK
 }
 
 /// "C:" or "C:\" -> 'C'.
@@ -63,18 +58,58 @@ fn drive_letter(s: &str) -> Option<char> {
     matches!(c.as_str(), ":" | ":\\").then_some(l.to_ascii_uppercase())
 }
 
-/// Only `xylem-*.idx`, directly inside the user's temp folder.
-pub fn check_index_path(path: &Path) -> Result<(), String> {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if !(name.starts_with("xylem-") && name.ends_with(".idx")) {
-        return Err("index file must be named xylem-*.idx".into());
+/// Only a local pipe named like the app makes them:
+/// `\\.\pipe\xylem-<digits/hex/dashes>`.
+pub fn check_pipe_name(name: &str) -> Result<(), String> {
+    let rest = name.strip_prefix(r"\\.\pipe\xylem-").ok_or("not a Xylem pipe")?;
+    let ok = !rest.is_empty() && rest.len() <= 80 && rest.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+    if ok { Ok(()) } else { Err("bad pipe name".into()) }
+}
+
+#[link(name = "kernel32", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn CreateFileW(
+        name: *const u16,
+        access: u32,
+        share: u32,
+        security: *mut std::ffi::c_void,
+        disposition: u32,
+        flags: u32,
+        template: *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void;
+}
+
+/// Writes the index into the app's pipe. Opened with SECURITY_SQOS_PRESENT |
+/// SECURITY_IDENTIFICATION: the server can see who connected, but can't
+/// impersonate (act as) this admin process.
+pub fn send_to_pipe(pipe: &str, index: &Index, stats: &ScanStats, mode: &str) -> std::io::Result<()> {
+    use std::os::windows::io::FromRawHandle;
+    const GENERIC_WRITE: u32 = 0x4000_0000;
+    const OPEN_EXISTING: u32 = 3;
+    const SECURITY_SQOS_PRESENT: u32 = 0x0010_0000;
+    const SECURITY_IDENTIFICATION: u32 = 0x0001_0000;
+    check_pipe_name(pipe).map_err(std::io::Error::other)?;
+    let w: Vec<u16> = pipe.encode_utf16().chain([0]).collect();
+    // SAFETY: NUL-terminated name; returns an owned handle or INVALID.
+    let h = unsafe {
+        CreateFileW(
+            w.as_ptr(),
+            GENERIC_WRITE,
+            0,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+            std::ptr::null_mut(),
+        )
+    };
+    if h.is_null() || h == -1isize as *mut std::ffi::c_void {
+        return Err(std::io::Error::last_os_error());
     }
-    let parent = path.parent().map(std::fs::canonicalize).transpose().map_err(|e| e.to_string())?;
-    let temp = std::fs::canonicalize(std::env::temp_dir()).map_err(|e| e.to_string())?;
-    if parent.as_deref() != Some(temp.as_path()) {
-        return Err("index file must be directly inside the temp folder".into());
-    }
-    Ok(())
+    // SAFETY: we own the handle; File closes it.
+    let f = unsafe { std::fs::File::from_raw_handle(h) };
+    let mut out = BufWriter::with_capacity(1 << 20, f);
+    index.save(stats, mode, &mut out)?;
+    out.flush()
 }
 
 #[cfg(test)]
@@ -86,13 +121,13 @@ mod tests {
     }
 
     #[test]
-    fn index_path_is_restricted_to_temp() {
-        let temp = std::env::temp_dir();
-        assert!(check_index_path(&temp.join("xylem-123-abc.idx")).is_ok());
-        assert!(check_index_path(&temp.join("evil.dll")).is_err(), "wrong name");
-        assert!(check_index_path(&temp.join("xylem-1.dll")).is_err(), "wrong extension");
-        assert!(check_index_path(Path::new(r"C:\Windows\xylem-1.idx")).is_err(), "outside temp");
-        assert!(check_index_path(&temp.join("sub").join("xylem-1.idx")).is_err(), "not directly in temp");
+    fn pipe_names_are_restricted() {
+        assert!(check_pipe_name(r"\\.\pipe\xylem-123-abc-0f").is_ok());
+        assert!(check_pipe_name(r"\\.\pipe\other").is_err());
+        assert!(check_pipe_name(r"\\server\pipe\xylem-1").is_err(), "remote");
+        assert!(check_pipe_name(r"\\.\pipe\xylem-1\..\x").is_err());
+        assert!(check_pipe_name(r"C:\Windows\xylem-1.idx").is_err(), "files are no longer accepted");
+        assert!(check_pipe_name(r"\\.\pipe\xylem-").is_err());
     }
 
     #[test]
@@ -101,11 +136,12 @@ mod tests {
         assert_eq!(run_if_helper(&args(&["xylem.exe", "C:\\Users"])), None, "open a folder");
         assert_eq!(run_if_helper(&args(&["x", "--helper-scan"])), Some(BAD_ARGS));
         assert_eq!(run_if_helper(&args(&["x", "--helper-scan", "C:", "--out", "f"])), Some(BAD_ARGS));
-        assert_eq!(run_if_helper(&args(&["x", "--helper-scan", "C:", "--save-index", "f", "extra"])), Some(BAD_ARGS));
+        assert_eq!(run_if_helper(&args(&["x", "--helper-scan", "C:", "--pipe", "f", "extra"])), Some(BAD_ARGS));
+        assert_eq!(run_if_helper(&args(&["x", "--helper-scan", "C:", "--save-index", r"C:\x\xylem-1.idx"])), Some(BAD_ARGS), "old file mode is gone");
         // Wrong drive syntax or a path outside temp: refused before any scan.
-        assert_eq!(run_if_helper(&args(&["x", "--helper-scan", "C:\\Users", "--save-index", "f"])), Some(BAD_ARGS));
+        assert_eq!(run_if_helper(&args(&["x", "--helper-scan", "C:\\Users", "--pipe", r"\\.\pipe\xylem-1"])), Some(BAD_ARGS));
         assert_eq!(
-            run_if_helper(&args(&["x", "--helper-scan", "C:", "--save-index", r"C:\Windows\xylem-1.idx"])),
+            run_if_helper(&args(&["x", "--helper-scan", "C:", "--pipe", r"\\evil\pipe\xylem-1"])),
             Some(BAD_ARGS)
         );
         assert_eq!(drive_letter("d:\\"), Some('D'));

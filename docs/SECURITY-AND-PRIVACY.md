@@ -14,9 +14,10 @@
 - The app window never runs as admin.
 - **Fast scan** starts `xylem.exe --helper-scan C: --save-index <file>` through the Windows UAC prompt. The helper creates no window: it scans, writes its result and exits.
 - It accepts only that exact command line.
-- **Hardened handoff:**
-  - The helper only creates a *new* file (`create_new`) named `xylem-*.idx` directly in your temp folder. A planted file or link makes it fail instead of overwriting.
-  - The app validates the file fully before loading it, then deletes it.
+- **No files written as admin:** the helper sends its result through a private named pipe that the app creates first (nobody else can create it; local only). The helper connects in "identification" mode, so the pipe can't borrow its admin rights. The app validates everything it receives with the fuzz-tested loader.
+- **Cancel and time limit:** Fast scan can be cancelled, and a helper that hangs is stopped after 10 minutes.
+- **Admin password from a standard account:** works. The administrator who types the password authorizes reading every file name on the drive (never file contents).
+- **Only from an installed copy:** release builds run Fast scan only from Program Files.
 - **Install location:** installed in Program Files, only administrators can replace the exe that Fast scan runs as admin.
 
 ## Deleting safely

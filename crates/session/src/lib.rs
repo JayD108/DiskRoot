@@ -102,7 +102,7 @@ pub fn reopen(root: &str) -> Option<(Scanned, u64)> {
 
 /// Fast MFT scan through the elevated helper (shows the UAC prompt).
 /// Blocking: call it from a worker thread.
-pub fn scan_admin(drive: &str) -> Result<Scanned, String> {
+pub fn scan_admin(drive: &str, cancel: &std::sync::atomic::AtomicBool) -> Result<Scanned, String> {
     // Fast scan runs this very exe with admin rights. A copy in a folder the
     // user can write to (Downloads, a portable zip) could be swapped by any
     // program running as the user, which would then get admin rights from
@@ -112,7 +112,7 @@ pub fn scan_admin(drive: &str) -> Result<Scanned, String> {
         return Err(integrity::FAST_SCAN_NEEDS_INSTALL.into());
     }
     let drive = real_path(drive)?;
-    let (index, stats, mode) = elevate::scan_with_helper(&drive)?;
+    let (index, stats, mode) = elevate::scan_with_helper(&drive, cancel)?;
     Ok(Scanned::new(index, stats, mode))
 }
 

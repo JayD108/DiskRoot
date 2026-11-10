@@ -2,7 +2,7 @@
 //!
 //! One small exe:
 //! - `xylem.exe [path]` opens the window (and scans `path` if given).
-//! - `xylem.exe --helper-scan C: --save-index <file>` is the elevated fast-
+//! - `xylem.exe --helper-scan C: --pipe <private pipe>` is the elevated fast-
 //!   scan helper the app starts through the UAC prompt; it never opens a
 //!   window (see `xylem_session::helper`).
 //!

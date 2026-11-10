@@ -5,6 +5,8 @@
 
 use std::collections::HashSet;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
@@ -73,6 +75,8 @@ struct Job {
     kind: JobKind,
     started: Instant,
     rx: Receiver<Done>,
+    /// Set by the Cancel button (Fast scan): stops waiting for the helper.
+    cancel: Arc<AtomicBool>,
 }
 
 enum Dialog {
@@ -216,11 +220,13 @@ impl XylemApp {
         }
         let (tx, rx) = mpsc::channel();
         let p = path.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let c = Arc::clone(&cancel);
         std::thread::spawn(move || {
-            let r = if fast { xylem_session::scan_admin(&p) } else { xylem_session::scan(&p) };
+            let r = if fast { xylem_session::scan_admin(&p, &c) } else { xylem_session::scan(&p) };
             let _ = tx.send(Done::Scanned(Box::new(r)));
         });
-        self.job = Some(Job { kind: if fast { JobKind::Fast(path) } else { JobKind::Scan(path) }, started: Instant::now(), rx });
+        self.job = Some(Job { kind: if fast { JobKind::Fast(path) } else { JobKind::Scan(path) }, started: Instant::now(), rx, cancel });
     }
 
     /// Instant reopen: load the remembered scan of the last path.
@@ -241,7 +247,7 @@ impl XylemApp {
             });
             let _ = tx.send(Done::Reopened(Box::new(r)));
         });
-        self.job = Some(Job { kind: JobKind::Reopen(path), started: Instant::now(), rx });
+        self.job = Some(Job { kind: JobKind::Reopen(path), started: Instant::now(), rx, cancel: Arc::default() });
     }
 
     /// After a fresh scan: save it for instant reopen and work out what
@@ -288,7 +294,7 @@ impl XylemApp {
             let r = pending.recycle();
             let _ = tx.send(Done::Deleted(node, r));
         });
-        self.job = Some(Job { kind: JobKind::Delete(name), started: Instant::now(), rx });
+        self.job = Some(Job { kind: JobKind::Delete(name), started: Instant::now(), rx, cancel: Arc::default() });
     }
 
     fn poll_job(&mut self, ctx: &egui::Context) {
@@ -1358,7 +1364,17 @@ impl XylemApp {
                 let pulse = Rect::from_min_max(pos2(x.max(r.min.x), r.min.y), pos2((x + w).min(r.max.x), r.max.y));
                 p.rect_filled(pulse, CornerRadius::same(2), t.accent);
                 ui.add_space(4.0);
-                ui.label(RichText::new(format!("{secs:.0} s")).color(t.faint).size(11.5));
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("{secs:.0} s")).color(t.faint).size(11.5));
+                    if matches!(job.kind, JobKind::Fast(_)) {
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let stopping = job.cancel.load(Ordering::Relaxed);
+                            if ui.add_enabled(!stopping, egui::Button::new(if stopping { "Cancelling…" } else { "Cancel" })).clicked() {
+                                job.cancel.store(true, Ordering::Relaxed);
+                            }
+                        });
+                    }
+                });
             });
             return;
         }
@@ -1448,7 +1464,7 @@ impl XylemApp {
                                     let short = e.outcome.split(':').next().unwrap_or("");
                                     ui.label(RichText::new(short).color(col)).on_hover_text(&e.outcome);
                                     ui.label(fmt_bytes(e.bytes));
-                                    ui.add(egui::Label::new(&e.path).truncate())
+                                    ui.add(egui::Label::new(visible(&e.path)).truncate())
                                         .on_hover_text(format!("{}\n{} · {}", e.path, e.category, fmt_files(u64::from(e.files))));
                                     ui.end_row();
                                 }

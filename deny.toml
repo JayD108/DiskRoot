@@ -1,0 +1,38 @@
+# cargo-deny policy (run in CI): known vulnerabilities, licences, and where
+# crates may come from. Keeps every shipped component OSI-licensed, which
+# SignPath Foundation requires.
+
+[graph]
+targets = ["x86_64-pc-windows-msvc"]
+
+[advisories]
+# Unmaintained notices are informational; real vulnerabilities fail.
+unmaintained = "workspace"
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "Unicode-3.0",
+    "Unlicense",
+    "BSL-1.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+# Our own crates depend on each other by local path (no version), which
+# cargo-deny counts as wildcards. External crates are pinned by Cargo.lock
+# and may only come from crates.io (see [sources]).
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

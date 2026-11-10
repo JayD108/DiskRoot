@@ -344,3 +344,16 @@ User asked: "go for next step and also add the security measures ... and think o
 - **v0.1.0 published** by the release workflow from tag `v0.1.0` → commit 7d3097e: installer 2.50 MB, portable zip 3.28 MB, SHA256SUMS. Unsigned (signing after all phases). The workflow's real install/uninstall test passed; CI on main is green.
 - An old local `v0.1.0` tag (pre-cleanup commit, never pushed) was replaced.
 - Dependabot opened PRs for Actions major bumps (checkout 7, upload-artifact 7, signpath action 3). Not merged yet; review them (the signpath action input names may differ in v3).
+
+### Same day, later: remaining security findings F-09, F-11, F-13, F-15, cargo-deny
+- **F-09, by design change:** the elevated helper no longer writes any file.
+  - `elevate.rs`: the app creates `\.\pipe\xylem-<pid>-<nanos>-<random>` (FIRST_PIPE_INSTANCE, REJECT_REMOTE_CLIENTS, inbound, default DACL) before ShellExecuteEx, reads it on a thread, and validates with `load_checked`.
+  - `helper.rs`: `--helper-scan C: --pipe <name>`, strict name check, connects with SECURITY_SQOS_PRESENT|SECURITY_IDENTIFICATION, streams `Index::save`.
+  - The old `--save-index` file mode is gone.
+  - Handled the ERROR_NO_DATA race (a helper that writes and closes before ConnectNamedPipe), found by a flaky parallel test; 5/5 runs clean afterwards.
+  - **Real elevated test** (user clicked UAC; debug build): C: 1,527,612 files via pipe in 4.06 s unoptimized, **0 `xylem-*.idx` files in TEMP**.
+- **F-11:** wait in 200 ms slices; Cancel button in the Fast-scan dialog; 10-minute limit; TerminateProcess attempted.
+- **F-15:** works across accounts with the pipe; documented as authorized by the admin's password.
+- **F-13:** `visible()` also in the Deletion history. The log is JSON and the CSV quoted. OUT-02 (CSV formula injection) passes by design.
+- **cargo-deny:** `deny.toml` (OSI licence allow-list, advisories, crates.io only) passes locally: advisories, bans, licenses and sources all ok. Added as a CI job.
+- All findings F-01…F-16 are now fixed or decided (`docs/SECURITY-STATUS.md`). Remaining before 1.0: the VM clearance test run, 24 h cargo-fuzz, signing.
