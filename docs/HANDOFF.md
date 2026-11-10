@@ -3,12 +3,17 @@
 **Read this first, then the last section of `DEVLOG.md`.** Keep both up to date: after every milestone, add to `DEVLOG.md`, refresh this file, and commit.
 
 ## Where we are
-- Phases 1–3 are done and Phase 4 is in progress. See "Next steps" below.
+- **Phases 1–4 are done.** The project was **renamed Drishti → Xylem** on 2026-11-10 (folder `Storage/xylem`).
 - **Working:**
   - The CLI (`xylem`): folder walk plus the MFT reader, CSV/JSON export, `--save-index`.
   - The bench harness (`xylem-bench`).
-  - The Tauri app (`xylem-app`): sunburst, treemap, list, and the admin fast scan through the helper.
+  - The Tauri app (`xylem-app`): sunburst, treemap, list, admin fast scan through the helper, By location / By category, notes and safety badges, Recycle-Bin delete.
+- `xylem-ui-prototype/` holds the proposed new UI design (static demo, open `index.html`). It is **not** wired into the app yet.
 - Every test passes and `cargo clippy --workspace --all-targets` is clean.
+- **Waiting on the user** (details at the end of DEVLOG session 2):
+  1. **Security.md:** consent screen and shield. Discuss before implementing, and keep the copy honest (WebView2 does contact Microsoft).
+  2. **UI technology:** keep Tauri/WebView2 (~250 MB of runtime, Microsoft connections) or move to a native Rust UI (egui/Slint: no browser runtime, far lighter).
+  3. **Approve the prototype design**, then port it into the real app.
 
 ## Build and run
 ```powershell
@@ -33,13 +38,13 @@ cargo build --release --workspace               # app ~1.5 min, first time ~3 mi
 - Never ship anything that depends on reverse-engineering WizTree.
 
 ## Next steps
-1. **Phase 4 (MVP finish):** C1 classification, C2 "by category" view, D3 safe delete to the Recycle Bin with protected paths locked.
+1. **After the user's decisions above:** port the prototype design and add the consent screen and shield.
 2. **Phase 5:**
    - Index cache plus USN journal (instant reopen).
    - Snapshots and diff ("what changed").
-   - Safety badges and notes (D1/D2).
-3. **Later:**
+3. **Speed:** investigate the first-raw-read "extents" cost (0.36–0.80 s, likely the NTFS metadata flush).
+4. **Later:**
    - Show the other names of hardlinked files.
-   - Reduce MFT-mode RAM (290 MB).
+   - Reduce MFT-mode RAM (now ~255 MB).
    - Installer into Program Files, plus code signing.
    - Explorer context menu.
