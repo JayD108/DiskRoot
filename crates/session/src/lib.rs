@@ -214,6 +214,25 @@ pub struct DeleteOut {
     pub cancelled: bool,
 }
 
+/// A row of the "largest files" list.
+#[derive(Clone, Debug, Serialize)]
+pub struct FileRow {
+    pub id: u32,
+    pub name: String,
+    pub path: String,
+    pub on_disk: u64,
+    pub cat: u8,
+}
+
+/// A row of the "file types" list.
+#[derive(Clone, Debug, Serialize)]
+pub struct TypeRow {
+    /// Lowercase extension without the dot ("" = no extension).
+    pub ext: String,
+    pub bytes: u64,
+    pub files: u64,
+}
+
 /// One scan, classified, ready to answer UI questions.
 pub struct Scanned {
     /// Shared so the "remember this scan" thread can save it while the UI
@@ -519,6 +538,62 @@ impl Scanned {
         self.cats = CatStats::compute(&self.index, &self.cls, RULES.subs.len());
     }
 
+    /// The `limit` largest files (size on disk), optionally only those whose
+    /// name contains `query` (case-insensitive). One pass with a small heap.
+    pub fn top_files(&self, limit: usize, query: &str) -> Vec<FileRow> {
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+        let q = query.trim().to_lowercase();
+        let idx = &self.index;
+        let mut heap: BinaryHeap<Reverse<(u64, u32)>> = BinaryHeap::with_capacity(limit + 1);
+        for id in 1..idx.len() as u32 {
+            if idx.is_dir(id) || idx.flags(id) & flags::DELETED != 0 {
+                continue;
+            }
+            let a = idx.alloc(id);
+            if heap.len() == limit && heap.peek().is_some_and(|Reverse((m, _))| a <= *m) {
+                continue;
+            }
+            if !q.is_empty() && !idx.name(id).to_lowercase().contains(&q) {
+                continue;
+            }
+            heap.push(Reverse((a, id)));
+            if heap.len() > limit {
+                heap.pop();
+            }
+        }
+        let mut v: Vec<(u64, u32)> = heap.into_iter().map(|Reverse(x)| x).collect();
+        v.sort_unstable_by_key(|&(a, id)| (Reverse(a), id));
+        v.into_iter()
+            .map(|(a, id)| FileRow { id, name: idx.name(id).to_owned(), path: idx.path(id), on_disk: a, cat: self.cls.cat[id as usize] })
+            .collect()
+    }
+
+    /// Bytes and file counts per file extension (lowercase, "" = none),
+    /// biggest first.
+    pub fn file_types(&self, limit: usize) -> Vec<TypeRow> {
+        let idx = &self.index;
+        let mut m: std::collections::HashMap<String, (u64, u64)> = std::collections::HashMap::new();
+        for id in 1..idx.len() as u32 {
+            if idx.is_dir(id) || idx.flags(id) & flags::DELETED != 0 {
+                continue;
+            }
+            let name = idx.name(id);
+            let ext = match name.rfind('.') {
+                Some(i) if i > 0 && name.len() - i <= 12 => &name[i + 1..],
+                _ => "",
+            };
+            let key = if ext.bytes().any(|b| b.is_ascii_uppercase()) { ext.to_ascii_lowercase() } else { ext.to_owned() };
+            let e = m.entry(key).or_insert((0, 0));
+            e.0 = e.0.saturating_add(idx.alloc(id));
+            e.1 += 1;
+        }
+        let mut v: Vec<TypeRow> = m.into_iter().map(|(ext, (bytes, files))| TypeRow { ext, bytes, files }).collect();
+        v.sort_unstable_by_key(|r| std::cmp::Reverse(r.bytes));
+        v.truncate(limit);
+        v
+    }
+
     /// Heap bytes per data structure (for memory work).
     pub fn memory_report(&self) -> Vec<(&'static str, usize)> {
         let mut v = self.index.heap_columns();
@@ -761,6 +836,19 @@ mod tests {
             println!("{name:<16} {:>7.1} MB  {:>5.1} B/node", *b as f64 / 1048576.0, *b as f64 / n as f64);
         }
         println!("{:<16} {:>7.1} MB  {:>5.1} B/node  ({n} nodes)", "TOTAL", total as f64 / 1048576.0, total as f64 / n as f64);
+    }
+
+    #[test]
+    fn largest_files_and_types() {
+        let s = demo();
+        let top: Vec<String> = s.top_files(2, "").into_iter().map(|r| r.name).collect();
+        assert_eq!(top, ["movie.mp4", "a.js"]);
+        let js = s.top_files(10, "JS");
+        assert_eq!(js.len(), 1, "case-insensitive name search");
+        assert!(js[0].path.ends_with(r"node_modules\a.js"));
+        let types = s.file_types(10);
+        assert_eq!((types[0].ext.as_str(), types[0].bytes, types[0].files), ("mp4", 9000, 1));
+        assert_eq!(types.len(), 3);
     }
 
     #[test]

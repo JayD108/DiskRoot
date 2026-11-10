@@ -16,7 +16,7 @@ use eframe::egui::{
 use xylem_session::integrity::{Integrity, SignatureState};
 use xylem_session::remember::{self, Changes};
 use xylem_session::safety::{DeleteWarnings, LogEntry, visible};
-use xylem_session::{DeleteOut, ItemInfo, PendingDelete, RULES, Safety, Scanned, Shape, Summary};
+use xylem_session::{DeleteOut, FileRow, ItemInfo, PendingDelete, RULES, Safety, Scanned, Shape, Summary, TypeRow};
 
 use crate::map::{self, Hit, Kind, Layout as MapLayout, PaintCtx};
 use crate::settings::Settings;
@@ -86,8 +86,16 @@ enum Dialog {
     Security(Box<Integrity>),
     History(Vec<LogEntry>),
     Changes(Box<Changes>),
+    Files(Box<FilesView>),
     Message(String, String),
     ConfirmDelete(Box<Confirm>),
+}
+
+/// "Largest files & file types": the search text and current results.
+struct FilesView {
+    query: String,
+    top: Vec<FileRow>,
+    types: Vec<TypeRow>,
 }
 
 /// The delete confirmation: the item, the warnings to show, and whether
@@ -690,6 +698,10 @@ impl XylemApp {
                     }
                     ui.close();
                 }
+                if ui.add_enabled(self.scanned.is_some(), egui::Button::new("Largest files & file types…")).clicked() {
+                    self.open_files();
+                    ui.close();
+                }
                 ui.separator();
                 let mut changed = false;
                 changed |= ui.radio_value(&mut self.settings.treemap, false, "Sunburst map").clicked();
@@ -1060,6 +1072,12 @@ impl XylemApp {
         self.dialog = Some(Dialog::Security(Box::new(xylem_session::integrity::check_current_exe())));
     }
 
+    fn open_files(&mut self) {
+        let Some(s) = &self.scanned else { return };
+        let view = FilesView { query: String::new(), top: s.top_files(100, ""), types: s.file_types(40) };
+        self.dialog = Some(Dialog::Files(Box::new(view)));
+    }
+
     fn open_history(&mut self) {
         self.dialog = Some(Dialog::History(xylem_session::safety::read_log(200)));
     }
@@ -1383,7 +1401,9 @@ impl XylemApp {
         let mut confirm: Option<u32> = None;
         let mut action: Option<&'static str> = None;
         let mut jump: Option<String> = None;
-        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_));
+        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_));
+        let mut requery: Option<String> = None;
+        let mut jump_node: Option<u32> = None;
         // One window id per dialog kind, so a dialog never inherits another
         // one's remembered size.
         let kind = std::mem::discriminant(&*d);
@@ -1514,6 +1534,50 @@ impl XylemApp {
                         });
                     }
                 }
+                Dialog::Files(fv) => {
+                    ui.label(RichText::new("Largest files & file types").font(theme::semibold(16.0)));
+                    ui.add_space(6.0);
+                    ui.columns(2, |cols| {
+                        let ui = &mut cols[0];
+                        ui.label(RichText::new("Largest files").font(theme::semibold(13.0)));
+                        let r = ui.add(TextEdit::singleline(&mut fv.query).hint_text("Search file names").desired_width(f32::INFINITY));
+                        if r.changed() {
+                            requery = Some(fv.query.clone());
+                        }
+                        egui::ScrollArea::vertical().id_salt("top-files").max_height(380.0).show(ui, |ui| {
+                            if fv.top.is_empty() {
+                                ui.label(RichText::new("No matching files.").color(t.faint));
+                            }
+                            for f in &fv.top {
+                                ui.horizontal(|ui| {
+                                    ui.add_sized(vec2(70.0, 18.0), egui::Label::new(RichText::new(fmt_bytes(f.on_disk)).color(t.muted)));
+                                    let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+                                    ui.painter().rect_filled(dot, CornerRadius::same(2), theme::cat_color(f.cat));
+                                    let r = ui.add(egui::Label::new(visible(&f.name)).truncate().sense(Sense::click()));
+                                    if r.on_hover_text(format!("{}\nClick to show it in the tree", visible(&f.path))).clicked() {
+                                        jump_node = Some(f.id);
+                                    }
+                                });
+                            }
+                        });
+                        let ui = &mut cols[1];
+                        ui.label(RichText::new("File types").font(theme::semibold(13.0)));
+                        egui::ScrollArea::vertical().id_salt("file-types").max_height(410.0).show(ui, |ui| {
+                            egui::Grid::new("types").num_columns(3).striped(true).spacing([12.0, 4.0]).show(ui, |ui| {
+                                for h in ["Type", "Size", "Files"] {
+                                    ui.label(RichText::new(h).color(t.muted).size(12.0));
+                                }
+                                ui.end_row();
+                                for ty in &fv.types {
+                                    ui.label(if ty.ext.is_empty() { "(no extension)".to_owned() } else { format!(".{}", visible(&ty.ext)) });
+                                    ui.label(fmt_bytes(ty.bytes));
+                                    ui.label(RichText::new(fmt_count(ty.files)).color(t.muted));
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    });
+                }
                 Dialog::Message(title, msg) => {
                     ui.label(RichText::new(title.as_str()).font(theme::semibold(15.0)));
                     ui.add_space(4.0);
@@ -1626,6 +1690,18 @@ impl XylemApp {
                 }
             }
             _ => {}
+        }
+        if let (Some(q), Some(s), Some(Dialog::Files(fv))) = (requery, &self.scanned, &mut self.dialog) {
+            fv.top = s.top_files(100, &q);
+        }
+        if let Some(n) = jump_node {
+            self.dialog = None;
+            if self.settings.by_category {
+                self.settings.by_category = false;
+                self.regroup();
+            }
+            self.reveal_node(n, None);
+            self.scroll_to_selected = true;
         }
         if let Some(rel) = jump {
             self.dialog = None;

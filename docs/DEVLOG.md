@@ -379,3 +379,11 @@ User asked: "go for next step and also add the security measures ... and think o
   - `diff` compares 64-bit FNV fingerprints of lowercased paths (`path_key`) instead of lowercase strings, borrows the snapshot strings, and clones only the ≤ 50 reported folders.
 - **After:** app peak **282 MB** with remember on (was 375), 254 MB with it off; settled 212 MB. The rest of the peak is the scan plus view building (~40 MB above settled).
 - 6.3 (first raw MFT read) needs admin tracing; left for the admin benchmark session.
+
+### 11 Nov: Phase 7, largest files + file types
+- Engine:
+  - `Scanned::top_files(limit, query)`: one pass with a min-heap; case-insensitive name search.
+  - `Scanned::file_types(limit)`: bytes and file count per lowercase extension.
+  - `FileRow`/`TypeRow` types and a test.
+- App: **View → Largest files & file types…** Two columns: the top 100 files with a search box (re-queries as you type) and coloured category dots; file types with size and count. Clicking a file jumps to it in the tree (switching to the location view if needed). Names go through `visible()`.
+- Verified on C:\Windows (172k files): .msi installer caches 922 MB each, .dll 23.7 GB in 35,736 files.
