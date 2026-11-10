@@ -48,6 +48,9 @@ VIAddVersionKey "LegalCopyright" "MIT OR Apache-2.0"
 
 !define MUI_ICON "..\crates\native\assets\icon.ico"
 !define MUI_UNICON "..\crates\native\assets\icon.ico"
+; The logo on the welcome and finish pages (164x314 BMP from tools/make-icons.py).
+!define MUI_WELCOMEFINISHPAGE_BITMAP "welcome.bmp"
+!define MUI_UNWELCOMEFINISHPAGE_BITMAP "welcome.bmp"
 !define MUI_ABORTWARNING
 ; "Start Xylem" must not inherit the installer's admin rights: launch it
 ; through Explorer, which runs it as the signed-in user (not elevated).

@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/logo/xylem-logo-512.png" alt="Xylem logo: a leaf whose veins form growth rings, with one amber slice like a disk-usage chart" width="140">
+
 # Xylem
 
 **See what's filling your drive, what each thing is, and whether it's safe to delete.**

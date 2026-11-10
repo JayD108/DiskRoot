@@ -439,3 +439,12 @@ User asked: "go for next step and also add the security measures ... and think o
     - F-02 counted the user's installed Xylem; later the script's ⚡ was garbled (BOM-less script read as ANSI by PowerShell 5.1).
     - RO-01 compared folder timestamps, which Windows updates on any listing (proved with `dir`).
 - New real-file test: decoys `report.`, `report `, `CON.txt`, `nul` (created via `\?\`) are refused; the real `report` is untouched.
+
+### 11 Nov: the Xylem logo
+- The user made the logo with Gemini: a leaf whose veins form growth rings (= the sunburst), one amber wedge (= a disk segment), and the stem as the xylem vessel.
+- `tools/make-icons.py <master.png>` builds everything from it:
+  - Square crop around the leaf, which also removes Gemini's sparkle watermark in the corner.
+  - Standard padding (leaf at 86% of the tile) on the logo's own dark tile (#23241F), rounded corners, light sharpening ≤ 48 px.
+  - Outputs: `docs/logo/xylem-logo-master.png` (1024) and `xylem-logo-512.png`; `crates/native/assets/icon.ico` (16/20/24/32/40/48/64/128/256), `icon-256.png`, `icon-64.rgba` (window icon), `logo-128.rgba` (in-app); `installer/welcome.bmp` (164×314 NSIS welcome/finish image).
+- Used in: the exe icon (Explorer, taskbar, Start menu, right-click entry), the window title bar, the start screen (72 px), Help → About, the installer icon and welcome/finish pages, the README header, the GitHub release notes.
+- Checked: the 16 px icon is still recognizable (green leaf + amber slice); the exe's embedded icon extracted via System.Drawing.

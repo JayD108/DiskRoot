@@ -203,6 +203,8 @@ pub struct XylemApp {
     marked: BTreeSet<u32>,
     /// Hardlink names of the selected file: (node, all its names).
     links_cache: Option<(u32, Vec<String>)>,
+    /// The Xylem logo (start screen, About), uploaded once.
+    logo: egui::TextureHandle,
     scroll_to_selected: bool,
 }
 
@@ -237,6 +239,11 @@ impl XylemApp {
             prev_sizes: None,
             marked: BTreeSet::new(),
             links_cache: None,
+            logo: cc.egui_ctx.load_texture(
+                "xylem-logo",
+                egui::ColorImage::from_rgba_unmultiplied([128, 128], include_bytes!("../assets/logo-128.rgba")),
+                egui::TextureOptions::LINEAR,
+            ),
             scroll_to_selected: false,
         };
         if !app.settings.seen_notice {
@@ -1036,6 +1043,8 @@ impl XylemApp {
         ui.add_space(28.0);
         let mut pick: Option<String> = None;
         ui.vertical_centered(|ui| {
+            ui.add(egui::Image::new(&self.logo).fit_to_exact_size(vec2(72.0, 72.0)));
+            ui.add_space(8.0);
             ui.label(RichText::new("See what's filling your drive").font(theme::semibold(16.0)));
             ui.add_space(4.0);
             ui.label(RichText::new("Pick a drive to scan. Fast scan (admin) reads a whole NTFS drive in seconds.").color(t.muted));
@@ -1815,8 +1824,13 @@ impl XylemApp {
             ui.set_width(if wide { 720.0 } else { 500.0 });
             match d {
                 Dialog::About => {
-                    ui.label(RichText::new("Xylem").font(theme::semibold(16.0)));
-                    ui.label(format!("Version {} · disk space analyzer for Windows", env!("CARGO_PKG_VERSION")));
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Image::new(&self.logo).fit_to_exact_size(vec2(56.0, 56.0)));
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new("Xylem").font(theme::semibold(18.0)));
+                            ui.label(format!("Version {} · disk space analyzer for Windows", env!("CARGO_PKG_VERSION")));
+                        });
+                    });
                     ui.add_space(6.0);
                     ui.label(RichText::new("Xylem is the plant tissue that carries water up from the roots. This app carries your drive's file table up into a map.").color(t.muted));
                 }
