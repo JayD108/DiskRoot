@@ -68,6 +68,8 @@ pub fn fmt_pct(part: u64, whole: u64) -> String {
 }
 
 fn main() {
+    // Before anything can load a DLL: System32 only (DLL planting defence).
+    xylem_session::integrity::harden_dll_search();
     let args: Vec<String> = std::env::args().collect();
     // Elevated helper mode: no window, just scan and exit.
     if let Some(code) = xylem_session::helper::run_if_helper(&args) {

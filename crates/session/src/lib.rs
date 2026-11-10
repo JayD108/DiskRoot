@@ -558,6 +558,22 @@ mod tests {
         assert!(s.cat_children("bogus", 1).is_err());
     }
 
+    /// Real disk, read-only: a scan that starts inside Windows must keep
+    /// everything in it locked (it once didn't: only the root folder's own
+    /// name was checked against the rules, not its parents).
+    #[test]
+    fn scanning_inside_windows_keeps_it_locked() {
+        let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into());
+        for sub in ["Fonts", "System32\\drivers"] {
+            let s = scan(&format!("{windir}\\{sub}")).unwrap();
+            let items = s.list(0, 50).unwrap().items;
+            assert!(!items.is_empty(), "{sub} has items");
+            for it in items {
+                assert!(s.prepare_delete(it.id).is_err(), "{sub}\\{} must be locked", it.name);
+            }
+        }
+    }
+
     #[test]
     fn delete_warnings_find_git_and_cloud() {
         let mut idx = Index::new("D:\\");

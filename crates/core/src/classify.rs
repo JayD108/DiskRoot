@@ -307,14 +307,18 @@ impl Classification {
             rule: vec![NO_RULE; n],
             bits: vec![WEAK; n],
         };
-        let ancestry = |id: u32| Ancestry { idx, root_comps: &root_comps, cur: id, root_pos: root_comps.len() };
+        // `comps` is the scan root's path (or, when classifying the root, one
+        // of its ancestors' paths).
+        fn ancestry<'a>(idx: &'a Index, id: u32, comps: &'a [&'a str]) -> Ancestry<'a> {
+            Ancestry { idx, root_comps: comps, cur: id, root_pos: comps.len() }
+        }
         // Components below the drive (drive root = 0, "Users" = 1, ...). An
         // anchored rule with k components can only match at depth k, which
         // rejects most candidates without walking up the tree.
         let mut depth = vec![0u16; n];
         depth[0] = root_comps.len().saturating_sub(1) as u16;
 
-        let matches = |r: &Rule, id: u32, is_dir: bool, d: u16| -> bool {
+        let matches = |r: &Rule, id: u32, is_dir: bool, d: u16, comps: &[&str]| -> bool {
             match r.kind {
                 Kind::Dir if !is_dir => return false,
                 Kind::File if is_dir => return false,
@@ -323,7 +327,7 @@ impl Classification {
             if r.anchored && d as usize != r.comps.len() {
                 return false;
             }
-            let mut up = ancestry(id);
+            let mut up = ancestry(idx, id, comps);
             for comp in r.comps.iter().rev() {
                 match up.next() {
                     Some(name) if glob_ci(comp, name) => {}
@@ -334,21 +338,26 @@ impl Classification {
             !r.anchored || (up.next().is_some_and(|d| d.ends_with(':')) && up.next().is_none())
         };
 
-        let find = |id: u32, name: &str, is_dir: bool, d: u16| -> Option<usize> {
+        let find = |id: u32, name: &str, is_dir: bool, d: u16, comps: &[&str]| -> Option<usize> {
             let exact = rules.by_last.get(&hash_ci(name)).into_iter().flatten();
             let mut best: Option<usize> = None;
             for &i in exact.chain(rules.wild_last.iter()) {
                 let better = best.is_none_or(|b| rules.rules[i].comps.len() > rules.rules[b].comps.len());
-                if better && matches(&rules.rules[i], id, is_dir, d) {
+                if better && matches(&rules.rules[i], id, is_dir, d, comps) {
                     best = Some(i);
                 }
             }
             best
         };
 
-        // The root: if the scan started inside a classified place (e.g. a
-        // scan of C:\Windows), apply that rule from the start.
-        let root_rule = root_comps.last().and_then(|last| find(0, last, true, depth[0]));
+        // The root: if the scan started inside a classified place, apply that
+        // rule from the start. Check the root's own path and then each of its
+        // ancestors, deepest first: a scan of C:\Windows\Fonts must still be
+        // "System > Windows" (and protected) because it's inside C:\Windows.
+        let root_rule = (1..=root_comps.len()).rev().find_map(|k| {
+            let comps = &root_comps[..k];
+            find(0, comps[k - 1], true, (k - 1) as u16, comps)
+        });
         if let Some(r) = root_rule {
             c.apply_rule(0, r, rules);
         }
@@ -359,7 +368,7 @@ impl Classification {
             let name = idx.name(id);
             let is_dir = idx.is_dir(id);
             depth[i] = depth[p].saturating_add(1);
-            if let Some(r) = find(id, name, is_dir, depth[i]) {
+            if let Some(r) = find(id, name, is_dir, depth[i], &root_comps) {
                 c.apply_rule(id, r, rules);
                 continue;
             }
@@ -872,6 +881,22 @@ mod tests {
         t.idx.compute_totals();
         let c = Classification::run(&t.idx, &rules);
         assert_eq!(sub_name(&rules, &c, x), "System > Windows");
+        assert!(c.protection(&t.idx, &rules, x).is_some());
+        // Scanning deeper inside Windows: still Windows, still protected.
+        for root in [r"C:\Windows\Fonts", r"C:\Windows\System32\drivers", "c:/windows/system32"] {
+            let mut t = T::new(root);
+            let x = t.file(0, "a.sys", 1);
+            t.idx.compute_totals();
+            let c = Classification::run(&t.idx, &rules);
+            assert_eq!(sub_name(&rules, &c, x), "System > Windows", "{root}");
+            assert!(c.protection(&t.idx, &rules, x).is_some(), "{root} must stay protected");
+        }
+        // A deeper, more specific rule still wins over the protected parent.
+        let mut t = T::new(r"C:\Windows\WinSxS\x");
+        let x = t.file(0, "a.dll", 1);
+        t.idx.compute_totals();
+        let c = Classification::run(&t.idx, &rules);
+        assert!(sub_name(&rules, &c, x).contains("WinSxS"), "{}", sub_name(&rules, &c, x));
         assert!(c.protection(&t.idx, &rules, x).is_some());
     }
 

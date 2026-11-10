@@ -56,6 +56,20 @@ pub fn is_protected_location(exe: &Path) -> bool {
     program_files_dirs().iter().any(|pf| e.starts_with(&(low(pf) + "\\")))
 }
 
+#[link(name = "kernel32", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn SetDefaultDllDirectories(flags: u32) -> i32;
+}
+
+/// Call first thing in `main`: any DLL loaded later (by name) comes only
+/// from System32, never from the exe's folder or the current directory.
+/// Static imports are covered by the `/DEPENDENTLOADFLAG:0x800` link flag.
+pub fn harden_dll_search() -> bool {
+    const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
+    // SAFETY: plain flag argument, no pointers.
+    unsafe { SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32) != 0 }
+}
+
 #[repr(C)]
 struct Guid {
     d1: u32,

@@ -272,3 +272,23 @@ User asked: "go for next step and also add the security measures ... and think o
 - **Screenshots:** `docs/screenshots/xylem-location.png` (C:\Windows, light, sunburst, details pane with "Don't delete by hand") and `xylem-category.png` (dark, treemap by category). I used C:\Windows on purpose: a Program Files shot showed the user's installed apps.
 - **Release dry run** (workflow_dispatch) passed: tests, build, NSIS installer **2.34 MB**, zip 3.07 MB, real install/uninstall test OK.
 - **Not done yet:** tagging v0.1.0, which publishes the first public GitHub Release. The sandbox blocked it; the user must approve or run `git tag -a v0.1.0 -m "Xylem 0.1.0"` and `git push origin v0.1.0`.
+
+### Same day, later: full security retest (user asked for a 1–10 score with solid reasons)
+- **Retest:**
+  - 53 tests pass.
+  - `clippy -D warnings` clean.
+  - **`cargo audit`: 0 known vulnerabilities in 342 crates.** Only 3 "unmaintained" notes, for Linux-only zbus crates that the Windows build doesn't compile.
+  - **No network crates in the Windows build** (tokio appears only via the wasm target).
+  - `unsafe` is limited to 23 small FFI sites in 7 files.
+  - The PE has ASLR, high-entropy ASLR, DEP and /GS.
+  - Read through the elevation code again.
+- **Found and fixed: DLL planting.** The exe imported 7 DLLs that aren't KnownDLLs (dwmapi, uxtheme, opengl32, uiautomationcore, wintrust, bcryptprimitives, vcruntime140).
+  - Proof: a junk `dwmapi.dll` next to a copy of xylem.exe made it hang on a "bad image" error, so Windows loaded it from the app folder. For a portable copy in Downloads, a planted DLL would run inside the **elevated** helper.
+  - Fix: link flag `/DEPENDENTLOADFLAG:0x800` (static imports from System32 only) and `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)` first in `main` (`integrity::harden_dll_search`).
+  - Verified: with all 7 junk DLLs planted, the helper runs normally (exit 2) and the full GUI starts and renders.
+  - I tried a static CRT (`+crt-static`, removes the vcruntime140 dependency). Back-to-back benchmarks showed build_tree 0.17–0.19 s dynamic vs 0.22–0.24 s static, so it was reverted (speed rule). The load flag already forces vcruntime140 to come from System32.
+- **Found and fixed: protection bypass by scanning a subfolder.** For a scan root like `C:\Windows\Fonts`, only the root's own last path component was matched against the rules, so nothing inside was "System > Windows", and nothing was locked.
+  - Fix: the root's path and each of its ancestors are matched, deepest first.
+  - Tests: unit tests for `C:\Windows\Fonts`, `System32\drivers` and lowercase/slash paths, a WinSxS subfolder keeping its specific rule, and a real-disk session test that scans `%WINDIR%\Fonts` and `System32\drivers` and checks every item refuses deletion.
+- **CI:** added a `cargo audit` job.
+- Speed after the fixes: build_tree 0.19 s.
