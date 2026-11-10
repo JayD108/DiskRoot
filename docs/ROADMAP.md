@@ -18,6 +18,8 @@
 
 ## Phase 5: instant reopen + "what changed" (the biggest visible win)
 
+**Status (10 Nov 2026):** 5.1, 5.3, 5.4 and 5.5 are done. 5.2 (USN catch-up) is next.
+
 | Step | What | Detail |
 |---|---|---|
 | 5.1 | **Index cache** | After a scan, save the index (existing `XYLMIDX1` format, already length-checked and fuzzed) to `%LOCALAPPDATA%\Xylem\cache\`, keyed by volume serial number. On start, show the cached tree instantly, marked "from <time>". |

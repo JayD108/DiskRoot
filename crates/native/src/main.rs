@@ -85,7 +85,7 @@ fn main() {
             .with_icon(Arc::new(icon)),
         ..Default::default()
     };
-    let start = args.get(1).filter(|a| !a.starts_with('-')).cloned();
+    let start = args.get(1).map(|a| a.trim()).filter(|a| !a.is_empty() && !a.starts_with('-')).map(str::to_owned);
     let result = eframe::run_native("Xylem", options, Box::new(move |cc| Ok(Box::new(app::XylemApp::new(cc, start)))));
     if let Err(e) = result {
         eprintln!("Xylem could not start: {e}");

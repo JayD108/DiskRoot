@@ -14,11 +14,13 @@ pub struct Settings {
     pub last_path: String,
     /// The first-launch notice was shown and confirmed.
     pub seen_notice: bool,
+    /// Save scans on this PC for instant reopen and "what changed".
+    pub remember_scans: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { dark: false, treemap: false, by_category: false, last_path: "C:\\".into(), seen_notice: false }
+        Self { dark: false, treemap: false, by_category: false, last_path: "C:\\".into(), seen_notice: false, remember_scans: true }
     }
 }
 

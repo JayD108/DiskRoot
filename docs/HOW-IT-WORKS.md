@@ -67,6 +67,15 @@ Each file record becomes exactly one entry, so a hardlinked file is counted **on
   - Scans and deletes run on worker threads.
 - **Design reference:** `xylem-ui-prototype/` is the HTML mock-up the look was taken from (not shipped).
 
+## 5. Memory: instant reopen and "what changed" (`crates/session/src/remember.rs`)
+- After a scan is on screen, a background thread saves two files per scanned root:
+  - the **index**: same format as the admin helper's file, ~90 MB for 1.6M files;
+  - a **folder snapshot**: every folder's path and size.
+  The scan itself isn't slowed down. Writes go through a temp file and a rename.
+- **Instant reopen:** at start, the last root's index is loaded and shown, labelled with its age. C: (1.6M files) reopens in ~0.4 s.
+- **What changed:** after a rescan, the new snapshot is compared with the previous one. Xylem lists the folders where the change happened: at least 1 MB or 0.1% of the total, and not just the sum of one child's change. So you see `projects\app\node_modules +60 MB` instead of every parent above it.
+- At most 8 roots are kept. After a delete, the remembered index is dropped, because it would be out of date.
+
 ## Accuracy
 
 | Situation | What Xylem does |

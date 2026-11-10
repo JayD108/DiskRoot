@@ -292,3 +292,29 @@ User asked: "go for next step and also add the security measures ... and think o
   - Tests: unit tests for `C:\Windows\Fonts`, `System32\drivers` and lowercase/slash paths, a WinSxS subfolder keeping its specific rule, and a real-disk session test that scans `%WINDIR%\Fonts` and `System32\drivers` and checks every item refuses deletion.
 - **CI:** added a `cargo audit` job.
 - Speed after the fixes: build_tree 0.19 s.
+
+### Same day, later: Phase 5 (instant reopen, snapshots, "what changed", privacy controls)
+- **`crates/session/src/remember.rs`:**
+  - Cache in `%LOCALAPPDATA%\Xylem\cache\<fnv(root)>.{idx,snap,prev.snap}`.
+  - `Snapshot` (folder paths + sizes, own `XYLMSNP1` format, strict loader with a fuzz test).
+  - `diff` (threshold max(1 MiB, 0.1% of total); drops folders whose change is ≥ 75% explained by one child; new/removed folders included).
+  - `remember` (runs on a background thread after the scan is shown; atomic temp+rename writes; rotates `.snap` → `.prev.snap`; prunes to 8 roots).
+  - `reopen`, `last_changes`, `forget_index` (after a delete), `forget_all`.
+  - `age_text` gives "3 h ago" style ages (no time zone needed).
+- **Engine:**
+  - `Scanned.index` is now `Arc<Index>`, so the background save shares it. `apply_delete` uses `Arc::make_mut`, which copies only if a save is still running. `Index` derives Clone.
+  - New `Scanned::remember_parts`, `Scanned::find_rel`, `session::reopen`.
+- **App:**
+  - Reopens the last path at start (job "Opening the remembered scan…").
+  - A fresh scan triggers the background remember step plus a status line "Since the previous scan (…): +X".
+  - **View → What changed since the previous scan…**: dialog with change/now/before/folder, "new"/"gone" marks; click a row to jump to the folder in the tree.
+  - **File → Remember scans** (checkbox, default on) and **Forget remembered scans**.
+  - Welcome and Security panels now disclose the cache honestly.
+  - After a scan, the path box and `last_path` use the scan's own root (long path), so reopen finds it. Before this fix the 8.3 short path `MRITTU~1` missed the cache.
+  - Blank command-line arguments are ignored. Before, an empty `""` opened a "Nothing to scan" dialog.
+- **Verified in the real app** (isolated APPDATA/LOCALAPPDATA):
+  - Small folder: scan → change files → restart reopens the remembered scan → rescan → "What changed" lists exactly `projects\app\node_modules +60 MB`, `old-cache gone −20 MB`, `downloads new +15 MB`.
+  - **Whole C:** 1,606,795 files; cache 89 MB idx + 36 MB snap; **reopened in 0.37 s** (walk scan 3.7–5.1 s); memory 248 MB reopened vs 278 MB after a fresh scan.
+- **Speed A/B:** the CLI from commit 090a6d1 vs today, same disk, alternating: old 4.70/5.56/4.88 s vs new 4.75/4.60/3.92 s. No regression. One GUI run showed 11.3 s; two re-runs gave 3.7 and 5.1 s (a cold cache after builds).
+- 4 new tests (diff, new/removed, snapshot round-trip + fuzz, keys). All tests pass, clippy clean.
+- Dark theme showing up in two test runs was traced to the setting being switched in a test window left open on screen (it can't be reproduced without interaction); not a bug.

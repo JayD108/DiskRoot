@@ -10,10 +10,11 @@ pub mod elevate;
 pub mod helper;
 pub mod integrity;
 pub mod recycle;
+pub mod remember;
 pub mod safety;
 
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 
 use serde::Serialize;
@@ -51,6 +52,13 @@ pub fn scan(path: &str) -> Result<Scanned, String> {
     let threads = xylem_scan_walk::default_threads();
     let (s, used) = scan_auto(Path::new(path), Mode::Auto, threads).map_err(|e| format!("Scan failed: {e}"))?;
     Ok(Scanned::new(s.index, s.stats, mode_text(&used)))
+}
+
+/// The remembered scan of `root` (instant reopen), and when it was made.
+/// Blocking: call it from a worker thread.
+pub fn reopen(root: &str) -> Option<(Scanned, u64)> {
+    let (index, stats, mode, time) = remember::reopen(root)?;
+    Some((Scanned::new(index, stats, mode), time))
 }
 
 /// Fast MFT scan through the elevated helper (shows the UAC prompt).
@@ -160,7 +168,9 @@ pub struct DeleteOut {
 
 /// One scan, classified, ready to answer UI questions.
 pub struct Scanned {
-    index: Index,
+    /// Shared so the "remember this scan" thread can save it while the UI
+    /// uses it; a delete copies it only if that save is still running.
+    index: Arc<Index>,
     children: Children,
     cls: Classification,
     cats: CatStats,
@@ -178,7 +188,7 @@ impl Scanned {
         let cls = Classification::run(&index, &RULES);
         let cats = CatStats::compute(&index, &cls, RULES.subs.len());
         let classify_ms = t.elapsed().as_secs_f64() * 1000.0;
-        Self { index, children, cls, cats, stats, mode, classify_ms, removed_dirs: 0 }
+        Self { index: Arc::new(index), children, cls, cats, stats, mode, classify_ms, removed_dirs: 0 }
     }
 
     fn model(&self) -> CatModel<'_> {
@@ -445,8 +455,24 @@ impl Scanned {
             }
             stack.extend(self.children.live(&self.index, x));
         }
-        self.index.remove_subtree(node, &self.children);
+        Arc::make_mut(&mut self.index).remove_subtree(node, &self.children);
         self.cats = CatStats::compute(&self.index, &self.cls, RULES.subs.len());
+    }
+
+    /// What the background "remember" step needs: the shared index, the
+    /// scan stats and the mode label.
+    pub fn remember_parts(&self) -> (Arc<Index>, ScanStats, String) {
+        (Arc::clone(&self.index), self.stats.clone(), self.mode.clone())
+    }
+
+    /// Node of a folder given its path relative to the scan root
+    /// ("Users\me"), case-insensitive. Used to jump from "what changed".
+    pub fn find_rel(&self, rel: &str) -> Option<u32> {
+        let mut cur = 0u32;
+        for comp in rel.split('\\').filter(|c| !c.is_empty()) {
+            cur = self.children.live(&self.index, cur).find(|&c| self.index.name(c).eq_ignore_ascii_case(comp))?;
+        }
+        Some(cur)
     }
 
     /// Full path of a node (for Explorer, copying, etc.).

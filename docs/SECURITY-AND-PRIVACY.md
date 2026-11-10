@@ -45,7 +45,15 @@ The shield button (or Help → Security & privacy) shows:
   - Sizes near 2⁶⁴ overflowed the totals; they now saturate.
   - A corrupt boot sector could request huge buffers; the geometry is now limited to real NTFS values.
 
+## DLL planting defence
+- `xylem.exe` loads every DLL it needs from `System32` only: the `/DEPENDENTLOADFLAG:0x800` link flag covers static imports, and `SetDefaultDllDirectories` runs first thing in `main`.
+- So a malicious DLL saved next to a portable copy (for example in Downloads) is never loaded, including by the elevated Fast-scan helper. This is tested with 7 planted DLLs.
+
 ## Your data on disk
 - Settings: `%APPDATA%\Xylem\settings.json`.
 - Deletion log: `%LOCALAPPDATA%\Xylem\deletions.log`.
-- Both stay on your PC. The uninstaller leaves them in place; delete the folders to remove them.
+- **Remembered scans:** `%LOCALAPPDATA%\Xylem\cache`. These are the names and sizes from your last scans of up to 8 drives or folders, used for instant reopen and "what changed".
+  - **File → Remember scans** turns this off.
+  - **File → Forget remembered scans** deletes them.
+  - They're loaded with the same validated, fuzz-tested loader as the admin helper's result. A changed or damaged cache file is rejected, never trusted. Deleting always re-checks the real disk.
+- All of these stay on your PC. The uninstaller leaves them in place; delete the folders to remove them.

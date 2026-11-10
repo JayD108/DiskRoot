@@ -12,6 +12,7 @@ use eframe::egui::{
     Stroke, StrokeKind, TextEdit, Ui, ViewportCommand, pos2, vec2,
 };
 use xylem_session::integrity::{Integrity, SignatureState};
+use xylem_session::remember::{self, Changes};
 use xylem_session::safety::{DeleteWarnings, LogEntry};
 use xylem_session::{DeleteOut, ItemInfo, RULES, Safety, Scanned, Shape, Summary};
 
@@ -50,11 +51,22 @@ enum JobKind {
     Scan(String),
     Fast(String),
     Delete(String),
+    Reopen(String),
+}
+
+/// A remembered scan opened at startup: the scan, when it was made, the
+/// "what changed" between the last two scans, and how long opening took.
+struct Reopened {
+    scanned: Scanned,
+    time: u64,
+    changes: Option<Changes>,
+    took: Duration,
 }
 
 enum Done {
     Scanned(Box<Result<Scanned, String>>),
     Deleted(u32, Result<DeleteOut, String>),
+    Reopened(Box<Option<Reopened>>),
 }
 
 struct Job {
@@ -69,6 +81,7 @@ enum Dialog {
     Welcome,
     Security(Box<Integrity>),
     History(Vec<LogEntry>),
+    Changes(Box<Changes>),
     Message(String, String),
     ConfirmDelete(Box<Confirm>),
 }
@@ -117,6 +130,13 @@ pub struct XylemApp {
     /// A folder was passed on the command line while the first-run notice
     /// was showing: scan it once the notice is closed.
     scan_after_welcome: bool,
+    /// Background "remember this scan" step (saves the cache, computes
+    /// what changed). Separate from `job`: the scan is already on screen.
+    remember_rx: Option<Receiver<Result<Option<Changes>, String>>>,
+    /// What changed between the previous scan and the current one.
+    changes: Option<Changes>,
+    /// Set when the tree on screen is a remembered scan (its scan time).
+    remembered_at: Option<u64>,
     scroll_to_selected: bool,
 }
 
@@ -144,6 +164,9 @@ impl XylemApp {
             title: String::new(),
             tree_focus: true,
             scan_after_welcome: false,
+            remember_rx: None,
+            changes: None,
+            remembered_at: None,
             scroll_to_selected: false,
         };
         if !app.settings.seen_notice {
@@ -151,6 +174,8 @@ impl XylemApp {
             app.scan_after_welcome = start.is_some();
         } else if start.is_some() {
             app.start_scan(false);
+        } else if app.settings.remember_scans {
+            app.start_reopen();
         }
         app
     }
@@ -194,6 +219,63 @@ impl XylemApp {
         self.job = Some(Job { kind: if fast { JobKind::Fast(path) } else { JobKind::Scan(path) }, started: Instant::now(), rx });
     }
 
+    /// Instant reopen: load the remembered scan of the last path.
+    fn start_reopen(&mut self) {
+        let path = self.path.trim().to_owned();
+        if path.is_empty() || self.job.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let p = path.clone();
+        std::thread::spawn(move || {
+            let t = Instant::now();
+            let r = xylem_session::reopen(&p).map(|(scanned, time)| Reopened {
+                scanned,
+                time,
+                changes: remember::last_changes(&p),
+                took: t.elapsed(),
+            });
+            let _ = tx.send(Done::Reopened(Box::new(r)));
+        });
+        self.job = Some(Job { kind: JobKind::Reopen(path), started: Instant::now(), rx });
+    }
+
+    /// After a fresh scan: save it for instant reopen and work out what
+    /// changed, on a background thread (the scan is already on screen).
+    fn start_remember(&mut self) {
+        let Some(s) = &self.scanned else { return };
+        if !self.settings.remember_scans {
+            return;
+        }
+        let (idx, stats, mode) = s.remember_parts();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(remember::remember(&idx, &stats, &mode).map_err(|e| e.to_string()));
+        });
+        self.remember_rx = Some(rx);
+    }
+
+    fn poll_remember(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.remember_rx else { return };
+        match rx.try_recv() {
+            Err(TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(200)),
+            Err(TryRecvError::Disconnected) => self.remember_rx = None,
+            Ok(r) => {
+                self.remember_rx = None;
+                match r {
+                    Ok(Some(ch)) => {
+                        let msg = changes_summary(&ch);
+                        self.changes = Some(ch);
+                        self.say(format!("{msg} · View → What changed"));
+                    }
+                    Ok(None) => {}
+                    // Not fatal: the scan itself is fine, it just won't reopen instantly.
+                    Err(e) => self.say(format!("Couldn't remember this scan: {e}")),
+                }
+            }
+        }
+    }
+
     fn start_delete(&mut self, node: u32) {
         let Some(s) = &self.scanned else { return };
         match s.prepare_delete(node) {
@@ -222,6 +304,7 @@ impl XylemApp {
             }
             Ok(Done::Scanned(r)) => self.finish_scan(*r),
             Ok(Done::Deleted(node, r)) => self.finish_delete(node, r),
+            Ok(Done::Reopened(r)) => self.finish_reopen(*r),
         }
     }
 
@@ -236,17 +319,46 @@ impl XylemApp {
                     sum.elapsed_ms / 1000.0,
                     sum.mode
                 ));
-                self.settings.last_path = self.path.trim().to_owned();
+                // The scan's own root path (long form, e.g. not `MRITTU~1`), so the
+                // remembered scan is found again under the same name next time.
+                self.path = sum.root.clone();
+                self.settings.last_path = sum.root.clone();
                 self.settings.save();
-                self.summary = Some(sum);
-                self.scanned = Some(s);
-                self.expanded.clear();
-                self.expanded.insert(self.root_key());
-                self.selected = Some(self.root_key());
-                self.invalidate();
+                self.show_scan(s, sum);
+                self.remembered_at = None;
+                self.changes = None;
+                self.start_remember();
             }
             Err(e) => self.dialog = Some(Dialog::Message("Scan didn't finish".into(), e)),
         }
+    }
+
+    fn show_scan(&mut self, s: Scanned, sum: Summary) {
+        self.summary = Some(sum);
+        self.scanned = Some(s);
+        self.expanded.clear();
+        self.expanded.insert(self.root_key());
+        self.selected = Some(self.root_key());
+        self.invalidate();
+    }
+
+    fn finish_reopen(&mut self, r: Option<Reopened>) {
+        self.job = None;
+        let Some(r) = r else { return }; // nothing remembered: start empty, as before
+        let sum = r.scanned.summary();
+        let mut msg = format!(
+            "Opened the remembered scan of {} from {} in {:.2} s. Press F5 for a fresh scan.",
+            sum.root,
+            remember::age_text(r.time),
+            r.took.as_secs_f64()
+        );
+        if r.changes.is_some() {
+            msg.push_str(" · View → What changed");
+        }
+        self.say(msg);
+        self.show_scan(r.scanned, sum);
+        self.remembered_at = Some(r.time);
+        self.changes = r.changes;
     }
 
     fn finish_delete(&mut self, node: u32, r: Result<DeleteOut, String>) {
@@ -255,6 +367,7 @@ impl XylemApp {
             Ok(out) if out.cancelled => self.say("Cancelled. Nothing was deleted."),
             Ok(out) => {
                 if let Some(s) = &mut self.scanned {
+                    remember::forget_index(&s.summary().root);
                     let parent = s.info(node).ok().and_then(|i| i.parent);
                     s.apply_delete(node);
                     self.summary = Some(s.summary());
@@ -538,6 +651,24 @@ impl XylemApp {
                     ui.close();
                 }
                 ui.separator();
+                let mut keep = self.settings.remember_scans;
+                if ui
+                    .checkbox(&mut keep, "Remember scans")
+                    .on_hover_text("Saves each scan on this PC (names and sizes only) so it reopens instantly and Xylem can show what changed.")
+                    .changed()
+                {
+                    self.settings.remember_scans = keep;
+                    self.settings.save();
+                }
+                if ui.button("Forget remembered scans").clicked() {
+                    match remember::forget_all() {
+                        Ok(n) => self.say(format!("Forgot all remembered scans ({n} files deleted).")),
+                        Err(e) => self.say(format!("Couldn't delete the remembered scans: {e}")),
+                    }
+                    self.changes = None;
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button("Deletion history…").clicked() {
                     self.open_history();
                     ui.close();
@@ -548,6 +679,13 @@ impl XylemApp {
                 }
             });
             ui.menu_button("View", |ui| {
+                if ui.add_enabled(self.changes.is_some(), egui::Button::new("What changed since the previous scan…")).clicked() {
+                    if let Some(c) = &self.changes {
+                        self.dialog = Some(Dialog::Changes(Box::new(c.clone())));
+                    }
+                    ui.close();
+                }
+                ui.separator();
                 let mut changed = false;
                 changed |= ui.radio_value(&mut self.settings.treemap, false, "Sunburst map").clicked();
                 changed |= ui.radio_value(&mut self.settings.treemap, true, "Treemap").clicked();
@@ -1198,6 +1336,7 @@ impl XylemApp {
                     "Approve the Windows prompt. Xylem then reads the drive's Master File Table, read-only.".to_owned(),
                 ),
                 JobKind::Delete(n) => (format!("Moving \"{n}\" to the Recycle Bin"), "Windows is moving the files…".to_owned()),
+                JobKind::Reopen(p) => (format!("Opening the remembered scan of {p}"), "Loading the last scan from this PC…".to_owned()),
             };
             Modal::new(egui::Id::unique("xylem-job")).show(ctx, |ui| {
                 ui.set_width(420.0);
@@ -1222,7 +1361,8 @@ impl XylemApp {
         let mut close = false;
         let mut confirm: Option<u32> = None;
         let mut action: Option<&'static str> = None;
-        let wide = matches!(d, Dialog::History(_));
+        let mut jump: Option<String> = None;
+        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_));
         // One window id per dialog kind, so a dialog never inherits another
         // one's remembered size.
         let kind = std::mem::discriminant(&*d);
@@ -1246,6 +1386,7 @@ impl XylemApp {
                         ("Asks first", "Admin rights only for Fast scan, through the Windows prompt. The helper exits after the scan."),
                         ("Deletes carefully", "Only when you confirm, always to the Recycle Bin, re-checked on disk first. Windows and system folders are locked."),
                         ("Keeps a record", "Every delete is written to a log on this PC (File → Deletion history)."),
+                        ("Remembers scans", "Your last scans are saved on this PC (names and sizes only), so they reopen instantly and Xylem can show what changed. Turn it off or forget them in the File menu."),
                     ]);
                 }
                 Dialog::Security(ig) => {
@@ -1258,6 +1399,7 @@ impl XylemApp {
                         ("Deleting", "Always to the Recycle Bin, after you confirm. Right before moving, Xylem re-checks the item: if it changed, or a folder on its path became a link since the scan, it refuses."),
                         ("Warnings", "Extra confirmation for OneDrive folders (deleting syncs to your other devices), Git repositories (unpushed work) and very large deletes."),
                         ("History", "Each delete is logged on this PC in %LOCALAPPDATA%\\Xylem\\deletions.log."),
+                        ("Remembered scans", "Names and sizes of your last scans (up to 8 drives or folders) are kept in %LOCALAPPDATA%\\Xylem\\cache for instant reopen and \"what changed\". Never uploaded. File → Remember scans turns it off; File → Forget remembered scans deletes them."),
                     ]);
                     ui.add_space(10.0);
                     ui.separator();
@@ -1303,6 +1445,48 @@ impl XylemApp {
                                     ui.label(fmt_bytes(e.bytes));
                                     ui.add(egui::Label::new(&e.path).truncate())
                                         .on_hover_text(format!("{}\n{} · {}", e.path, e.category, fmt_files(u64::from(e.files))));
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                }
+                Dialog::Changes(ch) => {
+                    ui.label(RichText::new("What changed").font(theme::semibold(16.0)));
+                    ui.label(
+                        RichText::new(format!(
+                            "{} · previous scan {} → latest scan {}",
+                            ch.root,
+                            remember::age_text(ch.before_time),
+                            remember::age_text(ch.after_time)
+                        ))
+                        .color(t.muted),
+                    );
+                    ui.add_space(4.0);
+                    let total = i128::from(ch.after_total) - i128::from(ch.before_total);
+                    ui.label(format!("{} → {}  ({})", fmt_bytes(ch.before_total), fmt_bytes(ch.after_total), fmt_delta(total)));
+                    ui.add_space(8.0);
+                    if ch.items.is_empty() {
+                        ui.label(RichText::new("No folder changed by more than 1 MB (or 0.1% of the total).").color(t.faint));
+                    } else {
+                        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                            egui::Grid::new("changes").num_columns(4).striped(true).spacing([14.0, 5.0]).show(ui, |ui| {
+                                for h in ["Change", "Now", "Before", "Folder"] {
+                                    ui.label(RichText::new(h).color(t.muted).size(12.0));
+                                }
+                                ui.end_row();
+                                for c in &ch.items {
+                                    let d = c.delta();
+                                    let col = if d > 0 { theme::WARN } else { t.accent };
+                                    ui.label(RichText::new(fmt_delta(d)).color(col).strong());
+                                    ui.label(fmt_bytes(c.after));
+                                    ui.label(RichText::new(fmt_bytes(c.before)).color(t.muted));
+                                    let shown = if c.path.is_empty() { "(the scanned folder itself)".to_owned() } else { c.path.clone() };
+                                    let note = if c.before == 0 { "  new" } else if c.after == 0 { "  gone" } else { "" };
+                                    let r = ui.add(egui::Label::new(format!("{shown}{note}")).truncate().sense(Sense::click()));
+                                    if r.on_hover_text("Click to show it in the tree").clicked() {
+                                        jump = Some(c.path.clone());
+                                    }
                                     ui.end_row();
                                 }
                             });
@@ -1419,12 +1603,31 @@ impl XylemApp {
             }
             _ => {}
         }
+        if let Some(rel) = jump {
+            self.dialog = None;
+            self.show_rel(&rel);
+        }
         if let Some(id) = confirm {
             self.dialog = None;
             self.start_delete(id);
         } else if close {
             self.dialog = None;
         }
+    }
+
+    /// Selects a folder by its path relative to the scan root (from "what
+    /// changed"). Folders that are gone just get a message.
+    fn show_rel(&mut self, rel: &str) {
+        let Some(n) = self.scanned.as_ref().and_then(|s| s.find_rel(rel)) else {
+            self.say(format!("\"{rel}\" isn't in the current scan (it was removed)."));
+            return;
+        };
+        if self.settings.by_category {
+            self.settings.by_category = false;
+            self.regroup();
+        }
+        self.reveal_node(n, None);
+        self.scroll_to_selected = true;
     }
 
     fn keyboard(&mut self, ctx: &egui::Context) {
@@ -1523,6 +1726,7 @@ impl eframe::App for XylemApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_job(&ctx);
+        self.poll_remember(&ctx);
         self.keyboard(&ctx);
         let t = self.tokens();
         let bar = |m: i8| Frame::new().fill(t.win).inner_margin(Margin::symmetric(m, 2));
@@ -1593,4 +1797,16 @@ fn shield_button(ui: &mut Ui, t: &Tokens) -> egui::Response {
     p.line_segment([pos2(c.x - 3.0, c.y - 0.5), pos2(c.x - 0.8, c.y + 2.0)], ink);
     p.line_segment([pos2(c.x - 0.8, c.y + 2.0), pos2(c.x + 3.2, c.y - 3.0)], ink);
     resp
+}
+
+/// "+1.2 GB" / "−300 MB" for a size change.
+fn fmt_delta(d: i128) -> String {
+    let sign = if d > 0 { "+" } else if d < 0 { "−" } else { "±" };
+    format!("{sign}{}", fmt_bytes(d.unsigned_abs().min(u128::from(u64::MAX)) as u64))
+}
+
+/// One line for the status bar: "Since the previous scan (2 days ago): +1.2 GB".
+fn changes_summary(ch: &Changes) -> String {
+    let d = i128::from(ch.after_total) - i128::from(ch.before_total);
+    format!("Since the previous scan ({}): {}", remember::age_text(ch.before_time), fmt_delta(d))
 }

@@ -24,6 +24,7 @@ Most tools only answer the first one, and the friendly ones are slow on big driv
 - **Fast:** maps a whole NTFS drive in about 1–2 seconds by reading its file table directly (read-only). Without admin it still works, by walking folders.
 - **Meaning, not just sizes:** every file is sorted into categories such as *Apps & Games, Dev stuff, AI & data, Media, System, Temp & caches*. You can browse by location or by category.
 - **Plain-English advice:** known folders come with a note and a label: *safe to delete*, *check first* or *don't delete by hand*.
+- **Instant reopen and "what changed":** your last scan opens in under a second (a whole 1.5 TB drive in ~0.4 s). After a rescan, Xylem points at the exact folders that grew or shrank.
 - **Clear pictures:** a tree-table with size bars, next to a sunburst or a treemap. Light and dark themes, full keyboard navigation.
 - **Careful deleting:** only to the Recycle Bin, only after you confirm. Windows and system folders are locked. You get warnings for OneDrive folders, Git repositories and very large deletes, and a history of everything you deleted.
 - **Private:** no network connections, no accounts, no telemetry. One small program (~6 MB).
@@ -51,7 +52,8 @@ Download **`xylem-setup-<version>.exe`** from [Releases](https://github.com/JayD
 2. Press **Scan** (F5), or **Fast scan** (Ctrl+F5) for a whole drive (Windows asks for permission).
 3. Expand folders in the list, or click the map. Switch **Location / Category** and **Sunburst / Treemap** in the toolbar.
 4. Select anything to see what it is and whether it's safe to delete in the details pane at the bottom.
-5. **Move to Recycle Bin…** (or the Delete key) asks before doing anything.
+5. Next time, Xylem reopens your last scan instantly. Press **Scan** again, then **View → What changed** to see what grew.
+6. **Move to Recycle Bin…** (or the Delete key) asks before doing anything.
 
 There's also a command-line tool, `xylem-cli.exe`. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 

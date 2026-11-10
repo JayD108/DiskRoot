@@ -67,7 +67,7 @@ pub struct Columns {
 ///
 /// Before [`Index::compute_totals`], `size`/`alloc` hold each node's own
 /// bytes. Afterwards, folders hold the totals of their whole subtree.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Index {
     parent: Vec<u32>,
     size: Vec<u64>,
