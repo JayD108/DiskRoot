@@ -12,12 +12,12 @@ Official rules: https://signpath.org/terms. Apply: https://signpath.org/apply.
 |---|---|---|
 | OSI-approved license, no *commercial* dual licensing | ✅ MIT OR Apache-2.0, both OSI-approved and free, the usual Rust dual license | `LICENSE-MIT`, `LICENSE-APACHE` |
 | No proprietary components | ✅ All Rust dependencies are MIT/Apache/Zlib/BSD/ISC (audited with `cargo metadata`). egui's bundled fonts (one was under the non-OSI Ubuntu Font Licence) were **removed**; the app uses fonts already in Windows. The installer is NSIS (zlib license; LZMA under CPL) | `Cargo.toml`, `installer/xylem.nsi` |
-| Free of malware / unwanted software | ✅ No network code, no telemetry, no bundled offers, nothing runs at startup | README *Security & privacy* |
+| Free of malware / unwanted software | ✅ No network code, no telemetry, no bundled offers, nothing runs at startup | `docs/SECURITY-AND-PRIVACY.md` |
 | Actively maintained, already released | ✅ Public repo with history; v0.1.0 published on GitHub Releases (unsigned) | Releases page |
 | Functionality described on the download page | ✅ Release notes describe what it does | `.github/release-notes.md` |
 | Own project; team owns the repository | ✅ JayD108 owns the repo and writes the code | — |
 | Built from source in a verifiable way (CI) | ✅ Every release file is built by GitHub Actions from the tagged commit | `.github/workflows/release.yml` |
-| No hacking tools / no security circumvention | ✅ A disk-space analyzer. It reads the file table read-only, with admin only after the Windows UAC prompt | README *How it works* |
+| No hacking tools / no security circumvention | ✅ A disk-space analyzer. It reads the file table read-only, with admin only after the Windows UAC prompt | `docs/HOW-IT-WORKS.md` |
 | No system changes without warnings | ✅ The app changes nothing on its own. Deleting needs confirmation and goes to the Recycle Bin. The installer only adds its folder, a shortcut and an uninstall entry | — |
 | Uninstallation provided | ✅ NSIS uninstaller (Settings → Apps); tested in CI on every release | `release.yml` "Test install and uninstall" |
 | Privacy policy or "no transfer" statement | ✅ "This program will not transfer any information…" | README *Code signing policy*, release notes |

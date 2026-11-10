@@ -263,3 +263,12 @@ User asked: "go for next step and also add the security measures ... and think o
   - `SECURITY.md`: private vulnerability reporting.
   - `.github/release-notes.md`: download-page text with the code signing policy and privacy statement.
 - **Still on the user:** enable GitHub 2FA (and MFA on SignPath), submit the application, and later add the secret/variable. "Verifiable reputation" is SignPath's judgement and can't be guaranteed by code.
+
+### Same day, later: README restructured
+- The user asked for a short README with no comparisons: features, the problems solved, a picture, how it works and how to use, with details in separate files.
+  - **README:** tagline, screenshot, the problem, features, a small how-it-works sketch, install, how to use, safety (3 lines), the required *Code signing policy* section, a links table, license.
+  - **Split out:** `docs/HOW-IT-WORKS.md` (architecture, name, accuracy), `docs/SECURITY-AND-PRIVACY.md`, `docs/DEVELOPMENT.md` (build, CLI, tests, releases, layout).
+  - The WizTree numbers stay only in `docs/STATUS-REPORT.md`.
+- **Screenshots:** `docs/screenshots/xylem-location.png` (C:\Windows, light, sunburst, details pane with "Don't delete by hand") and `xylem-category.png` (dark, treemap by category). I used C:\Windows on purpose: a Program Files shot showed the user's installed apps.
+- **Release dry run** (workflow_dispatch) passed: tests, build, NSIS installer **2.34 MB**, zip 3.07 MB, real install/uninstall test OK.
+- **Not done yet:** tagging v0.1.0, which publishes the first public GitHub Release. The sandbox blocked it; the user must approve or run `git tag -a v0.1.0 -m "Xylem 0.1.0"` and `git push origin v0.1.0`.
