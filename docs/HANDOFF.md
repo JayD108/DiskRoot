@@ -24,6 +24,7 @@
 - **Phase 5 (partly done):**
   - Done: instant reopen (C: 1.6M files in ~0.4 s), folder snapshots + "What changed" (View menu), and privacy controls (File → Remember scans / Forget remembered scans). Code: `crates/session/src/remember.rs`.
   - 5.2 (USN catch-up) deferred: it needs admin like Fast scan and saves only ~1 s. **Phase 6 started:** scan data 204 → 143 MB, app 278 → 213 MB (see ROADMAP). Measure with `cargo test --release -p xylem-session memory_of_a_real_scan -- --ignored --nocapture`.
+- **Phase 7 (in progress):** done: Largest files + search, File types (View menu), Export to CSV (File menu), Explorer right-click "Analyze with Xylem" (installer; tested in CI). Left: multi-select delete, duplicate finder, hardlink names.
 - **Security:** all findings F-01…F-16 fixed or decided (`docs/SECURITY-STATUS.md`); the admin helper writes nothing to disk (named pipe). Remaining before 1.0: the VM clearance test run, 24 h cargo-fuzz, signing.
 - **Security retest (10 Nov):**
   - Score 8/10.
