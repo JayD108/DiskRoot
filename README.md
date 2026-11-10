@@ -78,6 +78,10 @@ Free code signing provided by [SignPath.io](https://about.signpath.io/), certifi
 | [Development](docs/DEVELOPMENT.md) | Build from source, command line, tests, project layout, releases |
 | [Roadmap](docs/ROADMAP.md) | What's next |
 
+## Acknowledgements
+
+Claude (by Anthropic) was used as an AI assistant during the development of this project: for code, testing, security review and documentation. All work is reviewed and maintained by the project owner.
+
 ## License
 
 MIT or Apache-2.0, at your option ([LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE)).
