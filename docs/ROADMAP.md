@@ -70,3 +70,6 @@ Signed installer, CI builds, screenshots, testing on several PCs, and an honest 
 **Recommendation:** start with **SignPath Foundation** if Xylem goes public as open source (it needs R2, CI). Use Azure Artifact Signing if you're eligible by country. Use an OV certificate if neither fits.
 
 **Note:** no certificate gives an instant SmartScreen pass anymore. Reputation builds up as people download the signed files.
+
+## Phases 8–10 (proposed 11 Nov 2026)
+See [FEATURE-PROPOSALS.md](FEATURE-PROPOSALS.md): 15 user-proposed features reviewed against the code and constraints. Phase 8 "Clean up with confidence" (dependency purge, leftovers view, cache rules, custom rules, Windows-native cleanups); Phase 9 "See it happen" (age heatmap, live updates, alerts, orphan hints); Phase 10 "Power tools" (PowerShell export, NTFS compression, guided VHDX compaction). Space Shifter and Archive & replace are deferred.
