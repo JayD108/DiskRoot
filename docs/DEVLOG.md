@@ -368,3 +368,14 @@ User asked: "go for next step and also add the security measures ... and think o
 - Speed: classify 0.15–0.20 s (unchanged), stats 0.10–0.12 s (was 0.12–0.15).
 - Real app: **213 MB private after a fresh scan of C:** (was 278), **211 MB reopened** (was 248).
 - 63 tests, clippy clean.
+
+### 11 Nov 2026: Phase 6.1, peak memory while scanning
+- Measured: CLI walk of C: peaks at ~160 MB. The app peaked at **375 MB** (settled at 212).
+- The biggest temporary cost was the Phase 5 "remember" step:
+  - `Snapshot::of` held an `Option<String>` per node (1.9M × 24 B) plus a second copy of every folder path.
+  - `diff` made lowercase copies of ~300k paths for both snapshots and cloned every folder entry.
+- **Fixes:**
+  - `Snapshot::of` uses a u32 slot per node and stores each folder path once (exact capacity).
+  - `diff` compares 64-bit FNV fingerprints of lowercased paths (`path_key`) instead of lowercase strings, borrows the snapshot strings, and clones only the ≤ 50 reported folders.
+- **After:** app peak **282 MB** with remember on (was 375), 254 MB with it off; settled 212 MB. The rest of the peak is the scan plus view building (~40 MB above settled).
+- 6.3 (first raw MFT read) needs admin tracing; left for the admin benchmark session.

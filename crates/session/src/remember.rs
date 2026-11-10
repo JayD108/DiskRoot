@@ -84,23 +84,33 @@ impl Snapshot {
     /// All live folders of `idx`, with rolled-up sizes.
     pub fn of(idx: &Index) -> Self {
         let n = idx.len();
-        let mut rel: Vec<Option<String>> = vec![None; n];
-        rel[0] = Some(String::new());
+        // slot[node] = position of that folder in `dirs` (u32::MAX for files).
+        // 4 bytes per item instead of an Option<String> (24 bytes) per item.
+        let mut slot = vec![u32::MAX; n];
+        slot[0] = 0;
         let mut dirs = vec![SnapDir { path: String::new(), bytes: idx.alloc(0), files: idx.files(0) }];
         for id in 1..n as u32 {
             if !idx.is_dir(id) || idx.flags(id) & flags::DELETED != 0 {
                 continue;
             }
             let p = idx.parent(id);
-            let Some(parent_path) = (p != NO_PARENT).then(|| rel[p as usize].as_deref()).flatten() else { continue };
+            if p == NO_PARENT || slot[p as usize] == u32::MAX {
+                continue;
+            }
+            let parent_path = &dirs[slot[p as usize] as usize].path;
             let path = if parent_path.is_empty() {
                 idx.name(id).to_owned()
             } else {
-                format!("{parent_path}\\{}", idx.name(id))
+                let mut s = String::with_capacity(parent_path.len() + 1 + idx.name(id).len());
+                s.push_str(parent_path);
+                s.push('\\');
+                s.push_str(idx.name(id));
+                s
             };
-            dirs.push(SnapDir { path: path.clone(), bytes: idx.alloc(id), files: idx.files(id) });
-            rel[id as usize] = Some(path);
+            slot[id as usize] = dirs.len() as u32;
+            dirs.push(SnapDir { path, bytes: idx.alloc(id), files: idx.files(id) });
         }
+        dirs.shrink_to_fit();
         Self { time: now_secs(), root: idx.name(0).to_owned(), dirs }
     }
 
@@ -199,52 +209,65 @@ pub struct Changes {
     pub items: Vec<Change>,
 }
 
+/// FNV-1a over the lowercased path: a 64-bit fingerprint, so comparing
+/// two snapshots doesn't need lowercase copies of every path.
+fn path_key(p: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for c in p.chars().flat_map(char::to_lowercase) {
+        let mut buf = [0u8; 4];
+        for &b in c.encode_utf8(&mut buf).as_bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    h
+}
+
 /// Compares two snapshots of the same root and picks the folders where the
 /// change happened: big enough to matter, and not just the sum of one
 /// child's change (so you see `...\node_modules`, not every parent above it).
 pub fn diff(prev: &Snapshot, cur: &Snapshot, limit: usize) -> Changes {
-    let before: HashMap<String, u64> = prev.dirs.iter().map(|d| (d.path.to_lowercase(), d.bytes)).collect();
-    let after: HashMap<String, u64> = cur.dirs.iter().map(|d| (d.path.to_lowercase(), d.bytes)).collect();
-    let mut all: Vec<Change> = cur
+    let before: HashMap<u64, u64> = prev.dirs.iter().map(|d| (path_key(&d.path), d.bytes)).collect();
+    let after: HashMap<u64, u64> = cur.dirs.iter().map(|d| (path_key(&d.path), d.bytes)).collect();
+    // (path, before, after), borrowing the snapshots' strings.
+    let mut all: Vec<(&str, u64, u64)> = cur
         .dirs
         .iter()
-        .map(|d| Change { path: d.path.clone(), before: before.get(&d.path.to_lowercase()).copied().unwrap_or(0), after: d.bytes })
+        .map(|d| (d.path.as_str(), before.get(&path_key(&d.path)).copied().unwrap_or(0), d.bytes))
         .collect();
-    all.extend(
-        prev.dirs
-            .iter()
-            .filter(|d| !after.contains_key(&d.path.to_lowercase()))
-            .map(|d| Change { path: d.path.clone(), before: d.bytes, after: 0 }),
-    );
-    all.retain(|c| c.delta() != 0);
+    all.extend(prev.dirs.iter().filter(|d| !after.contains_key(&path_key(&d.path))).map(|d| (d.path.as_str(), d.bytes, 0)));
+    let delta = |b: u64, a: u64| i128::from(a) - i128::from(b);
+    all.retain(|&(_, b, a)| a != b);
 
-    let total = before.get("").copied().unwrap_or(0).max(after.get("").copied().unwrap_or(0));
+    let root_key = path_key("");
+    let total = before.get(&root_key).copied().unwrap_or(0).max(after.get(&root_key).copied().unwrap_or(0));
     let threshold = i128::from((total / 1000).max(1 << 20)); // 0.1% of the drive, at least 1 MiB
 
     // Biggest same-direction change among each folder's direct children.
-    let parent_of = |p: &str| -> Option<String> {
-        if p.is_empty() { None } else { Some(p.rfind('\\').map_or(String::new(), |i| p[..i].to_lowercase())) }
+    let parent_key = |p: &str| -> Option<u64> {
+        if p.is_empty() { None } else { Some(path_key(p.rfind('\\').map_or("", |i| &p[..i]))) }
     };
-    let mut grow: HashMap<String, i128> = HashMap::new();
-    let mut shrink: HashMap<String, i128> = HashMap::new();
-    for c in &all {
-        if let Some(p) = parent_of(&c.path) {
-            let d = c.delta();
-            let slot = if d > 0 { grow.entry(p).or_insert(0) } else { shrink.entry(p).or_insert(0) };
+    let mut grow: HashMap<u64, i128> = HashMap::new();
+    let mut shrink: HashMap<u64, i128> = HashMap::new();
+    for &(path, b, a) in &all {
+        if let Some(k) = parent_key(path) {
+            let d = delta(b, a);
+            let slot = if d > 0 { grow.entry(k).or_insert(0) } else { shrink.entry(k).or_insert(0) };
             *slot = (*slot).max(d.abs());
         }
     }
     let mut items: Vec<Change> = all
         .into_iter()
-        .filter(|c| {
-            let d = c.delta();
+        .filter(|&(path, b, a)| {
+            let d = delta(b, a);
             if d.abs() < threshold {
                 return false;
             }
-            let key = c.path.to_lowercase();
-            let child = if d > 0 { grow.get(&key) } else { shrink.get(&key) }.copied().unwrap_or(0);
+            let k = path_key(path);
+            let child = if d > 0 { grow.get(&k) } else { shrink.get(&k) }.copied().unwrap_or(0);
             child * 4 < d.abs() * 3 // keep unless one child explains >= 75%
         })
+        .map(|(path, before, after)| Change { path: path.to_owned(), before, after })
         .collect();
     items.sort_by_key(|c| std::cmp::Reverse(c.delta().abs()));
     items.truncate(limit);
@@ -252,8 +275,8 @@ pub fn diff(prev: &Snapshot, cur: &Snapshot, limit: usize) -> Changes {
         root: cur.root.clone(),
         before_time: prev.time,
         after_time: cur.time,
-        before_total: before.get("").copied().unwrap_or(0),
-        after_total: after.get("").copied().unwrap_or(0),
+        before_total: before.get(&root_key).copied().unwrap_or(0),
+        after_total: after.get(&root_key).copied().unwrap_or(0),
         items,
     }
 }

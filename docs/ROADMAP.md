@@ -32,7 +32,7 @@ Risks: the USN journal needs admin (reuse the helper, which then also returns ch
 
 ## Phase 6: memory and first-read speed
 
-**Status (10 Nov 2026):** scan data for C: (1.9M items) is down from 204 MB to **143 MB** (6.2 done: sparse per-folder category sums, trimmed index columns). The whole app uses 213 MB after a fresh scan (was 278) and 211 MB reopened (was 248). The rest is the window: GPU driver, fonts, UI. Next: 6.1 (peak while scanning) and 6.3.
+**Status (10 Nov 2026):** scan data for C: (1.9M items) is down from 204 MB to **143 MB** (6.2 done: sparse per-folder category sums, trimmed index columns). The whole app uses 213 MB after a fresh scan (was 278) and 211 MB reopened (was 248). The rest is the window: GPU driver, fonts, UI. 6.1 done: the app's peak while scanning C: is down from 375 to 282 MB. 6.3 (first raw read) needs an admin trace session.
 
 | Step | What | Target |
 |---|---|---|
