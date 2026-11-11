@@ -28,6 +28,7 @@
 1. The window creates a **private named pipe** first: nobody else can create one with that name, and only local programs can connect.
 2. It starts `xylem.exe --helper-scan C: --pipe <name>` through the Windows UAC prompt. The helper accepts only that exact command line and creates no window.
 3. The helper opens the drive (read-only) and the pipe, then **drops its admin power before reading any drive data**: it removes every privilege, lowers itself to Low integrity (so it can't write files, registry keys or other programs), joins a job that forbids starting programs, and turns on Windows' code-loading protections. If it can't, it stops.
+   - What this doesn't take away: **reading**. Windows keeps the helper in the Administrators group, and Low integrity blocks only writing. So in theory, a bug in the parser could read anything an admin can read. The helper already has the whole drive open for reading anyway. It can't write, start programs or load code, and it has no network code. A fully sandboxed reader process is on the research list.
 4. It connects to the pipe in "identification" mode, so even a fake pipe could never act with its admin rights. It **writes nothing to disk**.
 5. The window checks everything it receives with the same fuzz-tested loader it uses for its own files.
 6. Fast scan can be cancelled; a helper that hangs is stopped after 10 minutes.

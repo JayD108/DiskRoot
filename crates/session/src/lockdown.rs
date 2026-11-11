@@ -6,7 +6,17 @@
 //! already open keep the access they were granted; every *new* open is
 //! checked against the reduced token. A bug in the parser (the code that
 //! handles drive data a crafted disk could control) can then no longer use
-//! admin rights.
+//! admin rights to change anything.
+//!
+//! What it does NOT remove: **reading**. The token stays a member of
+//! Administrators (a mandatory group: Windows won't let a process disable it)
+//! and Low integrity only blocks writing up, not reading. Measured elevated
+//! (R&D admin batch, 11 Nov 2026): after lockdown the helper can still open
+//! `\\.\C:` again for reading, so a parser bug could read whatever an admin
+//! can read (other drives too). It already holds a read handle to the whole
+//! volume, so for that drive nothing changes. Closing this fully needs a
+//! separate sandboxed reader process (restricted token / AppContainer)
+//! that receives only the volume handle.
 //!
 //! Steps:
 //! 1. **Remove every privilege** from the token (removed privileges can't
@@ -24,8 +34,9 @@
 //!
 //! Measured (R&D, non-elevated and elevated): after lockdown, writing
 //! through the pre-opened handle works; creating a file in TEMP fails with
-//! ERROR_ACCESS_DENIED; starting `cmd.exe` fails (1816); cost is a few
-//! microseconds.
+//! ERROR_ACCESS_DENIED; starting `cmd.exe` fails (1816); a full Fast scan of
+//! C: takes the same time locked down as not (873.6 vs 872.7 ms median, 5+5,
+//! idle).
 
 use std::ffi::c_void;
 use std::ptr::null_mut;
