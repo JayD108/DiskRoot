@@ -284,6 +284,9 @@ pub fn scan_with_helper(drive: &str, cancel: &AtomicBool) -> Result<(Index, Scan
         return Err(match code {
             c if c == crate::helper::SCAN_FAILED as u32 => format!("Fast scan couldn't read {drive}. Is it an NTFS drive?"),
             c if c == crate::helper::WRITE_FAILED as u32 => "Fast scan couldn't send its result back to the app.".into(),
+            c if c == crate::helper::LOCKDOWN_FAILED as u32 => {
+                "The admin helper couldn't drop its admin rights before reading the drive, so it stopped for safety.".into()
+            }
             c => format!("The admin helper failed (exit code {c})."),
         });
     }
