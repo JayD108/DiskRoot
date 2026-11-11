@@ -104,6 +104,10 @@ enum Dialog {
     Rules,
     /// View > Size alerts.
     Alerts,
+    /// NTFS compression of a folder: (path, compressible bytes, rough saving).
+    Compress(String, u64, u64),
+    /// Compacting a WSL/Docker virtual disk: (path, size, in use).
+    Vhdx(String, u64, bool),
     /// View > Leftovers.
     Leftovers(Vec<Leftover>),
     /// Explains a Windows tool before starting it.
@@ -919,6 +923,14 @@ impl XylemApp {
                     self.start_export();
                     ui.close();
                 }
+                if ui
+                    .add_enabled(!self.marked.is_empty(), egui::Button::new("Export marked as PowerShell script…"))
+                    .on_hover_text("A script that moves the marked items to the Recycle Bin, re-checking each one. Xylem only writes it; you review and run it.")
+                    .clicked()
+                {
+                    self.export_plan();
+                    ui.close();
+                }
                 if ui.button("Custom rules…").on_hover_text("Your own categories for folders and file types").clicked() {
                     self.dialog = Some(Dialog::Rules);
                     ui.close();
@@ -1567,6 +1579,51 @@ impl XylemApp {
         }
     }
 
+    /// Runs a blocking tool call on a worker thread behind the progress dialog.
+    fn run_tool_job(&mut self, name: String, f: impl FnOnce() -> Result<String, String> + Send + 'static) {
+        if self.job.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(Done::Tool(f()));
+        });
+        self.job = Some(Job { kind: JobKind::Tool(name), started: Instant::now(), rx, cancel: Arc::default() });
+    }
+
+    /// File > Export marked as PowerShell script: Documents\Xylem\cleanup <time>.ps1
+    /// (UTF-8 with BOM, so Windows PowerShell 5.1 reads non-English names right).
+    fn export_plan(&mut self) {
+        let Some(s) = &self.scanned else { return };
+        let nodes: Vec<u32> = self.marked.iter().copied().collect();
+        let (items, refused) = s.plan_items(&nodes);
+        if items.is_empty() {
+            self.dialog = Some(Dialog::Message("Nothing to export".into(), "None of the marked items can be deleted by Xylem (protected or unusual names).".into()));
+            return;
+        }
+        let stamp = xylem_session::safety::utc_now();
+        let script = xylem_session::power::powershell_plan(&items, &s.summary().root, &format!("{stamp} UTC"));
+        let docs = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from).unwrap_or_default().join("Documents").join("Xylem");
+        let path = docs.join(format!("cleanup {}.ps1", stamp.replace([':', ' '], "-")));
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(script.as_bytes());
+        match std::fs::create_dir_all(&docs).and_then(|()| std::fs::write(&path, bytes)) {
+            Ok(()) => {
+                let mut msg = format!(
+                    "{} items written to\n{}\n\nOpen it in a text editor and read it. Run it with -Run to recycle them; without -Run it only shows what it would do. Xylem doesn't run it.",
+                    items.len(),
+                    path.display()
+                );
+                if !refused.is_empty() {
+                    msg += &format!("\n\nLeft out ({}): {}", refused.len(), refused.iter().map(|r| r.0.as_str()).collect::<Vec<_>>().join(", "));
+                }
+                let _ = xylem_session::reveal(&path.display().to_string());
+                self.dialog = Some(Dialog::Message("Cleanup script saved".into(), msg));
+            }
+            Err(e) => self.dialog = Some(Dialog::Message("Couldn't save the script".into(), e.to_string())),
+        }
+    }
+
     fn add_alert(&mut self, n: u32, grow: u64) {
         let Some(s) = &self.scanned else { return };
         let Ok(info) = s.info(n) else { return };
@@ -2063,6 +2120,23 @@ impl XylemApp {
                                     tool_action = Some(a);
                                 }
                             }
+                            let cloud = s.is_cloud(*n) || xylem_session::safety::in_cloud_folder(std::path::Path::new(&info.path));
+                            if info.dir
+                                && info.protected.is_none()
+                                && info.parent.is_some()
+                                && !cloud
+                                && self.job.is_none()
+                                && ui.add_sized([170.0, 28.0], egui::Button::new("Compress with Windows…")).on_hover_text("NTFS compression with Windows' compact.exe: same files, less space. Undoable.").clicked()
+                            {
+                                action = Some(("compress", *n));
+                            }
+                            if !info.dir
+                                && info.name.to_ascii_lowercase().ends_with(".vhdx")
+                                && self.job.is_none()
+                                && ui.add_sized([170.0, 28.0], egui::Button::new("Compact virtual disk…")).on_hover_text("Give back space a WSL or Docker disk no longer uses (Windows' diskpart, admin)").clicked()
+                            {
+                                action = Some(("vhdx", *n));
+                            }
                         });
                     });
                 }
@@ -2101,6 +2175,22 @@ impl XylemApp {
             if let Some((a, n)) = action {
                 match a {
                     "reveal" => self.reveal_in_explorer(n),
+                    "compress" => {
+                        if let Some(s) = &self.scanned
+                            && let Ok(i) = s.info(n)
+                        {
+                            let (bytes, saving) = s.compress_estimate(n);
+                            self.dialog = Some(Dialog::Compress(i.path, bytes, saving));
+                        }
+                    }
+                    "vhdx" => {
+                        if let Some(s) = &self.scanned
+                            && let Ok(i) = s.info(n)
+                        {
+                            let busy = xylem_session::power::in_use(std::path::Path::new(&i.path));
+                            self.dialog = Some(Dialog::Vhdx(i.path, i.on_disk, busy));
+                        }
+                    }
                     "delete-marked" => self.ask_delete_many(),
                     "clear-marks" => {
                         self.marked.clear();
@@ -2479,6 +2569,34 @@ impl XylemApp {
                         ui.label(RichText::new(p.display().to_string()).monospace().size(11.0).color(t.faint));
                     }
                 }
+                Dialog::Compress(path, bytes, saving) => {
+                    ui.label(RichText::new("Compress with Windows").font(theme::semibold(16.0)));
+                    ui.label(RichText::new(visible(path)).monospace().color(t.muted));
+                    ui.add_space(6.0);
+                    ui.label(format!("{} could be compressed · rough estimate: about {} saved", fmt_bytes(*bytes), fmt_bytes(*saving)));
+                    ui.add_space(6.0);
+                    facts(ui, &t, &[
+                        ("How", "Windows' own compact.exe with LZX compression (/EXE:LZX). Files stay where they are and open as usual."),
+                        ("Best for", "Programs, games and documents you mostly read. Photos, videos and archives are already compressed and barely shrink."),
+                        ("Note", "A file that's changed later is stored uncompressed again. Opening compressed files costs a little CPU."),
+                        ("Undo", "Uncompress restores everything (compact /U)."),
+                    ]);
+                }
+                Dialog::Vhdx(path, size, busy) => {
+                    ui.label(RichText::new("Compact a virtual disk").font(theme::semibold(16.0)));
+                    ui.label(RichText::new(visible(path)).monospace().color(t.muted));
+                    ui.add_space(6.0);
+                    ui.add(egui::Label::new(RichText::new(format!("This disk file is {}. WSL and Docker disks grow but never shrink by themselves: space freed inside (deleted files, pruned images) stays in the file until it's compacted.", fmt_bytes(*size))).color(t.muted)).wrap());
+                    ui.add_space(6.0);
+                    facts(ui, &t, &[
+                        ("1. Free space inside", "Delete what you don't need inside first: 'docker system prune' for Docker; for WSL, delete files and run 'sudo fstrim -av' in the distro."),
+                        ("2. Stop it", "The disk must not be in use: shut down WSL, or quit Docker Desktop."),
+                        ("3. Compact", "Windows' diskpart attaches the disk read-only and compacts it (admin). This can take minutes."),
+                    ]);
+                    ui.add_space(6.0);
+                    let (mark, col, text) = if *busy { ("!", theme::WARN, "In use right now: stop WSL or Docker first.") } else { ("✔", t.accent, "Not in use: ready to compact.") };
+                    ui.label(RichText::new(format!("{mark}  {text}")).color(col).font(theme::semibold(13.0)));
+                }
                 Dialog::Alerts => {
                     ui.label(RichText::new("Size alerts").font(theme::semibold(16.0)));
                     ui.add(egui::Label::new(RichText::new("Xylem checks these folders after every scan and, with live updates on, while it's open. It doesn't run in the background. Right-click a folder > \"Alert me if it grows by\" to add one.").color(t.muted)).wrap());
@@ -2648,6 +2766,35 @@ impl XylemApp {
                         }
                         return;
                     }
+                    Dialog::Compress(..) => {
+                        let b = egui::Button::new(RichText::new("Compress").color(t.accent_ink)).fill(t.accent).min_size(vec2(90.0, 26.0));
+                        if ui.add(b).clicked() {
+                            action = Some("compress-go");
+                        }
+                        if ui.button("Uncompress").clicked() {
+                            action = Some("uncompress-go");
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close = true;
+                        }
+                        return;
+                    }
+                    Dialog::Vhdx(_, _, busy) => {
+                        let b = egui::Button::new(RichText::new("Compact (admin)").color(t.accent_ink)).fill(t.accent).min_size(vec2(110.0, 26.0));
+                        if ui.add_enabled(!*busy, b).clicked() {
+                            action = Some("vhdx-go");
+                        }
+                        if ui.button("Check again").clicked() {
+                            action = Some("vhdx-check");
+                        }
+                        if ui.button("Shut down WSL").on_hover_text("Runs 'wsl --shutdown': stops every WSL distro").clicked() {
+                            action = Some("wsl-shutdown");
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close = true;
+                        }
+                        return;
+                    }
                     Dialog::Rules => {
                         let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
                         if ui.add(ok).clicked() {
@@ -2708,6 +2855,33 @@ impl XylemApp {
             Some("delete-many") => {
                 if let Some(Dialog::ConfirmMany(c)) = self.dialog.take() {
                     self.start_delete_many(c.items);
+                }
+            }
+            Some(a @ ("compress-go" | "uncompress-go")) => {
+                if let Some(Dialog::Compress(path, _, _)) = self.dialog.take() {
+                    let undo = a == "uncompress-go";
+                    let name = if undo { "Uncompressing with Windows (compact.exe)" } else { "Compressing with Windows (compact.exe)" };
+                    self.run_tool_job(name.into(), move || {
+                        xylem_session::power::compact_folder(std::path::Path::new(&path), undo).map(|m| m + " Scan again to see the new sizes.")
+                    });
+                }
+            }
+            Some("vhdx-check") => {
+                if let Some(Dialog::Vhdx(path, _, busy)) = &mut self.dialog {
+                    *busy = xylem_session::power::in_use(std::path::Path::new(path));
+                }
+            }
+            Some("wsl-shutdown") => {
+                if let Err(e) = xylem_session::power::wsl_shutdown() {
+                    self.say(e);
+                }
+                if let Some(Dialog::Vhdx(path, _, busy)) = &mut self.dialog {
+                    *busy = xylem_session::power::in_use(std::path::Path::new(path));
+                }
+            }
+            Some("vhdx-go") => {
+                if let Some(Dialog::Vhdx(path, _, _)) = self.dialog.take() {
+                    self.run_tool_job("Compacting the virtual disk (diskpart)".into(), move || xylem_session::power::compact_vhdx(std::path::Path::new(&path)));
                 }
             }
             Some("rules-reload") => self.reload_rules(),

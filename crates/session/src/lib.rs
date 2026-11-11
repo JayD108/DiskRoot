@@ -16,6 +16,7 @@ pub mod remember;
 pub mod safety;
 pub mod tools;
 pub mod orphans;
+pub mod power;
 pub mod watch;
 
 use std::path::{Path, PathBuf};
@@ -410,6 +411,11 @@ impl Scanned {
         Self { index: Arc::new(index), children, cls, cats, stats, mode, classify_ms, removed_dirs: 0, rules }
     }
 
+    /// An online-only cloud placeholder (e.g. OneDrive "Free up space").
+    pub fn is_cloud(&self, node: u32) -> bool {
+        (node as usize) < self.index.len() && self.index.flags(node) & flags::CLOUD != 0
+    }
+
     /// Last-modified day of a node (folders: newest inside); 0 = unknown.
     pub fn mtime(&self, node: u32) -> u16 {
         if (node as usize) < self.index.len() { self.index.mtime(node) } else { 0 }
@@ -569,6 +575,47 @@ It may be left over from an uninstalled program, or belong to one that's install
         }
         out.sort_unstable_by_key(|l| std::cmp::Reverse(l.on_disk));
         out
+    }
+
+    /// For NTFS compression: (bytes that could be compressed, rough saving).
+    /// Skips files already compressed, sparse, cloud placeholders and links.
+    pub fn compress_estimate(&self, node: u32) -> (u64, u64) {
+        let idx = &self.index;
+        let (mut bytes, mut saving) = (0u64, 0f64);
+        if self.check(node).is_err() {
+            return (0, 0);
+        }
+        let mut stack = vec![node];
+        while let Some(x) = stack.pop() {
+            if idx.is_dir(x) {
+                if idx.flags(x) & flags::LINK == 0 {
+                    stack.extend(self.children.live(idx, x));
+                }
+                continue;
+            }
+            if idx.flags(x) & (flags::COMPRESSED | flags::SPARSE | flags::CLOUD | flags::LINK) != 0 {
+                continue;
+            }
+            let a = idx.alloc(x);
+            let ext = idx.name(x).rsplit_once('.').map_or("", |e| e.1);
+            bytes += a;
+            saving += a as f64 * power::compress_ratio(ext);
+        }
+        (bytes, saving as u64)
+    }
+
+    /// Items for a PowerShell cleanup plan: every node that passes the same
+    /// checks as a delete (protection, unusual names), plus the refused ones
+    /// and why.
+    pub fn plan_items(&self, nodes: &[u32]) -> (Vec<power::PlanItem>, Vec<(String, String)>) {
+        let (mut ok, mut refused) = (Vec::new(), Vec::new());
+        for &n in nodes {
+            match self.prepare_delete(n) {
+                Ok(p) => ok.push(power::PlanItem { path: p.path.display().to_string(), dir: p.dir, bytes: p.freed }),
+                Err(why) => refused.push((self.index.name(n).to_owned(), why)),
+            }
+        }
+        (ok, refused)
     }
 
     fn leftover(&self, id: u32, kind: String, note: String) -> Leftover {

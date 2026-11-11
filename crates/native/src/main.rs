@@ -75,6 +75,10 @@ fn main() {
     if let Some(code) = xylem_session::helper::run_if_helper(&args) {
         std::process::exit(code);
     }
+    // Elevated virtual-disk compaction (View > details of a .vhdx): no window.
+    if let Some(code) = xylem_session::power::run_if_compact_helper(&args) {
+        std::process::exit(code);
+    }
 
     let icon = IconData { rgba: include_bytes!("../assets/icon-64.rgba").to_vec(), width: 64, height: 64 };
     let options = eframe::NativeOptions {
