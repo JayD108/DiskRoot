@@ -16,11 +16,13 @@ pub struct Settings {
     pub seen_notice: bool,
     /// Save scans on this PC for instant reopen and "what changed".
     pub remember_scans: bool,
+    /// Colour the map and tree by last-modified date instead of category.
+    pub color_by_age: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { dark: false, treemap: false, by_category: false, last_path: "C:\\".into(), seen_notice: false, remember_scans: true }
+        Self { dark: false, treemap: false, by_category: false, last_path: "C:\\".into(), seen_notice: false, remember_scans: true, color_by_age: false }
     }
 }
 
@@ -32,7 +34,8 @@ impl Settings {
     pub fn load() -> Self {
         file()
             .and_then(|f| std::fs::read_to_string(f).ok())
-            .and_then(|s| serde_json::from_str(&s).ok())
+            // Editors like older Notepad save a byte-order mark; accept it.
+            .and_then(|s| serde_json::from_str(s.trim_start_matches('\u{feff}')).ok())
             .unwrap_or_default()
     }
 

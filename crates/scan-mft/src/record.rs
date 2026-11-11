@@ -270,6 +270,8 @@ pub struct Parsed {
     pub size: u64,
     /// Bytes on disk (unnamed stream plus CompactOS stream).
     pub alloc: u64,
+    /// Last-modified day from $STANDARD_INFORMATION (0 = unknown).
+    pub mtime: u16,
 }
 
 /// Parses one record in place (the fixup modifies `rec`). Names are
@@ -299,12 +301,19 @@ pub fn parse_record(rec_no: u32, rec: &mut [u8], names: &mut String) -> Option<P
         reparse_tag: 0,
         size: 0,
         alloc: 0,
+        mtime: 0,
     };
     for a in attrs(rec, &h) {
         match a.typ {
             ATTR_STANDARD_INFORMATION => {
-                if let Some(x) = a.value().and_then(|v| u32_at(v, 32)) {
-                    p.attrs = x & !SI_HAS_EA;
+                if let Some(v) = a.value() {
+                    if let Some(x) = u32_at(v, 32) {
+                        p.attrs = x & !SI_HAS_EA;
+                    }
+                    // Offset 8: last data modification (FILETIME).
+                    if let Some(t) = v.get(8..16) {
+                        p.mtime = xylem_core::filetime_days(u64::from_le_bytes(t.try_into().expect("8 bytes")));
+                    }
                 }
             }
             ATTR_FILE_NAME => {
@@ -475,6 +484,8 @@ pub(crate) mod tests {
     pub fn std_info(attrs: u32) -> Vec<u8> {
         let mut v = vec![0u8; 72];
         v[32..36].copy_from_slice(&attrs.to_le_bytes());
+        // Modified 2024-01-01 (day 19723).
+        v[8..16].copy_from_slice(&((19_723u64 * 86_400 + 11_644_473_600) * 10_000_000).to_le_bytes());
         resident(ATTR_STANDARD_INFORMATION, "", &v)
     }
 
@@ -555,6 +566,7 @@ pub(crate) mod tests {
         let mut r = record(&[std_info(0x20 | SI_HAS_EA), file_name(5, 5, 1, "cargo.exe")], RECORD_IN_USE, 0, 1);
         let p = parse_record(50, &mut r, &mut String::new()).unwrap();
         assert_eq!(p.attrs, 0x20);
+        assert_eq!(p.mtime, 19_723, "last-modified day from $STANDARD_INFORMATION");
         assert_eq!(xylem_core::win::node_flags(p.attrs, p.reparse_tag) & xylem_core::flags::CLOUD, 0);
         // A real OneDrive placeholder is still cloud (reparse tag).
         assert_ne!(xylem_core::win::node_flags(0x20 | 0x0040_0000, 0x9000_601A) & xylem_core::flags::CLOUD, 0);

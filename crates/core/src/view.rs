@@ -83,6 +83,8 @@ pub struct ViewNode {
     /// Extra text for the tooltip (e.g. the full path of a place).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub hint: String,
+    /// Last-modified day (folders: newest inside); 0 = unknown.
+    pub mtime: u16,
 }
 
 impl ViewNode {
@@ -104,6 +106,7 @@ impl ViewNode {
             rule: u16::MAX,
             key: String::new(),
             hint: String::new(),
+            mtime: 0,
         }
     }
 }
@@ -166,6 +169,7 @@ fn node(idx: &Index, id: u32, parent: i32, depth: u8) -> ViewNode {
         depth,
     );
     n.flags = idx.flags(id);
+    n.mtime = idx.mtime(id);
     n
 }
 

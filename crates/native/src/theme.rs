@@ -102,6 +102,27 @@ pub fn cat_color(cat: u8) -> Color32 {
     CAT.get(cat as usize).copied().unwrap_or(CAT[9])
 }
 
+/// Age view, newest to oldest (warm to cool), then "date unknown" (grey).
+/// Matches `xylem_session::AGE_BUCKETS`.
+const AGE: [Color32; 7] = [
+    hex(0xc8452c),
+    hex(0xe08a2c),
+    hex(0xcfa935),
+    hex(0x7fa65a),
+    hex(0x4a8fa8),
+    hex(0x5f6aa8),
+    hex(0x9a958c),
+];
+
+pub fn age_color(bucket: usize) -> Color32 {
+    AGE.get(bucket).copied().unwrap_or(AGE[6])
+}
+
+/// Legend swatches: 0-99 are categories, 100+ age buckets.
+pub fn swatch(c: u8) -> Color32 {
+    if c >= 100 { age_color(usize::from(c - 100)) } else { cat_color(c) }
+}
+
 /// Blend toward the panel colour: deeper rings / inner tiles get lighter
 /// (light theme) or darker (dark theme).
 pub fn tint(c: Color32, depth: u8, t: &Tokens) -> Color32 {

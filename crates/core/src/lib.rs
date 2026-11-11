@@ -61,6 +61,83 @@ pub struct Columns {
     pub name_off: Vec<u32>,
     pub name_len: Vec<u16>,
     pub names: String,
+    /// Last-modified day of each node ([`filetime_days`]); 0 = unknown.
+    /// May be left empty (all unknown).
+    pub mtime: Vec<u16>,
+}
+
+/// Seconds between 1601-01-01 (FILETIME epoch) and 1970-01-01.
+const EPOCH_GAP_SECS: u64 = 11_644_473_600;
+
+/// A Windows FILETIME (100 ns ticks since 1601) as days since 1970-01-01,
+/// in a u16 (good until the year 2149). 0 means unknown (or before 1970).
+/// Two bytes per item: ~3.8 MB for a 1.9M-item drive.
+pub fn filetime_days(ft: u64) -> u16 {
+    let secs = ft / 10_000_000;
+    if secs <= EPOCH_GAP_SECS {
+        return 0;
+    }
+    u16::try_from((secs - EPOCH_GAP_SECS) / 86_400).unwrap_or(u16::MAX).max(1)
+}
+
+/// Today as days since 1970-01-01 (same scale as [`Index::mtime`]).
+pub fn today_days() -> u16 {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    u16::try_from(secs / 86_400).unwrap_or(u16::MAX)
+}
+
+/// Age buckets for the age view: (at most this many days old, label).
+pub const AGE_BUCKETS: [(u16, &str); 6] = [
+    (31, "This month"),
+    (182, "1-6 months"),
+    (365, "6-12 months"),
+    (730, "1-2 years"),
+    (1826, "2-5 years"),
+    (u16::MAX, "Older"),
+];
+/// Bucket index for items with no date.
+pub const AGE_UNKNOWN: usize = AGE_BUCKETS.len();
+
+/// Which [`AGE_BUCKETS`] entry a last-modified day falls in.
+pub fn age_bucket(today: u16, mtime: u16) -> usize {
+    if mtime == 0 {
+        return AGE_UNKNOWN;
+    }
+    let d = today.saturating_sub(mtime);
+    AGE_BUCKETS.iter().position(|b| d <= b.0).unwrap_or(AGE_BUCKETS.len() - 1)
+}
+
+/// "2024-01-31" for a day number (days since 1970-01-01); "unknown" for 0.
+pub fn date_text(days: u16) -> String {
+    if days == 0 {
+        return "unknown".into();
+    }
+    // Civil-from-days (Howard Hinnant's algorithm).
+    let z = i64::from(days) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// "3 days ago", "5 months ago", "2 years ago".
+pub fn age_text(today: u16, mtime: u16) -> String {
+    if mtime == 0 {
+        return "date unknown".into();
+    }
+    let d = today.saturating_sub(mtime);
+    match d {
+        0 => "today".into(),
+        1 => "yesterday".into(),
+        2..=44 => format!("{d} days ago"),
+        45..=547 => format!("{} months ago", (d + 15) / 30),
+        _ => format!("{:.1} years ago", f64::from(d) / 365.25),
+    }
 }
 
 /// The scanned file tree.
@@ -77,6 +154,8 @@ pub struct Index {
     name_off: Vec<u32>,
     name_len: Vec<u16>,
     names: String,
+    /// Last-modified day; for folders (after totals) the newest inside.
+    mtime: Vec<u16>,
     totals_ready: bool,
 }
 
@@ -93,6 +172,7 @@ impl Index {
         self.name_off.shrink_to_fit();
         self.name_len.shrink_to_fit();
         self.names.shrink_to_fit();
+        self.mtime.shrink_to_fit();
     }
 
     /// Heap bytes held, per column (for memory work).
@@ -106,6 +186,7 @@ impl Index {
             ("index.name_off", self.name_off.capacity() * 4),
             ("index.name_len", self.name_len.capacity() * 2),
             ("index.names", self.names.capacity()),
+            ("index.mtime", self.mtime.capacity() * 2),
         ]
     }
 
@@ -127,6 +208,7 @@ impl Index {
             name_off: Vec::with_capacity(nodes),
             name_len: Vec::with_capacity(nodes),
             names: String::with_capacity(name_bytes + root_name.len()),
+            mtime: Vec::with_capacity(nodes),
             totals_ready: false,
         };
         idx.push_raw(NO_PARENT, root_name, 0, 0, flags::DIR);
@@ -159,6 +241,13 @@ impl Index {
                 return Err(format!("node {i} has a bad name range"));
             }
         }
+        let mtime = if c.mtime.is_empty() {
+            vec![0; n]
+        } else if c.mtime.len() == n {
+            c.mtime
+        } else {
+            return Err(format!("mtime column has {} entries for {n} nodes", c.mtime.len()));
+        };
         let files = c.flags.iter().map(|&f| u32::from(f & flags::DIR == 0)).collect();
         Ok(Self {
             parent: c.parent,
@@ -169,6 +258,7 @@ impl Index {
             name_off: c.name_off,
             name_len: c.name_len,
             names: c.names,
+            mtime,
             totals_ready: false,
         })
     }
@@ -193,7 +283,19 @@ impl Index {
         self.flags.push(f);
         self.name_off.push(off);
         self.name_len.push(len);
+        self.mtime.push(0);
         id
+    }
+
+    /// Sets a node's last-modified day (see [`filetime_days`]).
+    pub fn set_mtime(&mut self, id: u32, days: u16) {
+        self.mtime[id as usize] = days;
+    }
+
+    /// Last-modified day (days since 1970; 0 = unknown). For folders, once
+    /// totals are computed: the newest file or folder inside.
+    pub fn mtime(&self, id: u32) -> u16 {
+        self.mtime[id as usize]
     }
 
     /// Rolls file sizes and counts up into every folder. Runs once; later
@@ -209,6 +311,7 @@ impl Index {
             self.size[p] = self.size[p].saturating_add(self.size[i]);
             self.alloc[p] = self.alloc[p].saturating_add(self.alloc[i]);
             self.files[p] = self.files[p].saturating_add(self.files[i]);
+            self.mtime[p] = self.mtime[p].max(self.mtime[i]);
         }
         self.totals_ready = true;
     }
@@ -291,6 +394,7 @@ impl Index {
             + self.name_off.capacity() * 4
             + self.name_len.capacity() * 2
             + self.names.capacity()
+            + self.mtime.capacity() * 2
     }
 }
 
@@ -306,6 +410,38 @@ mod tests {
         idx.push(me, "b.bin", 50, 4096, 0);
         idx.push(0, "pagefile.sys", 1000, 1000, 0);
         idx
+    }
+
+    #[test]
+    fn date_text_and_buckets() {
+        assert_eq!(date_text(19_723), "2024-01-01");
+        assert_eq!(date_text(0), "unknown");
+        assert_eq!(date_text(19_783), "2024-03-01", "leap year February");
+        assert_eq!(age_bucket(20_000, 20_000), 0);
+        assert_eq!(age_bucket(20_000, 20_000 - 100), 1);
+        assert_eq!(age_bucket(20_000, 1), AGE_BUCKETS.len() - 1);
+        assert_eq!(age_bucket(20_000, 0), AGE_UNKNOWN);
+        assert_eq!(age_bucket(20_000, 20_005), 0, "future dates count as new");
+        assert_eq!(age_text(100, 99), "yesterday");
+        assert_eq!(age_text(1000, 700), "10 months ago");
+    }
+
+    #[test]
+    fn dates_convert_and_roll_up_to_the_newest() {
+        // 2024-01-01 00:00 UTC = 19723 days after 1970-01-01.
+        let ft = (19_723u64 * 86_400 + 11_644_473_600) * 10_000_000;
+        assert_eq!(filetime_days(ft), 19_723);
+        assert_eq!(filetime_days(0), 0, "unknown");
+        assert_eq!(filetime_days(1), 0, "before 1970 counts as unknown");
+        assert_eq!(filetime_days(u64::MAX), u16::MAX, "clamped, never wraps");
+        assert!(today_days() > 20_000);
+        let mut idx = sample();
+        idx.set_mtime(3, 100);
+        idx.set_mtime(4, 300);
+        idx.set_mtime(5, 200);
+        idx.compute_totals();
+        assert_eq!((idx.mtime(2), idx.mtime(1), idx.mtime(0)), (300, 300, 300));
+        assert_eq!(idx.mtime(3), 100, "files keep their own date");
     }
 
     #[test]
@@ -341,6 +477,7 @@ mod tests {
             name_off: vec![0, 3, 8],
             name_len: vec![3, 5, 5],
             names: "C:\\Usersa.bin".into(),
+            mtime: vec![],
         };
         let mut idx = Index::from_columns(cols()).unwrap();
         idx.compute_totals();

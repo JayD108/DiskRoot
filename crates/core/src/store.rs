@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use crate::{Columns, Index, ScanStats, flags};
 
-const MAGIC: &[u8; 8] = b"XYLMIDX1";
+/// Version 2 adds the last-modified column. Older files are refused (a
+/// remembered scan from an older version simply isn't reopened).
+const MAGIC: &[u8; 8] = b"XYLMIDX2";
 /// Refuse absurd sizes from a corrupt file before allocating.
 const MAX_NODES: u64 = 1 << 32;
 const MAX_NAME_BYTES: u64 = 16 << 30;
@@ -55,6 +57,9 @@ impl Index {
         for &l in &self.name_len {
             w.write_all(&l.to_le_bytes())?;
         }
+        for &d in &self.mtime {
+            w.write_all(&d.to_le_bytes())?;
+        }
         w.write_all(self.names.as_bytes())
     }
 
@@ -95,7 +100,7 @@ impl Index {
         }
         if let Some(len) = file_len {
             // magic + 7 header words + mode length + mode + columns + names
-            let expected = 8 + 7 * 8 + 4 + mode_len as u64 + n as u64 * (4 + 8 + 8 + 1 + 4 + 2) + name_bytes as u64;
+            let expected = 8 + 7 * 8 + 4 + mode_len as u64 + n as u64 * (4 + 8 + 8 + 1 + 4 + 2 + 2) + name_bytes as u64;
             if expected != len {
                 return Err(bad("size doesn't match its header"));
             }
@@ -116,11 +121,12 @@ impl Index {
         r.read_exact(&mut flag_bytes)?;
         let name_off = column(r, n, u32::from_le_bytes)?;
         let name_len = column(r, n, u16::from_le_bytes)?;
+        let mtime = column(r, n, u16::from_le_bytes)?;
         let mut names = vec![0u8; name_bytes];
         r.read_exact(&mut names)?;
         let names = String::from_utf8(names).map_err(|_| bad("names not UTF-8"))?;
 
-        let cols = Columns { parent, size, alloc, flags: flag_bytes, name_off, name_len, names };
+        let cols = Columns { parent, size, alloc, flags: flag_bytes, name_off, name_len, names, mtime };
         let mut index = Index::from_columns(cols).map_err(|e| bad(&e))?;
         // A swapped or crafted file must not smuggle in names that change
         // the meaning of a path ("..\\Windows", "x:y"): only the root may
@@ -140,6 +146,22 @@ impl Index {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dates_survive_save_and_load() {
+        let mut idx = Index::new("C:\\");
+        let d = idx.push(0, "d", 0, 0, crate::flags::DIR);
+        let f = idx.push(d, "f", 1, 1, 0);
+        idx.set_mtime(f, 20_000);
+        idx.compute_totals();
+        let mut buf = Vec::new();
+        idx.save(&ScanStats::default(), "t", &mut buf).unwrap();
+        let (back, _, _) = Index::load_checked(&mut buf.as_slice(), buf.len() as u64).unwrap();
+        assert_eq!((back.mtime(f), back.mtime(d), back.mtime(0)), (20_000, 20_000, 20_000));
+        let mut v1 = buf.clone();
+        v1[7] = b'1';
+        assert!(Index::load(&mut v1.as_slice()).is_err(), "old format refused");
+    }
 
     #[test]
     fn round_trips() {

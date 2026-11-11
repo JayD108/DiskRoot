@@ -28,6 +28,7 @@ use xylem_scan_mft::{Mode, Used, scan_auto};
 
 pub use xylem_core::classify::{Action, Category, RuleInfo, Safety, SubType};
 pub use xylem_core::view::ViewNode as Shape;
+pub use xylem_core::{AGE_BUCKETS, AGE_UNKNOWN, age_bucket, age_text, date_text, today_days};
 
 /// The rules in effect: the built-in ones plus the user's own
 /// (`%APPDATA%\Xylem\rules.json`). Reloadable while the app runs; each
@@ -328,6 +329,8 @@ pub struct FileRow {
     pub path: String,
     pub on_disk: u64,
     pub cat: u8,
+    /// Last-modified day (0 = unknown).
+    pub mtime: u16,
 }
 
 /// A row of the "file types" list.
@@ -353,6 +356,8 @@ pub struct Leftover {
     pub action: Option<xylem_core::classify::Action>,
     /// Xylem may move it to the Recycle Bin (not protected).
     pub deletable: bool,
+    /// Last-modified day (0 = unknown).
+    pub mtime: u16,
 }
 
 /// One scan, classified, ready to answer UI questions.
@@ -387,6 +392,30 @@ impl Scanned {
         });
         let classify_ms = t.elapsed().as_secs_f64() * 1000.0;
         Self { index: Arc::new(index), children, cls, cats, stats, mode, classify_ms, removed_dirs: 0, rules }
+    }
+
+    /// Last-modified day of a node (folders: newest inside); 0 = unknown.
+    pub fn mtime(&self, node: u32) -> u16 {
+        if (node as usize) < self.index.len() { self.index.mtime(node) } else { 0 }
+    }
+
+    /// Bytes on disk under `node` per age bucket (index = bucket, last =
+    /// unknown date). One pass over the subtree's files.
+    pub fn age_breakdown(&self, node: u32, today: u16) -> [u64; xylem_core::AGE_UNKNOWN + 1] {
+        let mut out = [0u64; xylem_core::AGE_UNKNOWN + 1];
+        if self.check(node).is_err() {
+            return out;
+        }
+        let idx = &self.index;
+        let mut stack = vec![node];
+        while let Some(x) = stack.pop() {
+            if idx.is_dir(x) {
+                stack.extend(self.children.live(idx, x));
+            } else {
+                out[xylem_core::age_bucket(today, idx.mtime(x))] += idx.alloc(x);
+            }
+        }
+        out
     }
 
     /// The rules this scan was classified with (for notes and labels).
@@ -487,6 +516,7 @@ impl Scanned {
             note,
             action: self.rules.info.get(r as usize).and_then(|i| i.action),
             deletable: self.cls.protection(&self.index, &self.rules, id).is_none(),
+            mtime: self.index.mtime(id),
         }
     }
 
@@ -818,7 +848,7 @@ impl Scanned {
         let mut v: Vec<(u64, u32)> = heap.into_iter().map(|Reverse(x)| x).collect();
         v.sort_unstable_by_key(|&(a, id)| (Reverse(a), id));
         v.into_iter()
-            .map(|(a, id)| FileRow { id, name: idx.name(id).to_owned(), path: idx.path(id), on_disk: a, cat: self.cls.cat[id as usize] })
+            .map(|(a, id)| FileRow { id, name: idx.name(id).to_owned(), path: idx.path(id), on_disk: a, cat: self.cls.cat[id as usize], mtime: idx.mtime(id) })
             .collect()
     }
 
@@ -1220,6 +1250,23 @@ mod tests {
         assert!(s.markable("cat:3").is_empty() && s.markable("bogus").is_empty());
         // No program uses node_modules: nothing to warn about.
         assert!(s.prepare_delete(nm).unwrap().warnings.apps_running.is_empty());
+    }
+
+    /// The folder walk records real last-modified days: a file written now
+    /// is from today, and its folders show it as their newest.
+    #[test]
+    fn walk_records_real_dates() {
+        let dir = std::env::temp_dir().join(format!("xylem-dates-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub").join("new.txt"), b"x").unwrap();
+        let s = scan(&dir.display().to_string()).unwrap();
+        let today = xylem_core::today_days();
+        let f = s.find_rel("sub\\new.txt").unwrap();
+        for id in [f, s.find_rel("sub").unwrap(), 0] {
+            assert!(today.abs_diff(s.index.mtime(id)) <= 1, "node {id}: {} vs today {today}", s.index.mtime(id));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

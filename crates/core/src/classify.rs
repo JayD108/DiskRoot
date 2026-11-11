@@ -943,6 +943,7 @@ impl CatModel<'_> {
                 depth,
             );
             n.flags = self.idx.flags(a);
+            n.mtime = self.idx.mtime(a);
             (n.cat, n.own_cat, n.sub, n.rule) = (cat, cat, s, self.cls.rule[a as usize]);
             n.hint = self.idx.path(a);
             out.push(n);

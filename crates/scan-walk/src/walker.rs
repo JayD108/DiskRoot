@@ -32,6 +32,7 @@ const BUF_BYTES: usize = 64 * 1024;
 
 // Byte offsets inside FILE_FULL_DIR_INFORMATION (x64 and x86 alike).
 const OFF_NEXT: usize = 0;
+const OFF_LAST_WRITE: usize = 24;
 const OFF_END_OF_FILE: usize = 40;
 const OFF_ALLOCATION: usize = 48;
 const OFF_ATTRIBUTES: usize = 56;
@@ -135,6 +136,7 @@ struct Meta {
     size: u64,
     alloc: u64,
     flags: u8,
+    mtime: u16,
 }
 
 #[derive(Default)]
@@ -201,7 +203,8 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> io::Result<Scan> {
             let mut pos = 0;
             for m in &listing.metas {
                 let end = pos + m.name_len as usize;
-                index.push(listing.node, &listing.names[pos..end], m.size, m.alloc, m.flags);
+                let id = index.push(listing.node, &listing.names[pos..end], m.size, m.alloc, m.flags);
+                index.set_mtime(id, m.mtime);
                 pos = end;
                 if m.flags & flags::DIR != 0 {
                     stats.dirs += 1;
@@ -408,7 +411,8 @@ fn parse_entries(bytes: &[u8], units: &mut Vec<u16>, out: &mut Listing) -> bool 
             if is_dir && f & flags::LINK == 0 {
                 out.subdirs.push((out.metas.len() as u32, units.clone()));
             }
-            out.metas.push(Meta { name_len, size, alloc, flags: f });
+            let mtime = xylem_core::filetime_days(rd_u64(e, OFF_LAST_WRITE));
+            out.metas.push(Meta { name_len, size, alloc, flags: f, mtime });
         }
 
         if next == 0 {

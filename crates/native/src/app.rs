@@ -46,6 +46,8 @@ struct Row {
     /// "+ N more" placeholder rows.
     more: usize,
     tag: &'static str,
+    /// Last-modified day (folders: newest inside); 0 = unknown / a group.
+    mtime: u16,
 }
 
 enum JobKind {
@@ -173,6 +175,8 @@ struct MapState {
     kids: Vec<Vec<usize>>,
     cached: Option<(Rect, Kind, MapLayout)>,
     up: Option<Key_>,
+    /// Bytes per age bucket under the map root (age view, folder roots).
+    ages: Option<[u64; xylem_session::AGE_UNKNOWN + 1]>,
 }
 
 pub struct XylemApp {
@@ -545,6 +549,7 @@ impl XylemApp {
                         dir: true,
                         more: 0,
                         tag: "",
+                        mtime: s.mtime(*n),
                     });
                     self.push_node_children(s, *n, it.on_disk, 1, &mut out);
                 }
@@ -565,6 +570,7 @@ impl XylemApp {
                     dir: true,
                     more: 0,
                     tag: "",
+                    mtime: 0,
                 });
                 self.push_cat_children(s, "", bytes, 1, &mut out);
             }
@@ -596,6 +602,7 @@ impl XylemApp {
                 dir: it.dir,
                 more: 0,
                 tag: if it.link { "link" } else if it.cloud { "cloud" } else { "" },
+                mtime: s.mtime(it.id),
             });
             if it.dir {
                 self.push_node_children(s, it.id, it.on_disk, depth + 1, out);
@@ -615,6 +622,7 @@ impl XylemApp {
                 dir: false,
                 more: list.total - list.items.len(),
                 tag: "",
+                mtime: 0,
             });
         }
     }
@@ -640,6 +648,7 @@ impl XylemApp {
                         dir: true,
                         more: 0,
                         tag: "",
+                        mtime: 0,
                     });
                     self.push_cat_children(s, &r.key, r.bytes, depth + 1, out);
                 }
@@ -658,6 +667,7 @@ impl XylemApp {
                         dir,
                         more: 0,
                         tag: "",
+                        mtime: s.mtime(n),
                     });
                     if dir {
                         let total = s.item_of(n).map(|i| i.on_disk).unwrap_or(r.bytes);
@@ -750,7 +760,11 @@ impl XylemApp {
             },
         };
         let kids = map::children(&nodes);
-        self.map = Some(MapState { root, nodes, kids, cached: None, up });
+        let ages = match (&root, self.settings.color_by_age) {
+            (MapRoot::Node(n), true) => Some(s.age_breakdown(*n, xylem_session::today_days())),
+            _ => None,
+        };
+        self.map = Some(MapState { root, nodes, kids, cached: None, up, ages });
     }
 
     /// Index of a view node matching a tree key.
@@ -842,6 +856,15 @@ impl XylemApp {
                 let mut changed = false;
                 changed |= ui.radio_value(&mut self.settings.treemap, false, "Sunburst map").clicked();
                 changed |= ui.radio_value(&mut self.settings.treemap, true, "Treemap").clicked();
+                ui.separator();
+                let age = self.settings.color_by_age;
+                ui.radio_value(&mut self.settings.color_by_age, false, "Colour by category");
+                ui.radio_value(&mut self.settings.color_by_age, true, "Colour by age (last modified)");
+                if age != self.settings.color_by_age {
+                    self.settings.save();
+                    self.map = None;
+                    self.rows = None;
+                }
                 ui.separator();
                 let before = self.settings.by_category;
                 ui.radio_value(&mut self.settings.by_category, false, "Group by location");
@@ -1153,6 +1176,13 @@ impl XylemApp {
             }
 
             let rows = self.rows.take().unwrap_or_default();
+            let today = self.settings.color_by_age.then(xylem_session::today_days);
+            let row_color = |r: &Row| match (today, &r.key) {
+                (Some(d), Key_::Node(_)) => theme::age_color(xylem_session::age_bucket(d, r.mtime)),
+                (Some(_), _) => t.faint,
+                (None, _) if r.cat == u8::MAX => t.faint,
+                (None, _) => theme::cat_color(r.cat),
+            };
             let sel_idx = self.selected.as_ref().and_then(|k| rows.iter().position(|r| &r.key == k));
             let mut clicked: Option<(usize, bool)> = None; // (row, on twisty)
             let mut toggled: Option<usize> = None;
@@ -1201,8 +1231,8 @@ impl XylemApp {
                     }
                     let mut x = x0 + 14.0;
                     if r.more == 0 {
-                        // Category swatch
-                        let col = if r.cat == u8::MAX { t.faint } else { theme::cat_color(r.cat) };
+                        // Category (or age) swatch
+                        let col = row_color(r);
                         p.rect_filled(Rect::from_center_size(pos2(x + 4.5, y), vec2(9.0, 9.0)), CornerRadius::same(2), col);
                         x += 15.0;
                         // Folder / file glyph
@@ -1230,7 +1260,7 @@ impl XylemApp {
                         p.rect_filled(track, CornerRadius::same(2), t.head);
                         p.rect_stroke(track, CornerRadius::same(2), Stroke::new(1.0, t.line), StrokeKind::Inside);
                         let frac = if r.parent_bytes > 0 { r.bytes as f32 / r.parent_bytes as f32 } else { 0.0 };
-                        let col = if r.cat == u8::MAX { t.faint } else { theme::cat_color(r.cat) };
+                        let col = row_color(r);
                         p.rect_filled(
                             Rect::from_min_size(track.min, vec2(track.width() * frac.clamp(0.0, 1.0), 8.0)),
                             CornerRadius::same(2),
@@ -1614,6 +1644,7 @@ impl XylemApp {
                 center_title: &m.nodes[0].name,
                 center_value: &value,
                 can_go_up: m.up.is_some(),
+                today: self.settings.color_by_age.then(xylem_session::today_days),
             };
             map::paint(&ui.painter_at(map_rect), layout, &pc);
 
@@ -1645,6 +1676,10 @@ impl XylemApp {
                             ui.label(RichText::new(format!("{} items too small to draw", fmt_count(u64::from(n.merged)))).color(t.muted));
                         } else if !label.is_empty() {
                             ui.label(RichText::new(label).color(t.muted));
+                        }
+                        if n.mtime > 0 {
+                            let what = if n.dir { "Newest inside" } else { "Modified" };
+                            ui.label(RichText::new(format!("{what}: {}", xylem_session::age_text(xylem_session::today_days(), n.mtime))).color(t.muted));
                         }
                         if !n.hint.is_empty() {
                             ui.label(RichText::new(&n.hint).color(t.faint).size(11.5));
@@ -1683,7 +1718,7 @@ impl XylemApp {
                     if resp.hovered() {
                         lp.rect_filled(r, CornerRadius::same(3), t.hover);
                     }
-                    lp.rect_filled(Rect::from_center_size(pos2(cx + 6.0, cy), vec2(10.0, 10.0)), CornerRadius::same(2), theme::cat_color(*cat));
+                    lp.rect_filled(Rect::from_center_size(pos2(cx + 6.0, cy), vec2(10.0, 10.0)), CornerRadius::same(2), theme::swatch(*cat));
                     lp.text(pos2(cx + 17.0, cy), Align2::LEFT_CENTER, name, theme::regular(12.0), t.text);
                     lp.text(
                         pos2(cx + col_w - 12.0, cy),
@@ -1698,7 +1733,8 @@ impl XylemApp {
                 }
                 ui.allocate_space(vec2(full, legend_h - 4.0));
                 if let Some(k) = clicked_leg
-                    && let Key_::Cat(key) = &k {
+                    && let Key_::Cat(key) = &k
+                    && !key.starts_with("age:") {
                         if !self.settings.by_category {
                             self.settings.by_category = true;
                             self.regroup();
@@ -1715,6 +1751,16 @@ impl XylemApp {
         let (Some(s), Some(m)) = (&self.scanned, &self.map) else { return Vec::new() };
         let cats = xylem_session::categories();
         let mut out = Vec::new();
+        if self.settings.color_by_age {
+            if let Some(ages) = &m.ages {
+                let total: u64 = ages.iter().sum();
+                for (b, &v) in ages.iter().enumerate().filter(|x| *x.1 > 0) {
+                    let name = xylem_session::AGE_BUCKETS.get(b).map_or("Date unknown", |x| x.1);
+                    out.push((Key_::Cat(format!("age:{b}")), name.to_owned(), v, total, 100 + b as u8));
+                }
+            }
+            return out;
+        }
         match &m.root {
             MapRoot::Node(n) => {
                 let b = s.breakdown(*n);
@@ -1815,6 +1861,12 @@ impl XylemApp {
                                     ui.label(size);
                                 }
                                 ui.end_row();
+                                let mt = s.mtime(*n);
+                                if mt > 0 {
+                                    key(ui, if info.dir { "Newest inside" } else { "Modified" });
+                                    ui.label(format!("{} · {}", xylem_session::date_text(mt), xylem_session::age_text(xylem_session::today_days(), mt)));
+                                    ui.end_row();
+                                }
                                 key(ui, "Category");
                                 ui.horizontal(|ui| {
                                     let (r, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
@@ -2231,7 +2283,7 @@ impl XylemApp {
                                     let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
                                     ui.painter().rect_filled(dot, CornerRadius::same(2), theme::cat_color(f.cat));
                                     let r = ui.add(egui::Label::new(visible(&f.name)).truncate().sense(Sense::click()));
-                                    if r.on_hover_text(format!("{}\nClick to show it in the tree", visible(&f.path))).clicked() {
+                                    if r.on_hover_text(format!("{}\nModified {}\nClick to show it in the tree", visible(&f.path), xylem_session::age_text(xylem_session::today_days(), f.mtime))).clicked() {
                                         jump_node = Some(f.id);
                                     }
                                 });
@@ -2300,7 +2352,8 @@ impl XylemApp {
                                 ui.add_sized(vec2(70.0, 18.0), egui::Label::new(RichText::new(fmt_bytes(l.on_disk)).color(t.muted)));
                                 ui.allocate_ui_with_layout(vec2(160.0, 18.0), Layout::left_to_right(Align::Center), |ui| {
                                     ui.set_min_width(160.0);
-                                    ui.add(egui::Label::new(RichText::new(&l.kind).color(if l.deletable { t.text } else { theme::WARN })).truncate());
+                                    let kind = if l.mtime > 0 { format!("{} · {}", l.kind, xylem_session::age_text(xylem_session::today_days(), l.mtime)) } else { l.kind.clone() };
+                                    ui.add(egui::Label::new(RichText::new(kind).color(if l.deletable { t.text } else { theme::WARN })).truncate());
                                 });
                                 let r = ui.add(egui::Label::new(visible(&l.name)).truncate().sense(Sense::click()));
                                 if r.on_hover_text(format!("{}\n\n{}\n\nClick to show it in the tree", visible(&l.path), l.note)).clicked() {
@@ -2701,7 +2754,7 @@ impl eframe::App for XylemApp {
         }
         egui::Panel::bottom("details")
             .frame(Frame::new().fill(t.win).inner_margin(Margin { left: 6, right: 6, top: 0, bottom: 6 }))
-            .exact_size(158.0)
+            .exact_size(184.0)
             .show_separator_line(false)
             .show(ui, |ui| self.details_pane(ui));
         let w = ctx.content_rect().width();
