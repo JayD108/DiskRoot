@@ -1,8 +1,8 @@
 //! Parallel MFT scan.
 //!
 //! 1. Split the MFT into 4 MB read jobs.
-//! 2. N threads, each with its own volume handle (a single handle would
-//!    serialize the I/O), take jobs, read them and parse every record.
+//! 2. N threads share ONE overlapped volume handle (one handle per thread
+//!    cost ~0.35 s each), take jobs, read them and parse every record.
 //! 3. Fold extension records into their base records.
 //! 4. Link children to parents via the parent reference in $FILE_NAME and
 //!    walk breadth-first from the root (record 5) to fill the Index.
@@ -43,6 +43,18 @@ pub(crate) struct ChunkOut {
 pub fn scan_drive(letter: char, threads: usize) -> io::Result<Scan> {
     let start = Instant::now();
     let vol = Volume::open(letter)?;
+    scan_volume_from(&vol, letter, threads, start)
+}
+
+/// Like [`scan_drive`], on a volume opened earlier with [`Volume::open`].
+/// The elevated helper opens the volume first, then drops its rights
+/// (`xylem_session::lockdown`), and only then parses: the open handle keeps
+/// its read access, but a parser bug can no longer use admin rights.
+pub fn scan_volume(vol: &Volume, letter: char, threads: usize) -> io::Result<Scan> {
+    scan_volume_from(vol, letter, threads, Instant::now())
+}
+
+fn scan_volume_from(vol: &Volume, letter: char, threads: usize, start: Instant) -> io::Result<Scan> {
     let t_open = start.elapsed();
     let main_reader = vol.reader()?;
     let mut info = main_reader.boot_info()?;

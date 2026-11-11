@@ -17,6 +17,13 @@ const ATTR_FLAG_COMPRESSED: u16 = 0x0001;
 const ATTR_FLAG_SPARSE: u16 = 0x8000;
 /// NTFS protects every 512 bytes of a record, whatever the sector size.
 const FIXUP_STRIDE: usize = 512;
+/// On disk, this $STANDARD_INFORMATION bit means "the file has extended
+/// attributes" (FILE_ATTRIBUTE_EA). Windows reuses the same value for
+/// FILE_ATTRIBUTE_RECALL_ON_OPEN, a cloud bit that only folder listings
+/// report. Smart App Control puts EAs on most executables and many other
+/// files, so keeping this bit made ~450k ordinary files on the test laptop
+/// look "online-only". Cloud files are still caught by their reparse tag.
+const SI_HAS_EA: u32 = 0x0004_0000;
 /// The named stream that holds the real bytes of CompactOS (WOF) files.
 const WOF_STREAM: &str = "WofCompressedData";
 /// MFT references are 48-bit record number + 16-bit sequence number.
@@ -297,7 +304,7 @@ pub fn parse_record(rec_no: u32, rec: &mut [u8], names: &mut String) -> Option<P
         match a.typ {
             ATTR_STANDARD_INFORMATION => {
                 if let Some(x) = a.value().and_then(|v| u32_at(v, 32)) {
-                    p.attrs = x;
+                    p.attrs = x & !SI_HAS_EA;
                 }
             }
             ATTR_FILE_NAME => {
@@ -538,6 +545,19 @@ pub(crate) mod tests {
         assert_eq!((p.parent, p.parent_seq, p.base, p.sequence), (5, 5, 42, 7));
         assert_eq!((p.size, p.alloc, p.has_data, p.is_dir), (10_000, 16384, true, false));
         assert_eq!(p.attrs, 0x20);
+    }
+
+    /// Regression: the on-disk "has extended attributes" bit (Smart App
+    /// Control tags files with EAs) shares its value with the cloud bit
+    /// RECALL_ON_OPEN. It must not make a local file look online-only.
+    #[test]
+    fn extended_attributes_are_not_cloud() {
+        let mut r = record(&[std_info(0x20 | SI_HAS_EA), file_name(5, 5, 1, "cargo.exe")], RECORD_IN_USE, 0, 1);
+        let p = parse_record(50, &mut r, &mut String::new()).unwrap();
+        assert_eq!(p.attrs, 0x20);
+        assert_eq!(xylem_core::win::node_flags(p.attrs, p.reparse_tag) & xylem_core::flags::CLOUD, 0);
+        // A real OneDrive placeholder is still cloud (reparse tag).
+        assert_ne!(xylem_core::win::node_flags(0x20 | 0x0040_0000, 0x9000_601A) & xylem_core::flags::CLOUD, 0);
     }
 
     #[test]

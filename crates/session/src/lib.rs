@@ -10,6 +10,7 @@ pub mod dupes;
 pub mod elevate;
 pub mod helper;
 pub mod integrity;
+pub mod lockdown;
 pub mod recycle;
 pub mod remember;
 pub mod safety;
@@ -275,9 +276,14 @@ impl Scanned {
     pub fn new(mut index: Index, stats: ScanStats, mode: String) -> Self {
         let t = Instant::now();
         index.shrink_to_fit();
-        let children = Children::build(&index);
-        let cls = Classification::run(&index, &RULES);
-        let cats = CatStats::compute(&index, &cls, RULES.subs.len());
+        // The child lists don't depend on classification, so build them on
+        // a second thread (measured on C:, 1.84M items: 213 -> 168 ms).
+        let (children, cls, cats) = std::thread::scope(|s| {
+            let children = s.spawn(|| Children::build(&index));
+            let cls = Classification::run(&index, &RULES);
+            let cats = CatStats::compute(&index, &cls, RULES.subs.len());
+            (children.join().expect("Children::build doesn't panic"), cls, cats)
+        });
         let classify_ms = t.elapsed().as_secs_f64() * 1000.0;
         Self { index: Arc::new(index), children, cls, cats, stats, mode, classify_ms, removed_dirs: 0 }
     }
@@ -698,10 +704,6 @@ pub struct PendingDelete {
 }
 
 impl PendingDelete {
-    /// Step 2: re-check the item on disk, move it to the Recycle Bin, and
-    /// write the result to the local deletion log. Blocking (Windows may
-    /// show its own progress or "too big to recycle" prompt): use a worker
-    /// thread.
     /// Records the on-disk identity of the item and of every folder above
     /// it, up to and including the scan root. Call it when the confirmation
     /// dialog opens; `recycle` then refuses if anything was swapped in the
@@ -714,16 +716,25 @@ impl PendingDelete {
         Ok(())
     }
 
+    /// Step 2: re-check the item on disk, move it to the Recycle Bin, and
+    /// write the result to the local deletion log. Blocking (Windows may
+    /// show its own progress or "too big to recycle" prompt): use a worker
+    /// thread.
     pub fn recycle(&self) -> Result<DeleteOut, String> {
         let identity = match &self.identity {
             Some(chain) => Ok(chain.clone()),
             None => safety::identity_chain(&self.path, &self.scan_root),
         };
-        let result = identity
-            .and_then(|chain| safety::check_identity(&chain))
-            .and_then(|()| safety::hard_lock(&self.path).map_or(Ok(()), Err))
-            .and_then(|()| safety::verify_before_recycle(&self.path, &self.scan_root, self.dir, self.was_link))
-            .and_then(|()| recycle::to_recycle_bin(&self.path));
+        // The folders above the item stay pinned (can't be renamed or
+        // swapped) from the identity check until the move is done.
+        let result = identity.and_then(|chain| safety::pin_identity(&chain)).and_then(|pinned| {
+            let r = safety::hard_lock(&self.path)
+                .map_or(Ok(()), Err)
+                .and_then(|()| safety::verify_before_recycle(&self.path, &self.scan_root, self.dir, self.was_link))
+                .and_then(|()| recycle::to_recycle_bin(&self.path));
+            drop(pinned);
+            r
+        });
         let cancelled = matches!(result, Ok(recycle::Outcome::Cancelled));
         safety::append_log(&safety::LogEntry {
             time: safety::utc_now(),
@@ -890,6 +901,27 @@ mod tests {
             println!("{name:<16} {:>7.1} MB  {:>5.1} B/node", *b as f64 / 1048576.0, *b as f64 / n as f64);
         }
         println!("{:<16} {:>7.1} MB  {:>5.1} B/node  ({n} nodes)", "TOTAL", total as f64 / 1048576.0, total as f64 / n as f64);
+    }
+
+    /// The real Fast-scan path, end to end: this (non-elevated) process
+    /// creates the pipe and starts the helper through the UAC prompt; the
+    /// helper opens C:, locks itself down (exit code 5 if it can't) and
+    /// streams the index back. Also checks the cloud-flag fix on a real
+    /// drive: only a small share of items may look online-only.
+    /// `cargo build --bin xylem` first, then
+    /// `XYLEM_HELPER=<repo>\target\debug\xylem.exe cargo test -p xylem-session real_fast_scan -- --ignored --nocapture`
+    #[test]
+    #[ignore = "starts the elevated helper (UAC prompt) and scans all of C:"]
+    fn real_fast_scan_through_locked_down_helper() {
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let t = Instant::now();
+        let s = scan_admin("C:", &cancel).unwrap();
+        let n = s.index.len();
+        let cloud = (0..n as u32).filter(|&i| s.index.flags(i) & xylem_core::flags::CLOUD != 0).count();
+        println!("fast scan: {n} items, {cloud} cloud, mode {:?}, {:.2} s", s.mode, t.elapsed().as_secs_f64());
+        assert!(n > 100_000, "a whole system drive has far more items");
+        assert!(s.mode.contains("MFT"), "{}", s.mode);
+        assert!(cloud * 20 < n, "{cloud} of {n} items flagged cloud: the EA bit is leaking again");
     }
 
     /// DEL-06/07 on real files: decoys Windows would silently rewrite

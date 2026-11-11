@@ -142,25 +142,42 @@ unsafe extern "system" {
     fn GetFileInformationByHandle(h: *mut std::ffi::c_void, info: *mut ByHandleFileInformation) -> i32;
 }
 
-/// Opens the item itself (never what a link points to) with no data access.
-pub fn file_id(path: &Path) -> std::io::Result<FileId> {
+const FILE_READ_ATTRIBUTES: u32 = 0x80;
+/// Listing access. Needed on pinned folders: Windows only enforces share
+/// modes for handles with data or DELETE access, so a metadata-only handle
+/// would NOT stop a rename (measured in R&D: the parent could still be
+/// renamed while "pinned").
+const FILE_LIST_DIRECTORY: u32 = 0x1;
+const SHARE_ALL: u32 = 0x7;
+/// Read + write sharing, but no FILE_SHARE_DELETE: while we hold the handle
+/// nobody can rename or delete the folder.
+const SHARE_NO_DELETE: u32 = 0x3;
+
+/// Opens the item itself (never what a link points to).
+fn open_item(path: &Path, access: u32, share: u32) -> std::io::Result<std::fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
-    use std::os::windows::io::AsRawHandle;
-    const FILE_READ_ATTRIBUTES: u32 = 0x80;
-    const SHARE_ALL: u32 = 0x7;
     const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    let f = OpenOptions::new()
-        .access_mode(FILE_READ_ATTRIBUTES)
-        .share_mode(SHARE_ALL)
+    OpenOptions::new()
+        .access_mode(access)
+        .share_mode(share)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)?;
+        .open(path)
+}
+
+fn id_of(f: &std::fs::File) -> std::io::Result<FileId> {
+    use std::os::windows::io::AsRawHandle;
     let mut info = ByHandleFileInformation::default();
     // SAFETY: valid open handle and a correctly sized output struct.
     if unsafe { GetFileInformationByHandle(f.as_raw_handle(), &mut info) } == 0 {
         return Err(std::io::Error::last_os_error());
     }
     Ok(FileId { volume: info.volume_serial, index: u64::from(info.index_high) << 32 | u64::from(info.index_low) })
+}
+
+/// Opens the item itself (never what a link points to) with no data access.
+pub fn file_id(path: &Path) -> std::io::Result<FileId> {
+    id_of(&open_item(path, FILE_READ_ATTRIBUTES, SHARE_ALL)?)
 }
 
 /// The identities of `path` and of every folder above it, up to and
@@ -270,19 +287,53 @@ pub fn visible(name: &str) -> String {
         .collect()
 }
 
-pub fn check_identity(chain: &[(PathBuf, FileId)]) -> Result<(), String> {
-    for (p, id) in chain {
-        match file_id(p) {
-            Ok(now) if now == *id => {}
-            _ => {
-                return Err(format!(
-                    "{} was replaced or moved after you confirmed, so Xylem won't delete anything. Rescan and try again.",
-                    p.display()
-                ));
+/// Folders held open by [`pin_identity`]; dropping it releases them.
+pub struct Pinned {
+    _held: Vec<std::fs::File>,
+}
+
+/// Re-checks the identity chain taken at confirm time **on open handles**,
+/// and keeps every folder above the item open without FILE_SHARE_DELETE.
+/// While the returned guard lives, none of those folders can be renamed,
+/// deleted or replaced (e.g. by a junction), so the path the Recycle Bin
+/// call resolves is exactly the one that was checked: no gap between check
+/// and use. `chain[0]` (the item) is checked but not held, because the
+/// shell has to move it. Measured: ~0.1 ms for a 4-level chain.
+pub fn pin_identity(chain: &[(PathBuf, FileId)]) -> Result<Pinned, String> {
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    let replaced = |p: &Path| {
+        format!("{} was replaced or moved after you confirmed, so Xylem won't delete anything. Rescan and try again.", p.display())
+    };
+    let mut held = Vec::with_capacity(chain.len());
+    // Top down: once a folder is pinned, nothing below it can be re-pointed
+    // by renaming it.
+    for (i, (p, want)) in chain.iter().enumerate().rev() {
+        let f = if i == 0 {
+            open_item(p, FILE_READ_ATTRIBUTES, SHARE_ALL)
+        } else {
+            match open_item(p, FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY, SHARE_NO_DELETE) {
+                // A folder the user may traverse but not list (rare): check
+                // it like before, without holding it.
+                Err(e) if e.raw_os_error() == Some(ERROR_ACCESS_DENIED) => open_item(p, FILE_READ_ATTRIBUTES, SHARE_ALL),
+                other => other,
             }
+        };
+        let f = f.map_err(|e| {
+            if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION) {
+                format!("{} is being renamed or deleted right now, so Xylem won't delete anything. Try again.", p.display())
+            } else {
+                replaced(p)
+            }
+        })?;
+        if id_of(&f).ok() != Some(*want) {
+            return Err(replaced(p));
+        }
+        if i > 0 {
+            held.push(f);
         }
     }
-    Ok(())
+    Ok(Pinned { _held: held })
 }
 
 /// One line of the deletion log.
@@ -387,6 +438,33 @@ mod tests {
         assert!(hard_lock(&std::env::temp_dir()).is_none(), "temp is not locked");
         assert_eq!(visible("invoice\u{202E}fdp.exe"), "invoice<U+202E>fdp.exe");
         assert_eq!(visible("a\tb"), "a<U+0009>b");
+    }
+
+    /// The folders above an item stay locked against rename while pinned,
+    /// the item itself stays movable, and a swapped folder is refused.
+    #[test]
+    fn pinned_chain_blocks_swaps() {
+        let root = std::env::temp_dir().join(format!("xylem-pin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a").join("b")).unwrap();
+        let item = root.join("a").join("b").join("f.txt");
+        std::fs::write(&item, b"x").unwrap();
+        let chain = identity_chain(&item, &root).unwrap();
+
+        let pinned = pin_identity(&chain).unwrap();
+        assert!(std::fs::rename(root.join("a"), root.join("a2")).is_err(), "grandparent locked");
+        assert!(std::fs::rename(root.join("a").join("b"), root.join("a").join("b2")).is_err(), "parent locked");
+        std::fs::rename(&item, root.join("a").join("b").join("g.txt")).unwrap();
+        std::fs::rename(root.join("a").join("b").join("g.txt"), &item).unwrap();
+        drop(pinned);
+
+        // After release: swap folder b for a new folder of the same name.
+        std::fs::rename(root.join("a").join("b"), root.join("a").join("b-old")).unwrap();
+        std::fs::create_dir(root.join("a").join("b")).unwrap();
+        std::fs::write(&item, b"other").unwrap();
+        let err = pin_identity(&chain).err().unwrap();
+        assert!(err.contains("replaced or moved"), "{err}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -10,18 +10,24 @@
 //! - opens the drive read-only;
 //! - **writes nothing to disk** (no temp file; see `elevate.rs` for why);
 //! - connects to the pipe with `SECURITY_IDENTIFICATION`, so even a fake
-//!   pipe server could never act with the helper's admin rights.
+//!   pipe server could never act with the helper's admin rights;
+//! - opens the drive and the pipe FIRST and then **locks itself down**
+//!   (`lockdown.rs`: no privileges, Low integrity, no child processes)
+//!   before it reads or parses a single MFT record. The parser handles data
+//!   a crafted drive could control; it never runs with admin power.
 
 use std::io::{BufWriter, Write};
 
 use xylem_core::{Index, ScanStats};
-use xylem_scan_mft::scan_drive;
+use xylem_scan_mft::{Volume, scan_volume};
 
 /// Exit codes of the helper process.
 pub const OK: i32 = 0;
 pub const BAD_ARGS: i32 = 2;
 pub const SCAN_FAILED: i32 = 3;
 pub const WRITE_FAILED: i32 = 4;
+/// The helper couldn't drop its admin rights, so it refused to parse.
+pub const LOCKDOWN_FAILED: i32 = 5;
 
 /// If the process was started in helper mode, runs the helper and returns
 /// its exit code; otherwise returns None and the app starts normally.
@@ -41,11 +47,23 @@ fn run(drive: &str, pipe: &str) -> i32 {
     if check_pipe_name(pipe).is_err() {
         return BAD_ARGS;
     }
-    let scan = match scan_drive(letter, xylem_scan_walk::default_threads()) {
+    // 1. Everything that needs admin rights or a fresh open, first.
+    let Ok(vol) = Volume::open(letter) else { return SCAN_FAILED };
+    let Ok(out) = open_pipe(pipe) else { return WRITE_FAILED };
+    // 2. Give up the power before touching drive data.
+    let report = crate::lockdown::lockdown();
+    if std::env::var_os("XYLEM_TRACE").is_some() {
+        eprintln!("[helper] lockdown: {report:?}");
+    }
+    if !report.essential_ok() {
+        return LOCKDOWN_FAILED;
+    }
+    // 3. Read + parse with the open handles only.
+    let scan = match scan_volume(&vol, letter, xylem_scan_walk::default_threads()) {
         Ok(s) => s,
         Err(_) => return SCAN_FAILED,
     };
-    match send_to_pipe(pipe, &scan.index, &scan.stats, "MFT (direct read)") {
+    match write_index(out, &scan.index, &scan.stats, "MFT (direct read)") {
         Ok(()) => OK,
         Err(_) => WRITE_FAILED,
     }
@@ -79,10 +97,21 @@ unsafe extern "system" {
     ) -> *mut std::ffi::c_void;
 }
 
-/// Writes the index into the app's pipe. Opened with SECURITY_SQOS_PRESENT |
+/// Writes the index into the app's pipe.
+pub fn send_to_pipe(pipe: &str, index: &Index, stats: &ScanStats, mode: &str) -> std::io::Result<()> {
+    write_index(open_pipe(pipe)?, index, stats, mode)
+}
+
+fn write_index(f: std::fs::File, index: &Index, stats: &ScanStats, mode: &str) -> std::io::Result<()> {
+    let mut out = BufWriter::with_capacity(1 << 20, f);
+    index.save(stats, mode, &mut out)?;
+    out.flush()
+}
+
+/// Connects to the app's pipe. Opened with SECURITY_SQOS_PRESENT |
 /// SECURITY_IDENTIFICATION: the server can see who connected, but can't
 /// impersonate (act as) this admin process.
-pub fn send_to_pipe(pipe: &str, index: &Index, stats: &ScanStats, mode: &str) -> std::io::Result<()> {
+fn open_pipe(pipe: &str) -> std::io::Result<std::fs::File> {
     use std::os::windows::io::FromRawHandle;
     const GENERIC_WRITE: u32 = 0x4000_0000;
     const OPEN_EXISTING: u32 = 3;
@@ -106,10 +135,7 @@ pub fn send_to_pipe(pipe: &str, index: &Index, stats: &ScanStats, mode: &str) ->
         return Err(std::io::Error::last_os_error());
     }
     // SAFETY: we own the handle; File closes it.
-    let f = unsafe { std::fs::File::from_raw_handle(h) };
-    let mut out = BufWriter::with_capacity(1 << 20, f);
-    index.save(stats, mode, &mut out)?;
-    out.flush()
+    Ok(unsafe { std::fs::File::from_raw_handle(h) })
 }
 
 #[cfg(test)]

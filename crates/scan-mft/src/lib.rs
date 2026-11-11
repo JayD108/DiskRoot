@@ -19,7 +19,8 @@ use std::io;
 use std::path::Path;
 
 use xylem_core::Scan;
-pub use scan::scan_drive;
+pub use scan::{scan_drive, scan_volume};
+pub use volume::Volume;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
