@@ -9,7 +9,7 @@
 - **Power tools (opt-in):** export marked items as a PowerShell cleanup script (dry run by default), NTFS compression with compact.exe, guided WSL/Docker virtual-disk compaction.
 - **Finding space:** largest files with search, file types, duplicate finder, hardlink names, CSV export, Explorer right-click.
 - **Safer:** the elevated helper drops its admin rights before reading drive data; deletes keep the folder chain locked until the Recycle Bin move ends; a running app that uses a cache is pointed out before deleting it.
-- **Lighter:** scan data for 1.9M items 204 → 143 MB.
+- **Lighter:** scan data for 1.9M items 204 → 154 MB (including the new last-modified dates).
 
 ## What it does
 - Scans a whole NTFS drive in about 1–2 seconds by reading its Master File Table, read-only, after the Windows admin prompt. Without admin it walks folders (no prompt).

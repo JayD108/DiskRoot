@@ -34,7 +34,7 @@ Most tools only answer the first one, and the friendly ones are slow on big driv
 - **See it happen:** colour by age (what hasn't changed in years), live updates while Xylem is open, and alerts when a folder grows past a limit.
 - **Power tools, all opt-in:** export a cleanup plan as a PowerShell script to review, compress folders with Windows' NTFS compression, and shrink WSL/Docker virtual disks with a guided, checked compaction.
 - **Careful deleting:** only to the Recycle Bin, only after you confirm. Windows and system folders are locked. You get warnings for OneDrive folders, Git repositories and very large deletes, and a history of everything you deleted. Mark several items (Ctrl+click) to remove them in one go. Hardlinked files are flagged, because deleting one name frees nothing.
-- **Private:** no network connections, no accounts, no telemetry. One small program (~6 MB).
+- **Private:** no network connections, no accounts, no telemetry. One small program (~8 MB).
 
 ![Dark theme, treemap grouped by category](docs/screenshots/xylem-category.png)
 
@@ -66,7 +66,7 @@ Every feature, explained with what happens underneath: [docs/FEATURES-AND-DEVELO
 
 ## Safety and privacy
 
-Xylem only reads your disk and never goes online. It doesn't open your files' contents, except when you start the duplicate finder, which compares files on your PC. Deleting is the only change it can make, and only after you confirm. The shield button in the app shows exactly what it does. Full details: [docs/SECURITY-AND-PRIVACY.md](docs/SECURITY-AND-PRIVACY.md). To report a problem privately, see [SECURITY.md](SECURITY.md).
+Scanning only reads your disk, and Xylem never goes online. It doesn't open your files' contents, except when you start the duplicate finder, which compares files on your PC. It changes files only when you confirm: moving them to the Recycle Bin, or the opt-in power tools (NTFS compression, virtual-disk compaction), which use Windows' own tools. The shield button in the app shows exactly what it does. Full details: [docs/SECURITY-AND-PRIVACY.md](docs/SECURITY-AND-PRIVACY.md). To report a problem privately, see [SECURITY.md](SECURITY.md).
 
 ## Code signing policy
 

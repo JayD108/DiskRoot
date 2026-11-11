@@ -4,7 +4,8 @@
 //! - `<key>.idx`: the full index of the latest scan (instant reopen). Same
 //!   format as the admin helper's file, loaded with the same length-checked,
 //!   fuzz-tested loader.
-//! - `<key>.snap`: folder sizes of the latest scan.
+//! - `<key>.snap`: folder sizes of the latest scan, and how it was made
+//!   (Fast scan or folder walk: they count some things differently).
 //! - `<key>.prev.snap`: folder sizes of the scan before it.
 //!
 //! These files hold file and folder **names and sizes**, nothing else, and
@@ -22,7 +23,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 use xylem_core::{Index, NO_PARENT, ScanStats, flags};
 
-const SNAP_MAGIC: &[u8; 8] = b"XYLMSNP1";
+const SNAP_MAGIC: &[u8; 8] = b"XYLMSNP2";
+/// Snapshots saved by Xylem 0.2.0 and older (no scan method stored).
+const SNAP_MAGIC_V1: &[u8; 8] = b"XYLMSNP1";
 /// Keep remembered scans for at most this many roots (oldest dropped).
 const MAX_ROOTS: usize = 8;
 /// Sanity limit for snapshot files (C: has ~300k folders).
@@ -50,7 +53,21 @@ fn now_secs() -> u64 {
 
 /// "just now", "5 min ago", "3 h ago", "2 days ago".
 pub fn age_text(then_secs: u64) -> String {
-    let s = now_secs().saturating_sub(then_secs);
+    span_text(now_secs().saturating_sub(then_secs))
+}
+
+/// How far apart two scans were: "under a minute", "3 min", "2 h", "4 days".
+pub fn gap_text(secs: u64) -> String {
+    match secs {
+        0..=59 => "under a minute".into(),
+        60..=3599 => format!("{} min", secs / 60),
+        3600..=86_399 => format!("{} h", secs / 3600),
+        86_400..=172_799 => "1 day".into(),
+        _ => format!("{} days", secs / 86_400),
+    }
+}
+
+fn span_text(s: u64) -> String {
     match s {
         0..=59 => "just now".into(),
         60..=3599 => format!("{} min ago", s / 60),
@@ -70,6 +87,9 @@ pub fn age_text(then_secs: u64) -> String {
 pub struct Snapshot {
     pub time: u64,
     pub root: String,
+    /// How the scan was made, e.g. "MFT (direct read)" or "folder walk".
+    /// Empty for snapshots saved by Xylem 0.2.0 and older.
+    pub mode: String,
     pub dirs: Vec<SnapDir>,
 }
 
@@ -111,13 +131,14 @@ impl Snapshot {
             dirs.push(SnapDir { path, bytes: idx.alloc(id), files: idx.files(id) });
         }
         dirs.shrink_to_fit();
-        Self { time: now_secs(), root: idx.name(0).to_owned(), dirs }
+        Self { time: now_secs(), root: idx.name(0).to_owned(), mode: String::new(), dirs }
     }
 
     pub fn save(&self, w: &mut impl Write) -> io::Result<()> {
         w.write_all(SNAP_MAGIC)?;
         w.write_all(&self.time.to_le_bytes())?;
         write_str(w, &self.root)?;
+        write_str(w, &self.mode)?;
         w.write_all(&(self.dirs.len() as u32).to_le_bytes())?;
         for d in &self.dirs {
             w.write_all(&d.bytes.to_le_bytes())?;
@@ -133,11 +154,13 @@ impl Snapshot {
         let bad = |m: &str| io::Error::new(io::ErrorKind::InvalidData, format!("snapshot: {m}"));
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
-        if &magic != SNAP_MAGIC {
+        let v2 = &magic == SNAP_MAGIC;
+        if !v2 && &magic != SNAP_MAGIC_V1 {
             return Err(bad("not a Xylem snapshot"));
         }
         let time = read_u64(r)?;
         let root = read_str(r)?;
+        let mode = if v2 { read_str(r)? } else { String::new() };
         let n = read_u32(r)?;
         if n > MAX_SNAP_DIRS {
             return Err(bad("too many folders"));
@@ -153,7 +176,7 @@ impl Snapshot {
         if r.read(&mut extra)? != 0 {
             return Err(bad("trailing data"));
         }
-        Ok(Self { time, root, dirs })
+        Ok(Self { time, root, mode, dirs })
     }
 }
 
@@ -207,6 +230,39 @@ pub struct Changes {
     pub after_total: u64,
     /// The folders where the change actually happened, biggest first.
     pub items: Vec<Change>,
+    /// How each scan was made (empty = unknown, from Xylem 0.2.0 or older).
+    pub before_mode: String,
+    pub after_mode: String,
+}
+
+/// "mft" or "walk" for a scan-mode text, `None` if unknown.
+fn method(mode: &str) -> Option<&'static str> {
+    if mode.contains("MFT") {
+        Some("mft")
+    } else if mode.starts_with("folder walk") {
+        Some("walk")
+    } else {
+        None
+    }
+}
+
+impl Changes {
+    /// True when one scan was a Fast scan and the other a folder walk. They
+    /// count some things differently (hardlinks; folders only admins can
+    /// read; System Volume Information), so part of the difference comes
+    /// from the method, not from files that changed.
+    pub fn mixed_methods(&self) -> bool {
+        matches!((method(&self.before_mode), method(&self.after_mode)), (Some(a), Some(b)) if a != b)
+    }
+
+    /// "Fast scan" / "folder walk" for the user, if known.
+    pub fn method_name(mode: &str) -> &'static str {
+        match method(mode) {
+            Some("mft") => "Fast scan",
+            Some(_) => "folder walk",
+            None => "scan",
+        }
+    }
 }
 
 /// FNV-1a over the lowercased path: a 64-bit fingerprint, so comparing
@@ -278,6 +334,8 @@ pub fn diff(prev: &Snapshot, cur: &Snapshot, limit: usize) -> Changes {
         before_total: before.get(&root_key).copied().unwrap_or(0),
         after_total: after.get(&root_key).copied().unwrap_or(0),
         items,
+        before_mode: prev.mode.clone(),
+        after_mode: cur.mode.clone(),
     }
 }
 
@@ -316,7 +374,7 @@ fn load_snap(path: &Path) -> Option<Snapshot> {
 fn snap_time(path: &Path) -> Option<u64> {
     let mut head = [0u8; 16];
     File::open(path).ok()?.read_exact(&mut head).ok()?;
-    (&head[..8] == SNAP_MAGIC).then(|| u64::from_le_bytes(head[8..].try_into().expect("8 bytes")))
+    (&head[..8] == SNAP_MAGIC || &head[..8] == SNAP_MAGIC_V1).then(|| u64::from_le_bytes(head[8..].try_into().expect("8 bytes")))
 }
 
 /// After a scan: save the index (instant reopen) and the folder snapshot,
@@ -326,14 +384,15 @@ pub fn remember(idx: &Arc<Index>, stats: &ScanStats, mode: &str) -> io::Result<O
     let root = idx.name(0).to_owned();
     let (idx_path, snap_path, prev_path) = paths(&root).ok_or_else(|| io::Error::other("no LOCALAPPDATA"))?;
     fs::create_dir_all(idx_path.parent().expect("cache dir"))?;
-    let snap = Snapshot::of(idx);
+    let mode = mode.replace(" via admin helper", "");
+    let mut snap = Snapshot::of(idx);
+    snap.mode.clone_from(&mode);
     let prev = load_snap(&snap_path).filter(|p| p.root.eq_ignore_ascii_case(&root));
     if prev.is_some() {
         let _ = fs::remove_file(&prev_path);
         fs::rename(&snap_path, &prev_path)?;
     }
     write_atomic(&snap_path, |w| snap.save(w))?;
-    let mode = mode.replace(" via admin helper", "");
     write_atomic(&idx_path, |w| idx.save(stats, &mode, w))?;
     prune();
     Ok(prev.map(|p| diff(&p, &snap, 50)))
@@ -501,6 +560,53 @@ mod tests {
             }
             let _ = Snapshot::load(&mut b.as_slice());
         }
+    }
+
+    #[test]
+    fn scan_method_is_kept_and_mixed_methods_are_flagged() {
+        const MB: u64 = 1 << 20;
+        let mut walk = Snapshot::of(&tree(&[("a\\x", 10 * MB)]));
+        walk.mode = "folder walk (not running as administrator)".into();
+        let mut fast = Snapshot::of(&tree(&[("a\\x", 20 * MB)]));
+        fast.mode = "MFT (direct read)".into();
+        // The mode survives a save/load round trip.
+        let mut buf = Vec::new();
+        fast.save(&mut buf).unwrap();
+        assert_eq!(Snapshot::load(&mut buf.as_slice()).unwrap().mode, "MFT (direct read)");
+        assert!(diff(&walk, &fast, 10).mixed_methods(), "walk then Fast scan");
+        assert!(diff(&fast, &walk, 10).mixed_methods(), "Fast scan then walk");
+        let mut walk2 = walk.clone();
+        walk2.mode = "folder walk".into();
+        assert!(!diff(&walk, &walk2, 10).mixed_methods(), "two walks (reason text differs)");
+        let mut old = walk.clone();
+        old.mode = String::new();
+        assert!(!diff(&old, &fast, 10).mixed_methods(), "unknown method: no warning");
+        assert_eq!(Changes::method_name("MFT (direct read)"), "Fast scan");
+        assert_eq!(Changes::method_name("folder walk"), "folder walk");
+    }
+
+    #[test]
+    fn snapshots_from_xylem_0_2_still_load() {
+        // Version 1 layout: magic, time, root, count, then (bytes, files, path) per folder.
+        let mut v1 = Vec::new();
+        v1.extend_from_slice(b"XYLMSNP1");
+        v1.extend_from_slice(&1234u64.to_le_bytes());
+        v1.extend_from_slice(&3u16.to_le_bytes());
+        v1.extend_from_slice(b"C:\\");
+        v1.extend_from_slice(&1u32.to_le_bytes());
+        v1.extend_from_slice(&42u64.to_le_bytes());
+        v1.extend_from_slice(&7u32.to_le_bytes());
+        v1.extend_from_slice(&0u16.to_le_bytes());
+        let s = Snapshot::load(&mut v1.as_slice()).unwrap();
+        assert_eq!((s.time, s.root.as_str(), s.mode.as_str(), s.dirs.len(), s.dirs[0].bytes), (1234, "C:\\", "", 1, 42));
+    }
+
+    #[test]
+    fn gap_text_reads_naturally() {
+        assert_eq!(gap_text(5), "under a minute");
+        assert_eq!(gap_text(180), "3 min");
+        assert_eq!(gap_text(7200), "2 h");
+        assert_eq!(gap_text(3 * 86_400), "3 days");
     }
 
     #[test]

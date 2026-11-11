@@ -2296,7 +2296,7 @@ impl XylemApp {
                     facts(ui, &t, &[
                         ("Reads", "File names and sizes. It doesn't read what's inside your files, except when you start View → Find duplicate files."),
                         ("Stays offline", "No network connections, no accounts, no telemetry."),
-                        ("Asks first", "Admin rights only for Fast scan, through the Windows prompt. The helper exits after the scan."),
+                        ("Asks first", "Admin rights only when you ask for them, always through the Windows prompt: Fast scan (the helper exits after the scan), and the optional DISM cleanup and virtual-disk compaction."),
                         ("Deletes carefully", "Only when you confirm, always to the Recycle Bin, re-checked on disk first. Windows and system folders are locked."),
                         ("Keeps a record", "Every delete is written to a log on this PC (File → Deletion history)."),
                         ("Remembers scans", "Your last scans are saved on this PC (names and sizes only), so they reopen instantly and Xylem can show what changed. Turn it off or forget them in the File menu."),
@@ -2308,7 +2308,7 @@ impl XylemApp {
                     facts(ui, &t, &[
                         ("Network", "Xylem makes no network connections and sends nothing anywhere. The native app has no browser engine."),
                         ("Disk access", "Drives are opened for reading only. Scanning never writes to the disk."),
-                        ("Admin rights", "Only for Fast scan, after the Windows prompt. A helper reads the file table (about 1–5 s) and exits."),
+                        ("Admin rights", "Only after the Windows prompt: for Fast scan (a helper reads the file table in about 1–5 s and exits), and if you use them, Windows' DISM cleanup and virtual-disk compaction."),
                         ("Deleting", "Always to the Recycle Bin, after you confirm. Right before moving, Xylem re-checks the item: if it changed, or a folder on its path became a link since the scan, it refuses."),
                         ("Warnings", "Extra confirmation for OneDrive folders (deleting syncs to your other devices), Git repositories (unpushed work) and very large deletes."),
                         ("History", "Each delete is logged on this PC in %LOCALAPPDATA%\\Xylem\\deletions.log."),
@@ -2368,13 +2368,28 @@ impl XylemApp {
                     ui.label(RichText::new("What changed").font(theme::semibold(16.0)));
                     ui.label(
                         RichText::new(format!(
-                            "{} · previous scan {} → latest scan {}",
+                            "{} · previous scan {} → latest scan {} ({} later)",
                             ch.root,
                             remember::age_text(ch.before_time),
-                            remember::age_text(ch.after_time)
+                            remember::age_text(ch.after_time),
+                            remember::gap_text(ch.after_time.saturating_sub(ch.before_time))
                         ))
                         .color(t.muted),
                     );
+                    if ch.mixed_methods() {
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(format!(
+                                "The previous scan was a {} and this one a {}. They count some things differently \
+                                 (files with several names, folders only admins can read, System Volume Information), \
+                                 so part of this comes from the scan method, not from files that changed. \
+                                 Scan the same way twice for an exact comparison.",
+                                Changes::method_name(&ch.before_mode),
+                                Changes::method_name(&ch.after_mode)
+                            ))
+                            .color(theme::WARN),
+                        );
+                    }
                     ui.add_space(4.0);
                     let total = i128::from(ch.after_total) - i128::from(ch.before_total);
                     ui.label(format!("{} → {}  ({})", fmt_bytes(ch.before_total), fmt_bytes(ch.after_total), fmt_delta(total)));
@@ -3189,5 +3204,6 @@ fn fmt_delta(d: i128) -> String {
 /// One line for the status bar: "Since the previous scan (2 days ago): +1.2 GB".
 fn changes_summary(ch: &Changes) -> String {
     let d = i128::from(ch.after_total) - i128::from(ch.before_total);
-    format!("Since the previous scan ({}): {}", remember::age_text(ch.before_time), fmt_delta(d))
+    let note = if ch.mixed_methods() { " (different scan method, see What changed)" } else { "" };
+    format!("Since the previous scan ({}): {}{note}", remember::age_text(ch.before_time), fmt_delta(d))
 }

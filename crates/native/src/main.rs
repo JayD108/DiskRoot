@@ -64,6 +64,10 @@ pub fn fmt_pct(part: u64, whole: u64) -> String {
         return "0%".into();
     }
     let p = part as f64 * 100.0 / whole as f64;
+    if part < whole && p >= 99.0 {
+        // Rounding would say "100%" for something that isn't everything.
+        return format!("{:.1}%", (p * 10.0).floor() / 10.0);
+    }
     if p >= 10.0 { format!("{p:.0}%") } else { format!("{p:.1}%") }
 }
 
@@ -115,5 +119,8 @@ mod tests {
         assert_eq!(fmt_pct(1, 3), "33%");
         assert_eq!(fmt_pct(1, 300), "0.3%");
         assert_eq!(fmt_pct(1, 0), "0%");
+        assert_eq!(fmt_pct(9952, 10_000), "99.5%", "not everything: never 100%");
+        assert_eq!(fmt_pct(9999, 10_000), "99.9%");
+        assert_eq!(fmt_pct(10, 10), "100%");
     }
 }

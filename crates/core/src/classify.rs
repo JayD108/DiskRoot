@@ -1102,7 +1102,7 @@ mod tests {
         let dl = t.dir(me, "Downloads");
         let model = t.file(dl, "llama.gguf", 4000); // strong extension wins
         let setup = t.file(dl, "setup.exe", 30); // Downloads isn't weak
-        let data = t.dir(0, "V2_V3_DeepLearning");
+        let data = t.dir(0, "ML_Experiments");
         let npy = t.file(data, "x.npy", 900);
         let other = t.file(data, "notes.xyz", 5);
         let page = t.file(0, "pagefile.sys", 2000);
