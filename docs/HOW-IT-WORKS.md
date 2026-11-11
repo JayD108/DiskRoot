@@ -184,7 +184,7 @@ Xylem itself only ever moves things to the Recycle Bin. Everything else is done 
 | Shrink WinSxS | `Dism.exe /Online /Cleanup-Image /StartComponentCleanup` | Yes (UAC) |
 | Restore points | System Protection settings | Windows asks |
 | `Windows.old`, upgrade files | Settings > Storage | Windows asks |
-| Compress / uncompress a folder | `compact.exe /C /EXE:LZX` / `/U /EXE` | No |
+| Compress / uncompress a folder | Xylem's engine: Windows' file compression (`FSCTL_SET_EXTERNAL_BACKING` / `FSCTL_DELETE_EXTERNAL_BACKING`), files in parallel | No |
 | Compact a WSL/Docker disk | `diskpart`: attach read-only, compact, detach; fed through a pipe by `xylem.exe --helper-compact-vhdx`, which re-checks the path and that the disk isn't in use | Yes (UAC) |
 | Shut down WSL | `wsl.exe --shutdown` | No |
 | Cleanup plan | A PowerShell script Xylem writes for you to review (dry run unless `-Run`) | Xylem never runs it |
@@ -211,10 +211,10 @@ Comparisons with other tools are in [BENCHMARKS.md](BENCHMARKS.md).
 | Situation | What Xylem does |
 |---|---|
 | Hardlinks (one file, several names) | Fast scan counts them once. The folder walk can't tell, so it counts each name. The details pane lists all names of a file. |
-| Compressed, sparse and CompactOS files | Size on disk = bytes actually used |
+| Compressed, sparse and CompactOS files | Size on disk = bytes actually used. Files packed by Windows' file compression list as ~0 bytes, so the folder walk asks Windows for their real size |
 | OneDrive online-only files | Size on disk ≈ 0, tagged *cloud* |
 | Symlinks and junctions | Tagged *link*, never followed |
 | `pagefile.sys`, `hiberfil.sys`, `$MFT`, System Volume Information | Included in Fast scan; they're real space |
-| Live updates | A changed file's size on disk is rounded to 4 KB until the next scan (exact for compressed files) |
+| Live updates | A changed file's size on disk comes from Windows when it's compressed or sparse, else it's rounded to 4 KB until the next scan |
 | Folder dates | A folder shows the newest last-modified date of anything inside it |
 | Checked how | The folder walk is compared item by item with a plain Rust directory walk (`xylem-bench verify`): an exact match on `C:\Program Files`. Fast-scan totals match Windows' used space. |

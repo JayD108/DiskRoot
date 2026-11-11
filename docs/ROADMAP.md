@@ -24,7 +24,7 @@
 - **Change over time:** instant reopen, "what changed" (list and Change column), live updates while open, size alerts.
 - **Finding space:** largest files with search, file types, duplicate finder, hardlink names, Leftovers view, CSV export, Explorer right-click.
 - **Cleaning up:** "Mark all" for safe-to-clear places, Recycle Bin only, re-check by file identity with the folder chain locked until the move ends, spelling-proof locks, OneDrive/Git/large/USB/running-app warnings, multi-select, deletion history.
-- **Power tools (opt-in):** PowerShell cleanup plan, NTFS compression, guided WSL/Docker disk compaction, DISM / System Protection / Storage settings.
+- **Power tools (opt-in):** PowerShell cleanup plan, fast folder compression (own engine), similar-folder finder, guided WSL/Docker disk compaction, DISM / System Protection / Storage settings.
 - **Security:** admin helper that writes nothing to disk and drops its rights before parsing, DLL-planting defence, fuzzing, `cargo audit` + `cargo deny` in CI ([details](SECURITY-AND-PRIVACY.md)).
 - **Release:** installer, portable zip, checksums, CI with a real install/uninstall test, signing-ready pipeline.
 

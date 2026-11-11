@@ -29,10 +29,11 @@ Most tools only answer the first one, and the friendly ones are slow on big driv
 - **Your drive at a glance:** a strip at the bottom shows used and free space and your 5 biggest space users. The start screen shows every drive with a fill bar.
 - **Instant reopen and "what changed":** your last scan opens in under a second (a whole 1.5 TB drive in ~0.4 s). After a rescan, Xylem points at the exact folders that grew or shrank, both in a list and in a Change column right in the tree.
 - **Clear pictures:** a tree-table with size bars, next to a sunburst or a treemap. Light and dark themes, full keyboard navigation.
+- **Similar folders:** finds folders that look like copies of each other, and projects with similar names (`project`, `project_v2`, `project - Copy`).
 - **Find what to clean:** the largest files (with search), sizes by file type, and an opt-in duplicate finder that keeps the original-looking copy.
 - **Clean up with confidence:** "Mark all" for things that are safe to clear (every `node_modules`, Rust `target`, cache), a Leftovers view (old installers and archives in Downloads, Windows upgrade leftovers, app data of uninstalled programs), and buttons for Windows' own cleanups (DISM, System Protection, Storage settings). Add your own categories with custom rules.
 - **See it happen:** colour by age (what hasn't changed in years), live updates while Xylem is open, and alerts when a folder grows past a limit.
-- **Power tools, all opt-in:** export a cleanup plan as a PowerShell script to review, compress folders with Windows' NTFS compression, and shrink WSL/Docker virtual disks with a guided, checked compaction.
+- **Power tools, all opt-in:** export a cleanup plan as a PowerShell script to review, compress folders in place with Xylem's fast compression engine (Windows' own file compression, many files at once, with real progress and undo), and shrink WSL/Docker virtual disks with a guided, checked compaction.
 - **Careful deleting:** only to the Recycle Bin, only after you confirm. Windows and system folders are locked. You get warnings for OneDrive folders, Git repositories and very large deletes, and a history of everything you deleted. Mark several items (Ctrl+click) to remove them in one go. Hardlinked files are flagged, because deleting one name frees nothing.
 - **Private:** no network connections, no accounts, no telemetry. One small program (~8 MB).
 

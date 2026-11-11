@@ -181,10 +181,15 @@ All opt-in, and all done by Windows' own tools.
 - **What it does:** turns the marked items into a script, e.g. to clean another PC or to run later: `Documents\Xylem\cleanup <time>.ps1`.
 - **Underneath:** without `-Run` it only lists what it would do. With `-Run`, each item goes to the Recycle Bin after a check: it must still exist, be the same type, and neither it nor any folder above it may be a link. Paths are written so PowerShell never interprets them, and unusual names are left out and listed. **Xylem itself never runs the script.**
 
-### Compress with Windows (folders)
-- **What it does:** NTFS compression shrinks files on disk while they stay usable as normal. Good for programs, games and documents you mostly read; photos, videos and archives barely shrink.
-- **Use it:** select a folder → **Compress with Windows…**. It shows a rough estimate first. **Uncompress** undoes it.
-- **Underneath:** Windows' `compact.exe /C /EXE:LZX` (no admin). Not offered for protected places or cloud folders. A file that's changed later is stored uncompressed again.
+### Compress (folders)
+- **What it does:** shrinks files on disk while they stay usable as normal (same place, names and dates; Windows unpacks them as they're read). Good for programs, games, code, logs and documents you mostly read. Photos, videos, archives and most model weights barely shrink.
+- **Use it:** select a folder → **Compress…** (details pane or right-click). Pick **Fast** (default) or **Maximum**; it shows what will be packed, what is left alone and a rough estimate. A real progress bar shows speed, time left and space saved, with **Stop**. **Uncompress** undoes it.
+- **Underneath:** Xylem's own engine (`crates/session/src/compress.rs`) drives Windows' file compression directly (the format `compact.exe /EXE` writes): Fast = XPRESS16K, Maximum = LZX, several files at once (cores − 2, at most 16). It skips packed formats, data that looks random, files of one cluster, and files that are already compressed, sparse, links or cloud placeholders. Each file is opened read-only and locked against changes; files in use are skipped; Windows refuses files you may not change. No admin. Not offered for protected places, cloud folders or whole drives; NTFS only. A file that's changed later is stored uncompressed again. Measured on 763 MB of mixed data: compact.exe LZX 30.9 s; engine Fast 1.7 s, Maximum 6.1 s (same savings as compact.exe LZX).
+
+### Similar folders
+- **What it does:** lists folders that look like copies (same size, file count and names inside; contents aren't compared) and folders with similar names (same name ignoring case, separators, "- Copy" and versions anywhere; name families like `APALA`, `APALA_dev` next to each other).
+- **Use it:** **View → Similar folders…**; click a folder to show it in the tree. Xylem never deletes from this view.
+- **Underneath:** `crates/session/src/similar.rs`, on the scan in memory (about 0.03 s for a 1.7M-item drive). Windows, Program Files, AppData and package/build caches are not looked into.
 
 ### Compact a WSL or Docker virtual disk (`.vhdx` files)
 - **What it does:** WSL and Docker disks grow but never shrink by themselves. Compacting gives the unused space back.

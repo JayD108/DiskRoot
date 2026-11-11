@@ -56,7 +56,7 @@ Other rules:
 ## Windows' own tools
 Some cleanups are done by Windows, not by Xylem, and only when you click them:
 - **DISM** component cleanup (WinSxS) asks for admin through the Windows prompt.
-- **`compact.exe`** (folder compression) runs without admin, on your own folders, never on protected or cloud folders. Uncompress undoes it.
+- **Folder compression** is done by Xylem itself with Windows' own file compression, without admin. It opens each file read-only (no other program can change it meanwhile), never deletes, moves or copies anything, checks that every file really is inside the folder you chose, and skips files in use. Windows refuses files you aren't allowed to change. Never on protected or cloud folders or whole drives. Uncompress undoes it.
 - **Settings pages** (Storage, System Protection) just open.
 - All tools are started by their **full path in System32** and **never through `cmd.exe`**, so no argument is interpreted by a shell.
 - The **PowerShell cleanup plan** is a file Xylem writes for you; Xylem never runs it. It's a dry run unless you add `-Run`, re-checks every item, refuses links, writes paths so PowerShell can't interpret them, and only uses the Recycle Bin.
