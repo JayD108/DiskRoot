@@ -18,11 +18,27 @@ pub struct Settings {
     pub remember_scans: bool,
     /// Colour the map and tree by last-modified date instead of category.
     pub color_by_age: bool,
+    /// Watch the scanned folder while the app is open and update sizes.
+    pub live_updates: bool,
+    /// "Tell me if this folder grows by more than N GB".
+    pub alerts: Vec<Alert>,
+}
+
+/// A size alert on a folder (checked after scans and live updates while
+/// Xylem is open).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Alert {
+    /// Full path of the folder.
+    pub path: String,
+    /// Size on disk when the alert was set (or last fired).
+    pub baseline: u64,
+    /// Fire when it grows by at least this many bytes.
+    pub grow: u64,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { dark: false, treemap: false, by_category: false, last_path: "C:\\".into(), seen_notice: false, remember_scans: true, color_by_age: false }
+        Self { dark: false, treemap: false, by_category: false, last_path: "C:\\".into(), seen_notice: false, remember_scans: true, color_by_age: false, live_updates: true, alerts: Vec::new() }
     }
 }
 

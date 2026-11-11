@@ -1021,6 +1021,28 @@ impl Index {
             stack.extend_from_slice(ch.of(x));
         }
     }
+
+    /// A file changed size on disk (live updates): sets its own sizes and
+    /// moves every folder above it by the difference. `mtime` only ever
+    /// moves forward.
+    pub fn resize_file(&mut self, id: u32, size: u64, alloc: u64, mtime: u16) {
+        assert!(self.totals_ready(), "compute_totals first");
+        let i = id as usize;
+        if id == 0 || i >= self.len() || self.flags[i] & (flags::DIR | flags::DELETED) != 0 {
+            return;
+        }
+        let (old_s, old_a) = (self.size[i], self.alloc[i]);
+        (self.size[i], self.alloc[i]) = (size, alloc);
+        self.mtime[i] = self.mtime[i].max(mtime);
+        let mut cur = self.parent(id);
+        while cur != NO_PARENT {
+            let c = cur as usize;
+            self.size[c] = self.size[c].saturating_sub(old_s).saturating_add(size);
+            self.alloc[c] = self.alloc[c].saturating_sub(old_a).saturating_add(alloc);
+            self.mtime[c] = self.mtime[c].max(mtime);
+            cur = self.parent(cur);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1195,6 +1217,12 @@ mod tests {
         assert!(t.idx.flags(3) & flags::DELETED != 0, "file inside is flagged too");
         t.idx.remove_subtree(b, &ch); // idempotent
         assert_eq!(t.idx.alloc(0), 5);
+        // A file growing moves every folder above it.
+        let y = 4;
+        t.idx.resize_file(y, 50, 50, 30_000);
+        assert_eq!((t.idx.alloc(a), t.idx.alloc(0), t.idx.mtime(0)), (50, 50, 30_000));
+        t.idx.resize_file(a, 1, 1, 0); // folders are ignored
+        assert_eq!(t.idx.alloc(a), 50);
     }
 
     /// A folder holding CACHEDIR.TAG is "Build output" (and green), unless

@@ -18,7 +18,7 @@ use xylem_session::safety::{DeleteWarnings, LogEntry, visible};
 use xylem_session::{Action, DeleteOut, FileRow, ItemInfo, Leftover, PendingDelete, RulesStatus, Safety, Scanned, Shape, Summary, TypeRow};
 
 use crate::map::{self, Hit, Kind, Layout as MapLayout, PaintCtx};
-use crate::settings::Settings;
+use crate::settings::{Alert, Settings};
 use crate::theme::{self, Theme, Tokens};
 use crate::{fmt_bytes, fmt_count, fmt_files, fmt_pct};
 
@@ -102,6 +102,8 @@ enum Dialog {
     ConfirmMany(Box<ConfirmMany>),
     /// File > Custom rules: where the file is and whether it loaded.
     Rules,
+    /// View > Size alerts.
+    Alerts,
     /// View > Leftovers.
     Leftovers(Vec<Leftover>),
     /// Explains a Windows tool before starting it.
@@ -220,6 +222,15 @@ pub struct XylemApp {
     scroll_to_selected: bool,
     /// The user's own rules: loaded or not, and why.
     rules_status: RulesStatus,
+    /// Live updates: the running watch on the scan root.
+    watcher: Option<xylem_session::watch::Watcher>,
+    /// New items seen since the scan (relative path -> bytes): not in the
+    /// tree until the next scan.
+    live_new: std::collections::HashMap<String, u64>,
+    /// Windows reported more changes than it could list: rescan to be exact.
+    live_overflow: bool,
+    /// Flash the taskbar button (a size alert fired).
+    attention: bool,
 }
 
 impl XylemApp {
@@ -260,6 +271,10 @@ impl XylemApp {
             ),
             scroll_to_selected: false,
             rules_status: xylem_session::reload_rules(),
+            watcher: None,
+            live_new: std::collections::HashMap::new(),
+            live_overflow: false,
+            attention: false,
         };
         if let Some(e) = &app.rules_status.error {
             app.say(format!("Your custom rules weren't loaded ({e}). File > Custom rules shows where they are."));
@@ -468,8 +483,99 @@ impl XylemApp {
         self.selected = Some(self.root_key());
         self.invalidate();
         self.refresh_drive_bar();
+        self.start_watch();
+        self.check_alerts();
     }
 
+    /// Live updates: (re)starts watching the scan root.
+    fn start_watch(&mut self) {
+        self.watcher = None;
+        self.live_new.clear();
+        self.live_overflow = false;
+        if !self.settings.live_updates {
+            return;
+        }
+        if let Some(sum) = &self.summary {
+            match xylem_session::watch::Watcher::start(&sum.root) {
+                Ok(w) => self.watcher = Some(w),
+                Err(e) => self.say(format!("Live updates are off for this scan: {e}")),
+            }
+        }
+    }
+
+    /// Applies what the watcher reported (at most once a second).
+    fn poll_watch(&mut self, ctx: &egui::Context) {
+        use xylem_session::watch::Event;
+        let Some(w) = &self.watcher else { return };
+        ctx.request_repaint_after(Duration::from_secs(1));
+        if self.job.is_some() {
+            return;
+        }
+        let mut paths: Vec<String> = Vec::new();
+        let mut stopped = None;
+        while let Ok(ev) = w.rx.try_recv() {
+            match ev {
+                Event::Changed(p) => paths.extend(p),
+                Event::Overflow => self.live_overflow = true,
+                Event::Stopped(e) => stopped = Some(e),
+            }
+        }
+        if let Some(e) = stopped {
+            self.watcher = None;
+            self.say(format!("Live updates stopped: {e}"));
+        }
+        if paths.is_empty() {
+            return;
+        }
+        let root_key = self.root_key();
+        let Some(s) = &mut self.scanned else { return };
+        for p in &paths {
+            self.live_new.remove(p);
+        }
+        let r = s.apply_live(&paths);
+        self.live_new.extend(r.new);
+        if r.resized + r.removed > 0 {
+            self.summary = Some(s.summary());
+            if let Some(Key_::Node(n)) = self.selected
+                && s.check(n).is_err()
+            {
+                self.selected = Some(root_key);
+            }
+            self.marked.retain(|&n| s.check(n).is_ok());
+            self.invalidate();
+            self.refresh_drive_bar();
+            self.check_alerts();
+        }
+    }
+
+    /// Size alerts: fires (once, then re-arms at the new size) for folders
+    /// in the current scan that grew by their threshold.
+    fn check_alerts(&mut self) {
+        let Some(s) = &self.scanned else { return };
+        let root = s.summary().root;
+        let mut fired = Vec::new();
+        for a in &mut self.settings.alerts {
+            let Some(rel) = rel_of(&root, &a.path) else { continue };
+            let Some(n) = s.find_rel(&rel) else { continue };
+            let now = s.info(n).map(|i| i.on_disk).unwrap_or(0);
+            if now >= a.baseline.saturating_add(a.grow) {
+                fired.push(format!("{} grew by {} (now {})", a.path, fmt_bytes(now - a.baseline), fmt_bytes(now)));
+                a.baseline = now;
+            } else if now < a.baseline {
+                // Shrank: measure growth from the new, smaller size.
+                a.baseline = now;
+            }
+        }
+        if !fired.is_empty() {
+            self.settings.save();
+            if self.dialog.is_none() {
+                self.dialog = Some(Dialog::Message("Size alert".into(), fired.join("\n")));
+            } else {
+                self.say(fired.join(" · "));
+            }
+            self.attention = true;
+        }
+    }
     fn finish_reopen(&mut self, r: Option<Reopened>) {
         self.job = None;
         let Some(r) = r else { return }; // nothing remembered: start empty, as before
@@ -848,7 +954,10 @@ impl XylemApp {
                     .clicked()
                 {
                     if let Some(s) = &self.scanned {
-                        self.dialog = Some(Dialog::Leftovers(s.leftovers(300)));
+                        let mut list = s.leftovers(300);
+                        list.extend(s.orphan_hints(&xylem_session::orphans::Programs::installed(), 50 << 20, 90));
+                        list.sort_by_key(|l| std::cmp::Reverse(l.on_disk));
+                        self.dialog = Some(Dialog::Leftovers(list));
                     }
                     ui.close();
                 }
@@ -856,6 +965,16 @@ impl XylemApp {
                 let mut changed = false;
                 changed |= ui.radio_value(&mut self.settings.treemap, false, "Sunburst map").clicked();
                 changed |= ui.radio_value(&mut self.settings.treemap, true, "Treemap").clicked();
+                let mut live = self.settings.live_updates;
+                if ui.checkbox(&mut live, "Live updates").on_hover_text("Watch the scanned folder while Xylem is open and update sizes as files change").changed() {
+                    self.settings.live_updates = live;
+                    self.settings.save();
+                    if live { self.start_watch() } else { self.watcher = None }
+                }
+                if ui.add(egui::Button::new(format!("Size alerts ({})…", self.settings.alerts.len()))).clicked() {
+                    self.dialog = Some(Dialog::Alerts);
+                    ui.close();
+                }
                 ui.separator();
                 let age = self.settings.color_by_age;
                 ui.radio_value(&mut self.settings.color_by_age, false, "Colour by category");
@@ -996,6 +1115,20 @@ impl XylemApp {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let muted = |s: String| RichText::new(s).color(t.muted).size(11.5);
                 ui.label(RichText::new("●  Read-only").color(t.accent).size(11.5));
+                if self.watcher.is_some() {
+                    ui.separator();
+                    if self.live_overflow {
+                        ui.label(RichText::new("Many changes · press F5").color(theme::WARN).size(11.5))
+                            .on_hover_text("Windows reported more changes than it could list. Scan again for exact sizes.");
+                    } else if !self.live_new.is_empty() {
+                        let bytes: u64 = self.live_new.values().sum();
+                        ui.label(RichText::new(format!("{} new since the scan ({}) · F5 to include", fmt_count(self.live_new.len() as u64), fmt_bytes(bytes))).color(theme::WARN).size(11.5))
+                            .on_hover_text("New files and folders appeared. Sizes of existing items update live; new ones join the tree at the next scan.");
+                    } else {
+                        ui.label(RichText::new("Live").color(t.accent).size(11.5))
+                            .on_hover_text("Watching for changes: sizes update as files change or are deleted (no admin needed).");
+                    }
+                }
                 if let Some(s) = &self.summary {
                     ui.separator();
                     ui.label(muted(format!("{}% classified", (s.categorized * 100.0).round())));
@@ -1323,6 +1456,16 @@ impl XylemApp {
                                     ctx_action = Some((i, "delete"));
                                     ui.close();
                                 }
+                                if r.dir {
+                                    ui.menu_button("Alert me if it grows by", |ui| {
+                                        for (label, act) in [("1 GB", "alert-1"), ("5 GB", "alert-5"), ("10 GB", "alert-10"), ("50 GB", "alert-50")] {
+                                            if ui.button(label).clicked() {
+                                                ctx_action = Some((i, act));
+                                                ui.close();
+                                            }
+                                        }
+                                    });
+                                }
                             });
                         }
                 }
@@ -1370,6 +1513,10 @@ impl XylemApp {
                     self.select(Key_::Node(n));
                     match act {
                         "reveal" => self.reveal_in_explorer(n),
+                        a if a.starts_with("alert-") => {
+                            let gb: u64 = a[6..].parse().unwrap_or(1);
+                            self.add_alert(n, gb << 30);
+                        }
                         _ => self.ask_delete(n),
                     }
                 }
@@ -1418,6 +1565,15 @@ impl XylemApp {
         if let Err(e) = r {
             self.dialog = Some(Dialog::Message("Couldn't open it".into(), e));
         }
+    }
+
+    fn add_alert(&mut self, n: u32, grow: u64) {
+        let Some(s) = &self.scanned else { return };
+        let Ok(info) = s.info(n) else { return };
+        self.settings.alerts.retain(|a| !a.path.eq_ignore_ascii_case(&info.path));
+        self.settings.alerts.push(Alert { path: info.path.clone(), baseline: info.on_disk, grow });
+        self.settings.save();
+        self.say(format!("Alert set: Xylem tells you when {} grows by {} (while it's open, or at the next scan)", info.name, fmt_bytes(grow)));
     }
 
     fn reload_rules(&mut self) {
@@ -2323,6 +2479,30 @@ impl XylemApp {
                         ui.label(RichText::new(p.display().to_string()).monospace().size(11.0).color(t.faint));
                     }
                 }
+                Dialog::Alerts => {
+                    ui.label(RichText::new("Size alerts").font(theme::semibold(16.0)));
+                    ui.add(egui::Label::new(RichText::new("Xylem checks these folders after every scan and, with live updates on, while it's open. It doesn't run in the background. Right-click a folder > \"Alert me if it grows by\" to add one.").color(t.muted)).wrap());
+                    ui.add_space(8.0);
+                    if self.settings.alerts.is_empty() {
+                        ui.label(RichText::new("No alerts yet.").color(t.faint));
+                    }
+                    let mut remove: Option<usize> = None;
+                    egui::Grid::new("alerts").num_columns(4).striped(true).spacing([14.0, 5.0]).show(ui, |ui| {
+                        for (i, a) in self.settings.alerts.iter().enumerate() {
+                            ui.add(egui::Label::new(visible(&a.path)).truncate());
+                            ui.label(RichText::new(format!("at {}", fmt_bytes(a.baseline))).color(t.muted));
+                            ui.label(format!("grows by {}", fmt_bytes(a.grow)));
+                            if ui.small_button("Remove").clicked() {
+                                remove = Some(i);
+                            }
+                            ui.end_row();
+                        }
+                    });
+                    if let Some(i) = remove {
+                        self.settings.alerts.remove(i);
+                        self.settings.save();
+                    }
+                }
                 Dialog::Tool(a) => {
                     let _ = a;
                     ui.label(RichText::new("Clean up the component store with Windows").font(theme::semibold(16.0)));
@@ -2353,7 +2533,7 @@ impl XylemApp {
                                 ui.allocate_ui_with_layout(vec2(160.0, 18.0), Layout::left_to_right(Align::Center), |ui| {
                                     ui.set_min_width(160.0);
                                     let kind = if l.mtime > 0 { format!("{} · {}", l.kind, xylem_session::age_text(xylem_session::today_days(), l.mtime)) } else { l.kind.clone() };
-                                    ui.add(egui::Label::new(RichText::new(kind).color(if l.deletable { t.text } else { theme::WARN })).truncate());
+                                    ui.add(egui::Label::new(RichText::new(kind).color(if l.deletable && !l.hint { t.text } else { theme::WARN })).truncate());
                                 });
                                 let r = ui.add(egui::Label::new(visible(&l.name)).truncate().sense(Sense::click()));
                                 if r.on_hover_text(format!("{}\n\n{}\n\nClick to show it in the tree", visible(&l.path), l.note)).clicked() {
@@ -2369,7 +2549,7 @@ impl XylemApp {
                             });
                         }
                     });
-                    let can: Vec<u32> = list.iter().filter(|l| l.deletable).map(|l| l.id).collect();
+                    let can: Vec<u32> = list.iter().filter(|l| l.deletable && !l.hint).map(|l| l.id).collect();
                     if !can.is_empty() {
                         ui.add_space(6.0);
                         ui.add(egui::Label::new(RichText::new("Downloads are yours to judge: Xylem can't tell whether you still need an installer or archive. Marking selects them for one review; nothing is deleted until you confirm.").color(t.muted).size(11.5)).wrap());
@@ -2732,6 +2912,10 @@ impl eframe::App for XylemApp {
         let ctx = ui.ctx().clone();
         self.poll_job(&ctx);
         self.poll_remember(&ctx);
+        self.poll_watch(&ctx);
+        if std::mem::take(&mut self.attention) {
+            ctx.send_viewport_cmd(ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational));
+        }
         self.keyboard(&ctx);
         let t = self.tokens();
         let bar = |m: i8| Frame::new().fill(t.win).inner_margin(Margin::symmetric(m, 2));
@@ -2812,6 +2996,17 @@ fn shield_button(ui: &mut Ui, t: &Tokens) -> egui::Response {
 }
 
 /// "+1.2 GB" / "−300 MB" for a size change.
+/// `path` relative to the scan root `root` ("" for the root itself), if it's
+/// inside it. Case-insensitive, like Windows paths.
+fn rel_of(root: &str, path: &str) -> Option<String> {
+    let r = root.trim_end_matches('\\');
+    let (head, tail) = (path.get(..r.len())?, path.get(r.len()..)?);
+    if !head.eq_ignore_ascii_case(r) || !(tail.is_empty() || tail.starts_with('\\')) {
+        return None;
+    }
+    Some(tail.trim_start_matches('\\').to_owned())
+}
+
 fn fmt_delta(d: i128) -> String {
     let sign = if d > 0 { "+" } else if d < 0 { "−" } else { "±" };
     format!("{sign}{}", fmt_bytes(d.unsigned_abs().min(u128::from(u64::MAX)) as u64))

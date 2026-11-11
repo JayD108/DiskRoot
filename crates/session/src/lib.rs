@@ -15,6 +15,8 @@ pub mod recycle;
 pub mod remember;
 pub mod safety;
 pub mod tools;
+pub mod orphans;
+pub mod watch;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, RwLock};
@@ -358,6 +360,20 @@ pub struct Leftover {
     pub deletable: bool,
     /// Last-modified day (0 = unknown).
     pub mtime: u16,
+    /// A guess ("possibly left over"), never marked for deleting.
+    pub hint: bool,
+}
+
+/// What [`Scanned::apply_live`] did with one batch of changed paths.
+#[derive(Clone, Debug, Default)]
+pub struct LiveResult {
+    /// Files whose size changed (tree updated).
+    pub resized: usize,
+    /// Items gone from disk (removed from the tree).
+    pub removed: usize,
+    /// New items not in the scan: (relative path, bytes). Shown as "press
+    /// F5 to include them": inserting them would mean re-sorting the tree.
+    pub new: Vec<(String, u64)>,
 }
 
 /// One scan, classified, ready to answer UI questions.
@@ -505,6 +521,56 @@ impl Scanned {
         out
     }
 
+    /// "Possibly left over" app data: folders directly in AppData\Local,
+    /// Roaming, LocalLow or ProgramData that no installed or running
+    /// program's name, publisher or folder matches, that hold at least
+    /// `min_bytes`, and where nothing changed for `min_days`. Hints only:
+    /// never labelled safe, never marked.
+    pub fn orphan_hints(&self, programs: &orphans::Programs, min_bytes: u64, min_days: u16) -> Vec<Leftover> {
+        let idx = &self.index;
+        let today = xylem_core::today_days();
+        let root_is_drive = idx.name(0).len() <= 3 && idx.name(0).ends_with(":\\");
+        let mut out = Vec::new();
+        for id in 1..idx.len() as u32 {
+            if !idx.is_dir(id) || idx.flags(id) & (flags::DELETED | flags::LINK) != 0 || idx.alloc(id) < min_bytes {
+                continue;
+            }
+            let p = idx.parent(id);
+            let pname = idx.name(p);
+            // The scan root's name is a whole path: compare its last part.
+            let last = |n: u32| idx.name(n).trim_end_matches('\\').rsplit('\\').next().unwrap_or("");
+            let in_appdata = ["Local", "Roaming", "LocalLow"].iter().any(|x| pname.eq_ignore_ascii_case(x))
+                && p != 0
+                && last(idx.parent(p)).eq_ignore_ascii_case("AppData");
+            let in_programdata = pname.eq_ignore_ascii_case("ProgramData") && p != 0 && idx.parent(p) == 0 && root_is_drive;
+            if !(in_appdata || in_programdata) {
+                continue;
+            }
+            let name = idx.name(id);
+            let mt = idx.mtime(id);
+            if self.cls.matched_here(id)
+                || orphans::NEVER.contains(&orphans::norm(name).as_str())
+                || mt == 0
+                || today.saturating_sub(mt) < min_days
+                || programs.matches(name)
+                || self.cls.protection(idx, &self.rules, id).is_some()
+            {
+                continue;
+            }
+            let note = format!(
+                "No installed or running program's name, publisher or folder matches \"{name}\" ({} programs checked), and nothing in it changed for {}. \
+It may be left over from an uninstalled program, or belong to one that's installed under another name. It can hold settings or saved games: check before deleting.",
+                programs.count,
+                xylem_core::age_text(today, mt).trim_end_matches(" ago"),
+            );
+            let mut l = self.leftover(id, "Possibly left over (app data)".into(), note);
+            l.hint = true;
+            out.push(l);
+        }
+        out.sort_unstable_by_key(|l| std::cmp::Reverse(l.on_disk));
+        out
+    }
+
     fn leftover(&self, id: u32, kind: String, note: String) -> Leftover {
         let r = self.cls.rule[id as usize];
         Leftover {
@@ -517,6 +583,7 @@ impl Scanned {
             action: self.rules.info.get(r as usize).and_then(|i| i.action),
             deletable: self.cls.protection(&self.index, &self.rules, id).is_none(),
             mtime: self.index.mtime(id),
+            hint: false,
         }
     }
 
@@ -933,11 +1000,84 @@ impl Scanned {
         Some(cur)
     }
 
+    /// Live updates: re-measures the paths the watcher reported (relative
+    /// to the scan root) and patches the tree: changed file sizes, removed
+    /// items. New items are only reported. Approximate until the next scan:
+    /// the size on disk of a changed file is rounded to 4 KB clusters
+    /// (exact for compressed and sparse files).
+    pub fn apply_live(&mut self, rel_paths: &[String]) -> LiveResult {
+        let root = PathBuf::from(self.index.name(0));
+        let mut res = LiveResult::default();
+        let (mut resize, mut remove) = (Vec::new(), Vec::new());
+        for rel in rel_paths {
+            if rel.is_empty() || rel.split('\\').any(|c| c == "..") {
+                continue;
+            }
+            let full = root.join(rel);
+            let meta = std::fs::symlink_metadata(&full);
+            match (self.find_rel(rel), meta) {
+                (Some(n), Err(e)) if e.kind() == std::io::ErrorKind::NotFound && n != 0 => remove.push(n),
+                (Some(n), Ok(m)) if m.is_file() && !self.index.is_dir(n) && self.index.flags(n) & flags::LINK == 0 => {
+                    let size = m.len();
+                    let alloc = live_alloc(&full, size, self.index.flags(n));
+                    let mt = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| (d.as_secs() / 86_400).min(u64::from(u16::MAX)) as u16);
+                    if size != self.index.size(n) || alloc != self.index.alloc(n) {
+                        resize.push((n, size, alloc, mt));
+                    }
+                }
+                (None, Ok(m)) if !m.file_type().is_symlink() => res.new.push((rel.clone(), if m.is_file() { m.len() } else { 0 })),
+                _ => {}
+            }
+        }
+        if resize.is_empty() && remove.is_empty() {
+            return res;
+        }
+        for &n in &remove {
+            let mut stack = vec![n];
+            while let Some(x) = stack.pop() {
+                if self.index.is_dir(x) && self.index.flags(x) & flags::DELETED == 0 {
+                    self.removed_dirs += 1;
+                }
+                stack.extend(self.children.live(&self.index, x));
+            }
+        }
+        let idx = Arc::make_mut(&mut self.index);
+        for (n, size, alloc, mt) in resize {
+            idx.resize_file(n, size, alloc, mt);
+            res.resized += 1;
+        }
+        for n in remove {
+            idx.remove_subtree(n, &self.children);
+            res.removed += 1;
+        }
+        self.cats = CatStats::compute(&self.index, &self.cls, self.rules.subs.len());
+        res
+    }
+
     /// Full path of a node (for Explorer, copying, etc.).
     pub fn path(&self, node: u32) -> Result<String, String> {
         self.check(node)?;
         Ok(self.index.path(node))
     }
+}
+
+/// Size on disk of a file that changed while watching: exact for compressed
+/// and sparse files (asks Windows), else rounded up to 4 KB clusters.
+fn live_alloc(path: &Path, size: u64, node_flags: u8) -> u64 {
+    if node_flags & (flags::COMPRESSED | flags::SPARSE) != 0 {
+        #[link(name = "kernel32", kind = "raw-dylib")]
+        unsafe extern "system" {
+            fn GetCompressedFileSizeW(name: *const u16, high: *mut u32) -> u32;
+        }
+        let w: Vec<u16> = path.as_os_str().to_string_lossy().encode_utf16().chain([0]).collect();
+        let mut high = 0u32;
+        // SAFETY: NUL-terminated path and a valid out pointer.
+        let low = unsafe { GetCompressedFileSizeW(w.as_ptr(), &mut high) };
+        if low != u32::MAX {
+            return u64::from(high) << 32 | u64::from(low);
+        }
+    }
+    size.div_ceil(4096) * 4096
 }
 
 /// A delete that passed the protection check (see [`Scanned::prepare_delete`]).
@@ -1252,6 +1392,30 @@ mod tests {
         assert!(s.prepare_delete(nm).unwrap().warnings.apps_running.is_empty());
     }
 
+    /// Live updates: a grown file moves its folders, a deleted one leaves the
+    /// tree, a new one is reported but not inserted.
+    #[test]
+    fn live_updates_patch_the_tree() {
+        let dir = std::env::temp_dir().join(format!("xylem-live-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub").join("grow.bin"), vec![0u8; 1000]).unwrap();
+        std::fs::write(dir.join("gone.bin"), vec![0u8; 3000]).unwrap();
+        let mut s = scan(&dir.display().to_string()).unwrap();
+        let before = s.summary().on_disk;
+        std::fs::write(dir.join("sub").join("grow.bin"), vec![0u8; 100_000]).unwrap();
+        std::fs::remove_file(dir.join("gone.bin")).unwrap();
+        std::fs::write(dir.join("fresh.bin"), vec![0u8; 7]).unwrap();
+        let r = s.apply_live(&["sub\\grow.bin".into(), "gone.bin".into(), "fresh.bin".into(), "..\\x".into(), String::new()]);
+        assert_eq!((r.resized, r.removed), (1, 1));
+        assert_eq!(r.new, vec![("fresh.bin".to_owned(), 7)]);
+        let sub = s.find_rel("sub").unwrap();
+        assert_eq!(s.index.alloc(sub), 102_400, "100,000 bytes round up to 25 clusters");
+        assert!(s.find_rel("gone.bin").is_none());
+        assert_eq!(s.summary().on_disk, before - 4096 - 4096 + 102_400);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The folder walk records real last-modified days: a file written now
     /// is from today, and its folders show it as their newest.
     #[test]
@@ -1267,6 +1431,61 @@ mod tests {
             assert!(today.abs_diff(s.index.mtime(id)) <= 1, "node {id}: {} vs today {today}", s.index.mtime(id));
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `cargo test -p xylem-session orphan_hints_on_this_pc -- --ignored --nocapture`
+    #[test]
+    #[ignore = "reads this PC's AppData and installed programs; prints the hints"]
+    fn orphan_hints_on_this_pc() {
+        let appdata = std::path::PathBuf::from(std::env::var("LOCALAPPDATA").unwrap()).parent().unwrap().to_path_buf();
+        let s = scan(&appdata.display().to_string()).unwrap();
+        let p = orphans::Programs::installed();
+        let loose = s.orphan_hints(&p, 1 << 20, 0);
+        println!("loose (>= 1 MB, any age): {}", loose.len());
+        for h in loose.iter().take(15) {
+            println!("   {:>10}  {}", xylem_core::format::bytes(h.on_disk), h.name);
+        }
+        let hints = s.orphan_hints(&p, 50 << 20, 180);
+        println!("{} programs known; {} hints", p.count, hints.len());
+        for h in &hints {
+            println!("{:>10}  {}  ({})", xylem_core::format::bytes(h.on_disk), h.path, xylem_core::age_text(xylem_core::today_days(), h.mtime));
+        }
+    }
+
+    /// Hints only for big, long-unchanged app-data folders that no known
+    /// program matches; never for Windows' own or recently used ones.
+    #[test]
+    fn orphan_hints_need_all_the_evidence() {
+        let mut idx = Index::new("C:\\");
+        let users = idx.push(0, "Users", 0, 0, flags::DIR);
+        let me = idx.push(users, "me", 0, 0, flags::DIR);
+        let ad = idx.push(me, "AppData", 0, 0, flags::DIR);
+        let local = idx.push(ad, "Local", 0, 0, flags::DIR);
+        let old = xylem_core::today_days() - 400;
+        let mut folder = |name: &str, days: u16, bytes: u64| {
+            let d = idx.push(local, name, 0, 0, flags::DIR);
+            let f = idx.push(d, "data.bin", bytes, bytes, 0);
+            idx.set_mtime(f, days);
+            d
+        };
+        let gone = folder("OldGameStudio", old, 200 << 20);
+        folder("Adobe", old, 200 << 20);
+        folder("Microsoft", old, 200 << 20);
+        folder("FreshApp", xylem_core::today_days(), 200 << 20);
+        folder("TinyOld", old, 1 << 20);
+        let pd = idx.push(0, "ProgramData", 0, 0, flags::DIR);
+        let pd_old = idx.push(pd, "RetiredVendor", 0, 0, flags::DIR);
+        let f = idx.push(pd_old, "x.bin", 100 << 20, 100 << 20, 0);
+        idx.set_mtime(f, old);
+        idx.compute_totals();
+        let s = Scanned::new(idx, ScanStats::default(), "test".into());
+        let mut p = orphans::Programs::default();
+        p.add("Adobe Acrobat");
+        p.count = 1;
+        let hints = s.orphan_hints(&p, 50 << 20, 180);
+        let ids: Vec<u32> = hints.iter().map(|h| h.id).collect();
+        assert_eq!(ids, vec![gone, pd_old], "{:?}", hints.iter().map(|h| &h.name).collect::<Vec<_>>());
+        assert!(hints.iter().all(|h| h.hint && h.note.contains("check before deleting")));
     }
 
     #[test]
