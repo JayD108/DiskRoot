@@ -10,63 +10,48 @@
 5. **Offline and private:** no network; nothing runs at startup unless you turn it on.
 6. **Open source only:** OSI-licensed components.
 
-## Releases at a glance
-| Release | Theme | Status |
+## Releases
+| Release | What's in it | Status |
 |---|---|---|
 | v0.1.0 | Scanners, the app, categories, safe delete | Released (unsigned) |
-| v0.2.0 | Instant reopen, "what changed", lower memory, finding space, UI refresh | Built and tested; release checks in progress |
-| v0.3 | Phase 8: Clean up with confidence | Next |
-| v0.4 | Phase 9: See it happen | Planned |
-| v0.5 | Phase 10: Power tools | Planned |
+| v0.2.0 | Instant reopen, "what changed", lower memory, finding space, UI refresh, Phases 8–10 below, a hardened admin helper | Released (unsigned) |
 | 1.0 | Signed, tested on more hardware | Planned |
 
 ## Done
-- **Scanning:** MFT reader (C: ≈ 1.1 s with admin) and folder walk (≈ 4.3 s without); fastest in [our benchmark](BENCHMARKS.md).
-- **Understanding:** categories, plain-English notes, safety labels, protected places.
-- **The app:** tree-table, sunburst and treemap (curved labels), drive strip with % used and the top 5, start screen with drive cards, light/dark themes, keyboard navigation, Ctrl+F filter.
-- **Instant reopen and "what changed"** (list and Change column).
-- **Memory:** scan data for 1.9M items 204 → 143 MB.
-- **Finding space:** largest files with search, file types, duplicate finder, hardlink names, CSV export, Explorer right-click.
-- **Deleting safely:** Recycle Bin only, re-check by file identity, spelling-proof locks, OneDrive/Git/large/USB warnings, multi-select, deletion history.
-- **Security:** admin helper that writes nothing to disk, DLL-planting defence, fuzzing, `cargo audit` + `cargo deny` in CI ([details](SECURITY-AND-PRIVACY.md)).
+- **Scanning:** MFT reader (C: ≈ 1.1 s with admin) and folder walk (≈ 4.3 s without); fastest in [our benchmark](BENCHMARKS.md). Last-modified dates come along for free (+2 bytes per item).
+- **Understanding:** categories, plain-English notes, safety labels, protected places, marker files (`CACHEDIR.TAG`), custom rules.
+- **The app:** tree-table, sunburst and treemap (curved labels), colour by category or by age, drive strip with % used and the top 5, start screen with drive cards, light/dark themes, keyboard navigation, Ctrl+F filter.
+- **Change over time:** instant reopen, "what changed" (list and Change column), live updates while open, size alerts.
+- **Finding space:** largest files with search, file types, duplicate finder, hardlink names, Leftovers view, CSV export, Explorer right-click.
+- **Cleaning up:** "Mark all" for safe-to-clear places, Recycle Bin only, re-check by file identity with the folder chain locked until the move ends, spelling-proof locks, OneDrive/Git/large/USB/running-app warnings, multi-select, deletion history.
+- **Power tools (opt-in):** PowerShell cleanup plan, NTFS compression, guided WSL/Docker disk compaction, DISM / System Protection / Storage settings.
+- **Security:** admin helper that writes nothing to disk and drops its rights before parsing, DLL-planting defence, fuzzing, `cargo audit` + `cargo deny` in CI ([details](SECURITY-AND-PRIVACY.md)).
 - **Release:** installer, portable zip, checksums, CI with a real install/uninstall test, signing-ready pipeline.
 
-## v0.2.0: left before release
-1. Check the overnight fuzzing results; fix anything found.
-2. Re-run the benchmarks on an idle PC.
-3. Measure Fast-scan peak memory and the first raw read with admin.
-4. Re-run the full local test.
-5. Bump the version, write the release notes, tag `v0.2.0`.
-
-## Planned features (15 ideas reviewed)
-Each idea was checked against the code and the rules above. "Partly" means part of it already works today.
-
-| # | Feature | Today | Plan | Release |
-|---|---|---|---|---|
-| 2 | **Dependency purge** (node_modules, Rust `target`, venv…) | Partly: detected and deletable | "Mark all" on a sub-type; Rust `target` found by its `CACHEDIR.TAG`; one confirmation; shows how to recreate it | v0.3 |
-| 15 | **Leftovers view** (old installers, ISOs, Windows.old) | Partly: rules exist | View → Leftovers, with the right route for each (e.g. Windows' own cleanup for Windows.old) | v0.3 |
-| 3 | **More cache rules** (Adobe, Spotify, Discord/Teams, browsers, shader and package caches) | Partly | Notes and safety labels; warn if the owning app is running. Docker/WSL get guided steps instead | v0.3 |
-| 6 | **Custom rules** | No | `%APPDATA%\Xylem\rules.json`, glob/extension only (no regex: too slow for 2M items). Can add categories and colours, **can never unlock protected places** | v0.3 |
-| 10 | **WinSxS cleanup** | Note only | Button that starts Windows' own DISM `/StartComponentCleanup` in a visible console behind UAC | v0.3 |
-| 9 | **Restore points / shadow copies** | Shown as locked | Show how much System Protection uses; open Windows' own settings to manage it. Xylem deletes nothing here | v0.3 |
-| 12 | **Age heatmap** | No | Last-modified date per item (≤ +8 MB, ≤ +5% scan time, measured); a third colour mode: Category / Location / Age | v0.4 |
-| 4 | **Live updates while open** | No | ReadDirectoryChangesW watcher (no admin), at most one UI update per second; "press F5" if it falls behind | v0.4 |
-| 5 | **Size alerts** | No | "Tell me if a folder grows more than N GB" while the app is open. A tray mode only if users ask, and opt-in | v0.4 |
-| 11 | **Leftover app data hints** | No | Match AppData folders to uninstalled apps; amber "possibly left over" with the evidence; never marked safe or selected automatically | v0.4 |
-| 13 | **Export plan to PowerShell** | No | Generated script re-checks every path, uses the Recycle Bin, refuses links, quotes safely; Xylem only writes it, never runs it | v0.5 |
-| 1 | **NTFS compression** | Measures compressed sizes | Windows' own `compact.exe`, user folders only, estimate first, logged, undoable | v0.5 |
-| 7 | **WSL/Docker disk compaction** | Detection only | Guided: explain, check WSL/Docker are stopped, then Windows' own tool behind UAC with a final confirm | v0.5 |
-| 14 | **Archive & replace** | No | Deferred: needs a careful verify-before-delete design | After 1.0 |
-| 8 | **Space Shifter** (move + junction) | No | Deferred: high data-loss risk; only with copy → verify → swap → original kept in the Recycle Bin | After 1.0 |
-
-Every feature ships with tests, a benchmark showing no scan slowdown, docs, and a line in the release notes.
+## The 15 reviewed feature ideas
+| # | Feature | Status |
+|---|---|---|
+| 2 | Dependency purge ("Mark all", Rust `target` by `CACHEDIR.TAG`) | Done in 0.2 |
+| 15 | Leftovers view (installers, archives, ISOs in Downloads; Windows upgrade leftovers) | Done in 0.2 |
+| 3 | More cache rules, with a warning while the owning app runs | Done in 0.2 |
+| 6 | Custom rules (glob/extension; can't unlock protection) | Done in 0.2 |
+| 10 | WinSxS cleanup with Windows' DISM | Done in 0.2 |
+| 9 | Restore points: open Windows' System Protection | Done in 0.2 |
+| 12 | Age view (last modified) | Done in 0.2 |
+| 4 | Live updates while open | Done in 0.2 |
+| 5 | Size alerts (while open; no background mode) | Done in 0.2 |
+| 11 | Leftover app-data hints (evidence shown, never marked) | Done in 0.2 |
+| 13 | Export a cleanup plan to PowerShell | Done in 0.2 |
+| 1 | NTFS compression with compact.exe (undoable) | Done in 0.2 |
+| 7 | Guided WSL/Docker virtual-disk compaction | Done in 0.2 |
+| 14 | Archive & replace | After 1.0: needs a careful verify-before-delete design |
+| 8 | Space Shifter (move + junction) | After 1.0: high data-loss risk; only with copy → verify → swap |
 
 ## Research (in progress)
-A parallel study of a faster, leaner and more secure engine. Its results slot in where they fit, ideally before v0.4 (the age heatmap changes the data layout too). Topics:
-- Parse drive data outside the admin helper, so a parser bug can never run with admin rights.
+A study of a faster, leaner engine. Results ship when they're measured to help:
 - Skip unused file-table records; find out why the first raw read is slow.
+- Count hardlinks once in the folder walk too.
 - Store repeated names once; compress the remembered-scan cache.
-- Delete through a handle opened by file ID, with long-path support.
 
 ## Before 1.0
 - Wider testing: other PCs, an HDD, non-English names, exFAT/FAT32/ReFS drives.

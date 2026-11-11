@@ -45,7 +45,8 @@ Each file record becomes exactly one entry, so a hardlinked file is counted **on
 
 ## 2. Vessels: the data model (`crates/core`)
 
-`Index` is a struct of arrays indexed by a `u32` id: `parent[] size[] alloc[] files[] flags[] name_off[] name_len[]`, plus one string arena (~50 bytes per file).
+`Index` is a struct of arrays indexed by a `u32` id: `parent[] size[] alloc[] files[] flags[] name_off[] name_len[] mtime[]`, plus one string arena (~50 bytes per file).
+- `mtime` is the last-modified day (2 bytes); folders hold the newest date inside. Both scanners get it for free from data they already read.
 - The rule **parent id < child id** makes the size roll-up one backwards loop.
 - `store.rs` saves and loads the index, checking lengths, UTF-8 and the tree invariants.
 - `view.rs` sends the UI a pruned view: about 6 levels, with tiny items merged into "N small items".
@@ -56,6 +57,9 @@ Each file record becomes exactly one entry, so a hardlinked file is counted **on
 - **One pass in id order:** a match decides a node, everything inside inherits it, and deeper matches win. About 0.1–0.2 s for 1.8 million files.
 - **Extension rules** (`.mp4`, `.gguf`…) refine files inside general places such as Documents, or anywhere for strong rules (model files).
 - **By-category view:** Category → Sub-type → the places (folders) holding those bytes.
+- **Marker files:** a folder holding `CACHEDIR.TAG` (the standard mark of build and cache folders, e.g. Rust's `target`) is "Build output".
+- **Custom rules** (`%APPDATA%\Xylem\rules.json`): a category, a sub-type and a note only. They never apply where a built-in rule matches or inside a protected place, so they can't unlock anything.
+- **"Mark all"** on a sub-type marks only places a "safe to clear" rule matched directly, never a folder that merely holds files of that type.
 
 ## 4. Canopy: the app
 
@@ -75,11 +79,29 @@ Each file record becomes exactly one entry, so a hardlinked file is counted **on
 - **What changed:** after a rescan, the new snapshot is compared with the previous one. Xylem lists the folders where the change happened: at least 1 MB or 0.1% of the total, and not just the sum of one child's change. So you see `projects\app\node_modules +60 MB` instead of every parent above it.
 - At most 8 roots are kept. After a delete, the remembered index is dropped, because it would be out of date.
 
+## 6. Live updates and alerts (`crates/session/src/watch.rs`)
+- While the app is open, `ReadDirectoryChangesW` watches the scanned folder (no admin). Changes arrive in batches, at most one per second.
+- Only the reported paths are re-measured: a changed file's size moves every folder above it, a deleted item leaves the tree. New items are counted in the status bar and join the tree at the next scan. If Windows reports more changes than it could list, Xylem says "press F5" instead of guessing.
+- Size alerts are checked after every scan and live update; nothing runs in the background when Xylem is closed.
+
+## 7. Cleanups with Windows' own tools (`tools.rs`, `power.rs`)
+Xylem itself only ever moves things to the Recycle Bin. Everything else is done by Windows' own tools, started by their full path in System32, never through a shell:
+
+| Action | Tool | Admin |
+|---|---|---|
+| Shrink WinSxS | `Dism.exe /Online /Cleanup-Image /StartComponentCleanup` | Yes (UAC) |
+| Restore points | System Protection settings | Windows asks |
+| Windows.old, upgrade files | Settings > Storage | Windows asks |
+| Compress a folder / undo | `compact.exe /C /EXE:LZX` / `/U /EXE` | No |
+| Compact a WSL/Docker disk | `diskpart` (attach read-only, compact), fed through a pipe by `xylem.exe --helper-compact-vhdx` | Yes (UAC) |
+| Cleanup plan | A PowerShell script Xylem writes for you to review; dry run unless `-Run` | It never runs it |
+
 ## Accuracy
 
 | Situation | What Xylem does |
 |---|---|
 | Hardlinks | Fast scan counts them once. The folder walk can't tell, so it counts each name. |
+| Live updates | Changed files' size on disk is rounded to 4 KB clusters until the next scan (exact for compressed files) |
 | Compressed / sparse / CompactOS files | Size on disk = bytes actually used |
 | OneDrive online-only files | Size on disk ≈ 0, tagged as cloud |
 | Symlinks / junctions | Tagged as links, never followed |

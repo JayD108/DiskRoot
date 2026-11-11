@@ -5,7 +5,9 @@
 ## What Xylem reads and doesn't do
 - It reads **file names, sizes and attributes** only. It doesn't read what's inside your files, **except the duplicate finder**, which you start yourself (View → Find duplicate files). It compares files of the same size by their contents, on your PC only. It skips online-only cloud files (reading them would download them) and treats hardlinks as one file.
 - It has **no network code**: no HTTP client and no browser engine anywhere in its dependencies. It was measured with 0 network connections.
-- It changes nothing on your computer except when **you** delete something, and that goes to the Recycle Bin.
+- It changes nothing on your computer except when **you** delete something (that goes to the Recycle Bin) or start one of Windows' own cleanup tools from it (below).
+- **Live updates** use Windows' change notifications for the scanned folder while the app is open; they read nothing else and stop when the app closes.
+- **Leftover hints** read the list of installed programs from the registry (the same list as Settings > Apps) and the names of running programs. Nothing is stored or sent.
 
 ## Disk access
 - Drives are opened **read-only** (`GENERIC_READ`, unbuffered). The scanning code contains no write calls.
@@ -35,6 +37,16 @@
 - **Hidden characters** in names (such as right-to-left overrides) are shown visibly in the delete dialog and the history.
 - **History:** every delete (recycled, cancelled or refused) is logged in `%LOCALAPPDATA%\Xylem\deletions.log`; see File → Deletion history.
 
+## Windows' own tools
+Some cleanups are done by Windows, not by Xylem, and only when you click them:
+- DISM component cleanup (WinSxS) and virtual-disk compaction ask for admin through the Windows prompt. Compaction runs `xylem.exe --helper-compact-vhdx <file>`: it accepts only an existing `.vhdx` outside Windows, refuses if anything has the disk open, and hands diskpart its commands through a pipe (no script file another program could change). Release builds only do this from the installed copy.
+- `compact.exe` (folder compression) runs without admin, on your own folders, never on cloud folders; Uncompress undoes it.
+- Tools are started by their full path in System32 and never through `cmd.exe`, so no argument is interpreted by a shell.
+- The PowerShell cleanup plan is a file Xylem writes for you; Xylem never runs it. It's a dry run unless you add `-Run`, re-checks every item, and only uses the Recycle Bin.
+
+## Your own rules
+`%APPDATA%\Xylem\rules.json` can add categories, sub-types and notes. It can't set protection, safety labels or actions (such fields are refused), and its rules never apply where a built-in rule matches or inside a protected place.
+
 ## Integrity check
 The shield button (or Help → Security & privacy) shows:
 - whether this copy runs from Program Files;
@@ -53,6 +65,8 @@ The shield button (or Help → Security & privacy) shows:
 
 ## Security review
 The code was reviewed against a security test plan (16 findings). All are fixed or documented:
+- The Fast-scan helper opens the drive and the result pipe, then drops every privilege, lowers itself to Low integrity and blocks child processes before reading any drive data, so a parser bug can't use admin rights.
+- Deleting keeps every folder above the item open (rename-proof) from the final identity check until the Recycle Bin move ends.
 - The installer always installs to Program Files and starts Xylem un-elevated.
 - Fast scan works only from the installed copy; the helper writes nothing to disk and has a cancel button and a time limit.
 - `explorer.exe` is started by its full path; network drives aren't probed at startup.

@@ -57,7 +57,10 @@ crates/
   core/        Index, store, view, classify (+ rules.json), report, format
   scan-walk/   folder-walk scanner
   scan-mft/    MFT reader: volume.rs, record.rs, scan.rs, fuzz.rs
-  session/     engine API; elevated helper; Recycle Bin; safety.rs; integrity.rs
+  session/     engine API (lib.rs); elevated helper (helper.rs, elevate.rs, lockdown.rs);
+               safety.rs, integrity.rs, recycle.rs; remember.rs (reopen, what changed);
+               dupes.rs; watch.rs (live updates); tools.rs + power.rs (Windows' own
+               tools); orphans.rs (leftover app-data hints)
   native/      xylem.exe: the app (egui) + helper mode
   cli/         xylem-cli.exe
   bench/       xylem-bench.exe: gen | run | time | verify | modes

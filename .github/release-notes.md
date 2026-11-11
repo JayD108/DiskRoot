@@ -2,6 +2,15 @@
 
 **Xylem {{VERSION}}**: a fast disk space analyzer for Windows 10/11. It shows what fills your drive, what each thing is, and whether it's safe to delete.
 
+## New in 0.2
+- **Instant reopen and "what changed":** your last scan opens in under a second; after a rescan, the folders that grew or shrank are listed and shown in a Change column.
+- **Clean up with confidence:** "Mark all" for safe-to-clear places (`node_modules`, Rust `target`, caches), a Leftovers view (old installers, archives and disk images in Downloads, Windows upgrade leftovers, possibly orphaned app data), custom rules, and Windows' own DISM / System Protection / Storage cleanups.
+- **See it happen:** colour by age (last modified), live updates while the app is open, size alerts.
+- **Power tools (opt-in):** export marked items as a PowerShell cleanup script (dry run by default), NTFS compression with compact.exe, guided WSL/Docker virtual-disk compaction.
+- **Finding space:** largest files with search, file types, duplicate finder, hardlink names, CSV export, Explorer right-click.
+- **Safer:** the elevated helper drops its admin rights before reading drive data; deletes keep the folder chain locked until the Recycle Bin move ends; a running app that uses a cache is pointed out before deleting it.
+- **Lighter:** scan data for 1.9M items 204 → 143 MB.
+
 ## What it does
 - Scans a whole NTFS drive in about 1–2 seconds by reading its Master File Table, read-only, after the Windows admin prompt. Without admin it walks folders (no prompt).
 - Tree-table with a sunburst or treemap. Groups by location *or* by category (apps, media, dev stuff, AI & data, system, temp & caches…).
