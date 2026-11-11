@@ -6,7 +6,9 @@
 //! folder", "is this safe to delete") is a method here, so the UI never
 //! holds the full tree.
 
+pub mod compress;
 pub mod dupes;
+pub mod similar;
 pub mod elevate;
 pub mod helper;
 pub mod integrity;
@@ -577,31 +579,101 @@ It may be left over from an uninstalled program, or belong to one that's install
         out
     }
 
-    /// For NTFS compression: (bytes that could be compressed, rough saving).
-    /// Skips files already compressed, sparse, cloud placeholders and links.
-    pub fn compress_estimate(&self, node: u32) -> (u64, u64) {
-        let idx = &self.index;
-        let (mut bytes, mut saving) = (0u64, 0f64);
-        if self.check(node).is_err() {
-            return (0, 0);
+    /// What compressing `node` (or with `undo`, uncompressing it) would
+    /// touch, from the scan alone (no file is opened). Refuses protected
+    /// places, cloud folders and whole drives; protected places *inside*
+    /// are left out, like links and cloud placeholders.
+    pub fn compress_plan(&self, node: u32, undo: bool) -> Result<compress::Plan, String> {
+        let info = self.info(node)?;
+        if let Some(why) = info.protected {
+            return Err(why);
         }
+        let root = PathBuf::from(&info.path);
+        if info.path.trim_end_matches('\\').len() <= 2 {
+            return Err("Xylem won't compress a whole drive.".into());
+        }
+        if self.index.flags(node) & flags::CLOUD != 0 || safety::in_cloud_folder(&root) {
+            return Err("This is in a OneDrive folder. Compressing would make OneDrive download and upload it again, so Xylem leaves cloud folders alone.".into());
+        }
+        compress::check_volume(&root)?;
+        let idx = &self.index;
+        let mut plan = compress::Plan { root, ..compress::Plan::default() };
+        let mut estimate = 0f64;
         let mut stack = vec![node];
         while let Some(x) = stack.pop() {
+            let fl = idx.flags(x);
+            if fl & flags::DELETED != 0 {
+                continue;
+            }
             if idx.is_dir(x) {
-                if idx.flags(x) & flags::LINK == 0 {
+                if x != node && self.cls.protected_here(&self.rules, x).is_some() {
+                    plan.protected_inside += 1;
+                } else if fl & flags::LINK == 0 {
                     stack.extend(self.children.live(idx, x));
                 }
                 continue;
             }
-            if idx.flags(x) & (flags::COMPRESSED | flags::SPARSE | flags::CLOUD | flags::LINK) != 0 {
+            let (size, alloc) = (idx.size(x), idx.alloc(x));
+            let add = |c: &mut compress::Count| {
+                c.0 += 1;
+                c.1 += alloc;
+            };
+            if fl & (flags::CLOUD | flags::LINK | flags::SPARSE) != 0 {
+                add(&mut plan.skipped_already);
                 continue;
             }
-            let a = idx.alloc(x);
-            let ext = idx.name(x).rsplit_once('.').map_or("", |e| e.1);
-            bytes += a;
-            saving += a as f64 * power::compress_ratio(ext);
+            let full = size.div_ceil(4096) * 4096;
+            if undo {
+                // Windows-compressed files take less space than their size
+                // (NTFS-compressed ones are a different thing: left alone).
+                if fl & flags::COMPRESSED == 0 && alloc < full {
+                    plan.needs_free += full - alloc;
+                } else {
+                    continue;
+                }
+            } else {
+                let ext = idx.name(x).rsplit_once('.').map_or("", |e| e.1);
+                if fl & flags::COMPRESSED != 0 || alloc < full / 10 * 9 {
+                    add(&mut plan.skipped_already);
+                    continue;
+                }
+                if alloc <= 4096 {
+                    add(&mut plan.skipped_tiny);
+                    continue;
+                }
+                if compress::incompressible(ext) {
+                    add(&mut plan.skipped_formats);
+                    continue;
+                }
+                estimate += alloc as f64 * compress::ratio(ext);
+            }
+            plan.bytes += alloc;
+            plan.files.push(compress::PlanFile { node: x, path: PathBuf::from(idx.path(x)), size, alloc });
         }
-        (bytes, saving as u64)
+        plan.files.sort_unstable_by_key(|f| std::cmp::Reverse(f.alloc));
+        plan.estimate_max = estimate as u64;
+        Ok(plan)
+    }
+
+    /// After compressing: the new size on disk of each changed file, so the
+    /// tree and map are right without scanning again.
+    pub fn apply_new_alloc(&mut self, changes: &[(u32, u64)]) {
+        if changes.is_empty() {
+            return;
+        }
+        let idx = Arc::make_mut(&mut self.index);
+        for &(n, alloc) in changes {
+            if (n as usize) < idx.len() && !idx.is_dir(n) && idx.flags(n) & flags::DELETED == 0 {
+                let size = idx.size(n);
+                idx.resize_file(n, size, alloc, 0);
+            }
+        }
+        self.cats = CatStats::compute(&self.index, &self.cls, self.rules.subs.len());
+    }
+
+    /// View > Similar folders: likely copies and folders with similar names.
+    pub fn similar_folders(&self) -> similar::Found {
+        similar::find(&self.index, &self.children, |x| self.cls.protected_here(&self.rules, x).is_some())
     }
 
     /// Items for a PowerShell cleanup plan: every node that passes the same
@@ -1108,23 +1180,27 @@ It may be left over from an uninstalled program, or belong to one that's install
     }
 }
 
-/// Size on disk of a file that changed while watching: exact for compressed
-/// and sparse files (asks Windows), else rounded up to 4 KB clusters.
+/// Size on disk of a file that changed while watching: asks Windows (exact
+/// for NTFS-compressed, sparse and Windows-compressed files), else the size
+/// rounded up to 4 KB clusters.
 fn live_alloc(path: &Path, size: u64, node_flags: u8) -> u64 {
-    if node_flags & (flags::COMPRESSED | flags::SPARSE) != 0 {
-        #[link(name = "kernel32", kind = "raw-dylib")]
-        unsafe extern "system" {
-            fn GetCompressedFileSizeW(name: *const u16, high: *mut u32) -> u32;
-        }
-        let w: Vec<u16> = path.as_os_str().to_string_lossy().encode_utf16().chain([0]).collect();
-        let mut high = 0u32;
-        // SAFETY: NUL-terminated path and a valid out pointer.
-        let low = unsafe { GetCompressedFileSizeW(w.as_ptr(), &mut high) };
-        if low != u32::MAX {
-            return u64::from(high) << 32 | u64::from(low);
+    #[link(name = "kernel32", kind = "raw-dylib")]
+    unsafe extern "system" {
+        fn GetCompressedFileSizeW(name: *const u16, high: *mut u32) -> u32;
+    }
+    let rounded = size.div_ceil(4096) * 4096;
+    let w: Vec<u16> = path.as_os_str().to_string_lossy().encode_utf16().chain([0]).collect();
+    let mut high = 0u32;
+    // SAFETY: NUL-terminated path and a valid out pointer.
+    let low = unsafe { GetCompressedFileSizeW(w.as_ptr(), &mut high) };
+    if low != u32::MAX {
+        let real = u64::from(high) << 32 | u64::from(low);
+        // Plain files report their size here, not clusters: keep the rounding for them.
+        if node_flags & (flags::COMPRESSED | flags::SPARSE) != 0 || real < size {
+            return real;
         }
     }
-    size.div_ceil(4096) * 4096
+    rounded
 }
 
 /// A delete that passed the protection check (see [`Scanned::prepare_delete`]).

@@ -149,6 +149,12 @@ struct Listing {
     subdirs: Vec<(u32, Vec<u16>)>,
     /// This folder's handle, kept open so subfolders can open relative to it.
     handle: Option<Arc<OwnedHandle>>,
+    /// (index into `metas`, name) of files whose listed size on disk is less
+    /// than their size without being sparse or NTFS-compressed: files
+    /// compressed by Windows (compact /EXE, CompactOS, Xylem). The listing
+    /// shows only the emptied main stream for them (often 0), so their
+    /// real size on disk is asked for separately.
+    shrunk: Vec<(u32, Vec<u16>)>,
     unreadable: bool,
 }
 
@@ -370,10 +376,58 @@ fn list_dir(task: &Task, buf: &mut [u64], units: &mut Vec<u16>) -> Listing {
             break;
         }
     }
+    for (i, name) in std::mem::take(&mut out.shrunk) {
+        if let Some(real) = real_on_disk(&handle, &name) {
+            out.metas[i as usize].alloc = real;
+        }
+    }
     if !out.subdirs.is_empty() {
         out.handle = Some(Arc::new(handle));
     }
     out
+}
+
+/// Real size on disk of a file in `dir` (what GetCompressedFileSizeW
+/// reports), for files compressed by Windows' file compression.
+fn real_on_disk(dir: &OwnedHandle, name: &[u16]) -> Option<u64> {
+    let byte_len = u16::try_from(name.len() * 2).ok()?;
+    let mut uname = UnicodeString { length: byte_len, maximum_length: byte_len, buffer: name.as_ptr().cast_mut() };
+    let mut attrs = ObjectAttributes {
+        length: size_of::<ObjectAttributes>() as u32,
+        root_directory: dir.as_raw_handle(),
+        object_name: &mut uname,
+        attributes: OBJ_CASE_INSENSITIVE,
+        security_descriptor: null_mut(),
+        security_qos: null_mut(),
+    };
+    let mut raw: Handle = null_mut();
+    let mut iosb = IoStatusBlock::default();
+    // SAFETY: pointers refer to live locals; `name` and `dir` outlive the call.
+    let status = unsafe {
+        NtOpenFile(
+            &mut raw,
+            FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            &mut attrs,
+            &mut iosb,
+            FILE_SHARE_ALL,
+            FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT | FILE_OPEN_FOR_BACKUP_INTENT,
+        )
+    };
+    if status < 0 || raw.is_null() {
+        return None;
+    }
+    // SAFETY: NtOpenFile succeeded, so `raw` is a handle we now own.
+    let file = unsafe { OwnedHandle::from_raw_handle(raw) };
+    let mut info = [0u64; 8];
+    for class in [FILE_COMPRESSION_INFORMATION, FILE_STANDARD_INFORMATION] {
+        let mut iosb = IoStatusBlock::default();
+        // SAFETY: valid handle; `info` is large enough for both classes.
+        let st = unsafe { NtQueryInformationFile(file.as_raw_handle(), &mut iosb, info.as_mut_ptr().cast(), 64, class) };
+        if st >= 0 {
+            return Some(info[0]);
+        }
+    }
+    None
 }
 
 /// Parses one buffer of FILE_FULL_DIR_INFORMATION records. Returns false
@@ -410,6 +464,9 @@ fn parse_entries(bytes: &[u8], units: &mut Vec<u16>, out: &mut Listing) -> bool 
 
             if is_dir && f & flags::LINK == 0 {
                 out.subdirs.push((out.metas.len() as u32, units.clone()));
+            }
+            if !is_dir && size > 4096 && alloc < size && f & (flags::SPARSE | flags::COMPRESSED | flags::CLOUD | flags::LINK) == 0 {
+                out.shrunk.push((out.metas.len() as u32, units.clone()));
             }
             let mtime = xylem_core::filetime_days(rd_u64(e, OFF_LAST_WRITE));
             out.metas.push(Meta { name_len, size, alloc, flags: f, mtime });

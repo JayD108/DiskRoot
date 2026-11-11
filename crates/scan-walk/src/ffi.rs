@@ -12,6 +12,13 @@ pub const FILE_SHARE_ALL: u32 = 0x1 | 0x2 | 0x4; // read | write | delete
 pub const FILE_DIRECTORY_FILE: u32 = 0x0000_0001;
 pub const FILE_SYNCHRONOUS_IO_NONALERT: u32 = 0x0000_0020;
 pub const FILE_OPEN_FOR_BACKUP_INTENT: u32 = 0x0000_4000;
+pub const FILE_READ_ATTRIBUTES: u32 = 0x0000_0080;
+pub const FILE_NON_DIRECTORY_FILE: u32 = 0x0000_0040;
+pub const FILE_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+/// FILE_COMPRESSION_INFORMATION (starts with the compressed size).
+pub const FILE_COMPRESSION_INFORMATION: u32 = 28;
+/// FILE_STANDARD_INFORMATION (starts with the allocation size).
+pub const FILE_STANDARD_INFORMATION: u32 = 5;
 pub const OBJ_CASE_INSENSITIVE: u32 = 0x0000_0040;
 
 #[repr(C)]
@@ -81,6 +88,7 @@ unsafe extern "system" {
         share: u32,
         open_options: u32,
     ) -> i32;
+    pub fn NtQueryInformationFile(handle: Handle, io_status: *mut IoStatusBlock, info: *mut c_void, length: u32, class: u32) -> i32;
     pub fn NtQueryDirectoryFile(
         handle: Handle,
         event: Handle,

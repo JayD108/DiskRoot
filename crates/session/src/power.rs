@@ -2,8 +2,8 @@
 //!
 //! - [`powershell_plan`]: a cleanup script for review and running elsewhere.
 //!   Xylem writes it and never runs it.
-//! - [`compact_folder`]: NTFS compression with Windows' `compact.exe`
-//!   (no admin, user folders only, undoable).
+//! - Folder compression lives in [`crate::compress`] (Xylem's own engine
+//!   driving Windows' file compression directly).
 //! - [`compact_vhdx`]: shrinks a WSL/Docker virtual disk with Windows'
 //!   `diskpart` behind the UAC prompt, only while nothing uses the disk.
 
@@ -96,45 +96,6 @@ if ($Run) { "Done: $done recycled, $skipped skipped." } else { "Dry run: nothing
 "#,
     );
     s
-}
-
-/// Rough savings of NTFS (LZX) compression for files of this extension:
-/// already-compressed formats save ~nothing, programs ~40%, the rest ~50%.
-/// Only an estimate; the real result depends on the data.
-pub fn compress_ratio(ext: &str) -> f64 {
-    const NONE: [&str; 38] = [
-        "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "avif", "mp4", "mkv", "mov", "avi", "webm", "m4v", "mp3", "m4a", "aac", "flac",
-        "ogg", "opus", "zip", "7z", "rar", "gz", "tgz", "xz", "bz2", "zst", "cab", "jar", "apk", "docx", "xlsx", "pptx", "pdf", "iso",
-        "vhdx", "safetensors",
-    ];
-    let e = ext.to_ascii_lowercase();
-    if NONE.contains(&e.as_str()) {
-        0.0
-    } else if matches!(e.as_str(), "exe" | "dll" | "sys" | "node" | "pyd" | "so") {
-        0.4
-    } else {
-        0.5
-    }
-}
-
-/// Compresses (or with `undo`, uncompresses) every file in `folder` with
-/// Windows' compact.exe, LZX ("/EXE:LZX": strong, read-only friendly; a
-/// file that's written to again is stored uncompressed). No admin needed
-/// for your own files. Blocks: run it on a worker thread.
-pub fn compact_folder(folder: &Path, undo: bool) -> Result<String, String> {
-    let p = folder.to_string_lossy();
-    if let Some(why) = unsafe_path(&p) {
-        return Err(format!("The path {why}."));
-    }
-    let p = p.trim_end_matches('\\');
-    if p.len() <= 3 {
-        return Err("Xylem won't compress a whole drive.".into());
-    }
-    let args = if undo { format!("/U /EXE /S:\"{p}\" /I /Q") } else { format!("/C /EXE:LZX /S:\"{p}\" /I /Q") };
-    match tools::run_system_tool("compact.exe", &args)? {
-        0 => Ok(if undo { "Windows uncompressed the folder.".into() } else { "Windows compressed the folder.".into() }),
-        c => Err(format!("compact.exe finished with code {c}: some files may be in use or not allowed. Scan again to see the result.")),
-    }
 }
 
 /// True if a program has the file open (WSL or Docker running): an
@@ -287,43 +248,4 @@ mod tests {
         assert_eq!(run_if_compact_helper(&a(&["x", "--helper-compact-vhdx", r"C:\nope\missing.vhdx"])), Some(COMPACT_BAD_ARGS));
     }
 
-    /// `cargo test -p xylem-session compact_folder_round_trip -- --ignored`
-    /// (opens a minimized compact.exe window twice).
-    #[test]
-    #[ignore = "runs Windows' compact.exe on a temp folder"]
-    fn compact_folder_round_trip() {
-        let dir = std::env::temp_dir().join(format!("xylem-compact-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("sub dir")).unwrap();
-        let f = dir.join("sub dir").join("text.txt");
-        std::fs::write(&f, "xylem ".repeat(200_000)).unwrap();
-        let on_disk = |p: &Path| {
-            #[link(name = "kernel32", kind = "raw-dylib")]
-            unsafe extern "system" {
-                fn GetCompressedFileSizeW(name: *const u16, high: *mut u32) -> u32;
-            }
-            let w: Vec<u16> = p.to_string_lossy().encode_utf16().chain([0]).collect();
-            let mut high = 0;
-            // SAFETY: NUL-terminated path, valid out pointer.
-            let low = unsafe { GetCompressedFileSizeW(w.as_ptr(), &mut high) };
-            u64::from(high) << 32 | u64::from(low)
-        };
-        let before = on_disk(&f);
-        compact_folder(&dir, false).unwrap();
-        let packed = on_disk(&f);
-        compact_folder(&dir, true).unwrap();
-        let after = on_disk(&f);
-        println!("{before} -> {packed} -> {after}");
-        assert!(packed < before / 4, "LZX shrinks repetitive text a lot: {before} -> {packed}");
-        assert!(after >= before, "undo restores it: {after}");
-        assert_eq!(std::fs::read_to_string(&f).unwrap().len(), 1_200_000, "content unchanged");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn estimate_ratios() {
-        assert_eq!(compress_ratio("MP4"), 0.0);
-        assert_eq!(compress_ratio("dll"), 0.4);
-        assert_eq!(compress_ratio("txt"), 0.5);
-    }
 }

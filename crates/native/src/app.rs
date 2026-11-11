@@ -12,7 +12,9 @@ use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, Frame, Key, Layout, Margin, Modal, Rect, RichText, ScrollArea, Sense,
     Stroke, StrokeKind, TextEdit, Ui, ViewportCommand, pos2, vec2,
 };
+use xylem_session::compress::{self, Level};
 use xylem_session::integrity::{Integrity, SignatureState};
+use xylem_session::similar;
 use xylem_session::remember::{self, Changes, PrevSizes};
 use xylem_session::safety::{DeleteWarnings, LogEntry, visible};
 use xylem_session::{Action, DeleteOut, FileRow, ItemInfo, Leftover, PendingDelete, RulesStatus, Safety, Scanned, Shape, Summary, TypeRow};
@@ -59,6 +61,8 @@ enum JobKind {
     DeleteMany(usize),
     /// A Windows tool Xylem started and waits for (e.g. DISM).
     Tool(String),
+    /// Xylem's compression engine: title, live counters, total bytes, total files.
+    Compress(String, Arc<compress::Progress>, u64, u64),
 }
 
 /// A remembered scan opened at startup: the scan, when it was made, the
@@ -78,6 +82,7 @@ enum Done {
     Exported(Result<std::path::PathBuf, String>),
     DeletedMany(Vec<(u32, Result<DeleteOut, String>)>),
     Tool(Result<String, String>),
+    Compressed(Box<compress::Report>),
 }
 
 struct Job {
@@ -104,14 +109,24 @@ enum Dialog {
     Rules,
     /// View > Size alerts.
     Alerts,
-    /// NTFS compression of a folder: (path, compressible bytes, rough saving).
-    Compress(String, u64, u64),
+    /// Compress (or uncompress) a folder with Xylem's engine.
+    Compress(Box<CompressAsk>),
+    /// View > Similar folders.
+    Similar(Box<similar::Found>),
     /// Compacting a WSL/Docker virtual disk: (path, size, in use).
     Vhdx(String, u64, bool),
     /// View > Leftovers.
     Leftovers(Vec<Leftover>),
     /// Explains a Windows tool before starting it.
     Tool(Action),
+}
+
+/// The Compress dialog: what would be packed (and unpacked), and the level.
+struct CompressAsk {
+    path: String,
+    plan: compress::Plan,
+    undo: compress::Plan,
+    level: Level,
 }
 
 /// Deleting several marked items at once: each one prepared and armed on
@@ -424,6 +439,10 @@ impl XylemApp {
             Ok(Done::Deleted(node, r)) => self.finish_delete(node, r),
             Ok(Done::Reopened(r)) => self.finish_reopen(*r),
             Ok(Done::DeletedMany(results)) => self.finish_delete_many(results),
+            Ok(Done::Compressed(r)) => {
+                self.job = None;
+                self.finish_compress(*r);
+            }
             Ok(Done::Tool(r)) => {
                 self.job = None;
                 self.dialog = Some(match r {
@@ -961,6 +980,16 @@ impl XylemApp {
                     ui.close();
                 }
                 if ui
+                    .add_enabled(self.scanned.is_some(), egui::Button::new("Similar folders…"))
+                    .on_hover_text("Folders that look like copies of each other, and folders with similar names (project, project_v2, project - Copy)")
+                    .clicked()
+                {
+                    if let Some(s) = &self.scanned {
+                        self.dialog = Some(Dialog::Similar(Box::new(s.similar_folders())));
+                    }
+                    ui.close();
+                }
+                if ui
                     .add_enabled(self.scanned.is_some(), egui::Button::new("Leftovers…"))
                     .on_hover_text("Old installers, archives and disk images in Downloads, and Windows upgrade leftovers")
                     .clicked()
@@ -1468,6 +1497,10 @@ impl XylemApp {
                                     ctx_action = Some((i, "delete"));
                                     ui.close();
                                 }
+                                if r.dir && ui.add_enabled(self.job.is_none(), egui::Button::new("Compress…")).clicked() {
+                                    ctx_action = Some((i, "compress"));
+                                    ui.close();
+                                }
                                 if r.dir {
                                     ui.menu_button("Alert me if it grows by", |ui| {
                                         for (label, act) in [("1 GB", "alert-1"), ("5 GB", "alert-5"), ("10 GB", "alert-10"), ("50 GB", "alert-50")] {
@@ -1525,6 +1558,7 @@ impl XylemApp {
                     self.select(Key_::Node(n));
                     match act {
                         "reveal" => self.reveal_in_explorer(n),
+                        "compress" => self.ask_compress(n),
                         a if a.starts_with("alert-") => {
                             let gb: u64 = a[6..].parse().unwrap_or(1);
                             self.add_alert(n, gb << 30);
@@ -1577,6 +1611,86 @@ impl XylemApp {
         if let Err(e) = r {
             self.dialog = Some(Dialog::Message("Couldn't open it".into(), e));
         }
+    }
+
+    /// Opens the Compress dialog for a folder, or says why it can't be done.
+    fn ask_compress(&mut self, n: u32) {
+        let Some(s) = &self.scanned else { return };
+        let path = s.info(n).map(|i| i.path).unwrap_or_default();
+        self.dialog = Some(match (s.compress_plan(n, false), s.compress_plan(n, true)) {
+            (Ok(plan), Ok(undo)) => Dialog::Compress(Box::new(CompressAsk { path, plan, undo, level: Level::Fast })),
+            (Err(e), _) | (_, Err(e)) => Dialog::Message("Xylem won't compress this".into(), e),
+        });
+    }
+
+    /// Runs the compression engine on a worker thread; the progress dialog
+    /// reads its live counters.
+    fn start_compress(&mut self, plan: compress::Plan, level: Option<Level>) {
+        if self.job.is_some() {
+            return;
+        }
+        let progress = Arc::new(compress::Progress::default());
+        let (tx, rx) = mpsc::channel();
+        let (total, files) = (plan.bytes, plan.files.len() as u64);
+        let title = match level {
+            Some(l) => format!("Compressing ({})", l.label()),
+            None => "Uncompressing".to_owned(),
+        };
+        let pr = Arc::clone(&progress);
+        std::thread::spawn(move || {
+            let r = compress::run(&plan, level, compress::default_threads(), &pr);
+            let _ = tx.send(Done::Compressed(Box::new(r)));
+        });
+        self.job = Some(Job { kind: JobKind::Compress(title, progress, total, files), started: Instant::now(), rx, cancel: Arc::default() });
+    }
+
+    /// After compressing: new sizes into the tree, and a plain summary.
+    fn finish_compress(&mut self, r: compress::Report) {
+        if let Some(s) = &mut self.scanned {
+            s.apply_new_alloc(&r.new_alloc);
+        }
+        self.rows = None;
+        self.map = None;
+        let n = |c: compress::Count| fmt_count(c.0);
+        let mut lines = Vec::new();
+        if r.undo {
+            lines.push(format!("{} files restored to normal storage: {} → {} on disk.", fmt_count(r.changed_files), fmt_bytes(r.before), fmt_bytes(r.after)));
+        } else {
+            lines.push(format!(
+                "{} files packed: {} → {} on disk, {} saved, in {:.0} s.",
+                fmt_count(r.changed_files),
+                fmt_bytes(r.before),
+                fmt_bytes(r.after),
+                fmt_bytes(r.saved()),
+                r.secs
+            ));
+        }
+        if r.wont_shrink.0 > 0 {
+            lines.push(format!("{} files left as they were: they wouldn't get smaller.", n(r.wont_shrink)));
+        }
+        if r.in_use.0 > 0 {
+            lines.push(format!("{} files skipped: another program is using them.", n(r.in_use)));
+        }
+        if r.denied.0 > 0 {
+            lines.push(format!("{} files skipped: Windows doesn't allow changing them (read-only or no permission).", n(r.denied)));
+        }
+        if r.skipped.0 > 0 {
+            lines.push(format!("{} files skipped: already in that state, changed since the scan, or not where the scan saw them.", n(r.skipped)));
+        }
+        if r.failed.0 > 0 {
+            lines.push(format!("{} files failed: {}", n(r.failed), r.first_error.clone().unwrap_or_default()));
+        }
+        if r.cancelled {
+            lines.push("Stopped. Files already done stay that way (each file is all or nothing); the rest are untouched. Run it again to continue.".into());
+        }
+        lines.push("The tree already shows the new sizes.".into());
+        let title = match (r.undo, r.cancelled) {
+            (false, false) => "Compressed",
+            (false, true) => "Compression stopped",
+            (true, false) => "Uncompressed",
+            (true, true) => "Uncompressing stopped",
+        };
+        self.dialog = Some(Dialog::Message(title.into(), lines.join("\n\n")));
     }
 
     /// Runs a blocking tool call on a worker thread behind the progress dialog.
@@ -2126,7 +2240,7 @@ impl XylemApp {
                                 && info.parent.is_some()
                                 && !cloud
                                 && self.job.is_none()
-                                && ui.add_sized([170.0, 28.0], egui::Button::new("Compress with Windows…")).on_hover_text("NTFS compression with Windows' compact.exe: same files, less space. Undoable.").clicked()
+                                && ui.add_sized([170.0, 28.0], egui::Button::new("Compress…")).on_hover_text("Xylem's fast compression (Windows' own file compression, several files at once): same files, less space. Undoable.").clicked()
                             {
                                 action = Some(("compress", *n));
                             }
@@ -2175,14 +2289,7 @@ impl XylemApp {
             if let Some((a, n)) = action {
                 match a {
                     "reveal" => self.reveal_in_explorer(n),
-                    "compress" => {
-                        if let Some(s) = &self.scanned
-                            && let Ok(i) = s.info(n)
-                        {
-                            let (bytes, saving) = s.compress_estimate(n);
-                            self.dialog = Some(Dialog::Compress(i.path, bytes, saving));
-                        }
-                    }
+                    "compress" => self.ask_compress(n),
                     "vhdx" => {
                         if let Some(s) = &self.scanned
                             && let Ok(i) = s.info(n)
@@ -2217,6 +2324,10 @@ impl XylemApp {
                 JobKind::Reopen(p) => (format!("Opening the remembered scan of {p}"), "Loading the last scan from this PC…".to_owned()),
                 JobKind::Export(p) => ("Exporting to CSV".to_owned(), format!("Writing {p}…")),
                 JobKind::DeleteMany(n) => (format!("Moving {n} items to the Recycle Bin"), "Each item is re-checked on disk first…".to_owned()),
+                JobKind::Compress(title, ..) => (
+                    title.clone(),
+                    format!("Windows' own file compression, {} files at a time. You can keep using the PC; files stay usable throughout.", compress::default_threads()),
+                ),
                 JobKind::Tool(name) => (
                     name.clone(),
                     "Approve the Windows prompt. The tool runs in its own window and can take several minutes; Xylem waits until it's done.".to_owned(),
@@ -2235,10 +2346,35 @@ impl XylemApp {
                 let (r, _) = ui.allocate_exact_size(vec2(420.0, 8.0), Sense::hover());
                 let p = ui.painter();
                 p.rect_filled(r, CornerRadius::same(4), t.head);
-                let w = r.width() * 0.28;
-                let k = (1.0 - (secs * 2.2).cos()) / 2.0; // 0 → 1 → 0, smooth
-                let x = r.min.x + k * (r.width() - w);
-                p.rect_filled(Rect::from_min_size(pos2(x, r.min.y), vec2(w, r.height())), CornerRadius::same(4), t.accent);
+                if let JobKind::Compress(_, pr, total, _) = &job.kind {
+                    // Real progress: bytes handled out of the plan's total.
+                    let done = pr.done.load(Ordering::Relaxed);
+                    let frac = if *total == 0 { 1.0 } else { (done as f32 / *total as f32).clamp(0.0, 1.0) };
+                    p.rect_filled(Rect::from_min_size(r.min, vec2(r.width() * frac, r.height())), CornerRadius::same(4), t.accent);
+                } else {
+                    let w = r.width() * 0.28;
+                    let k = (1.0 - (secs * 2.2).cos()) / 2.0; // 0 → 1 → 0, smooth
+                    let x = r.min.x + k * (r.width() - w);
+                    p.rect_filled(Rect::from_min_size(pos2(x, r.min.y), vec2(w, r.height())), CornerRadius::same(4), t.accent);
+                }
+                if let JobKind::Compress(title, pr, total, files) = &job.kind {
+                    let done = pr.done.load(Ordering::Relaxed);
+                    let speed = done as f64 / f64::from(secs.max(0.1));
+                    let left = if speed > 0.0 { (total.saturating_sub(done)) as f64 / speed } else { 0.0 };
+                    let saved = pr.saved.load(Ordering::Relaxed);
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(format!(
+                        "{} of {} · {} of {} files · {}/s · about {} left",
+                        fmt_bytes(done),
+                        fmt_bytes(*total),
+                        fmt_count(pr.files_done.load(Ordering::Relaxed)),
+                        fmt_count(*files),
+                        fmt_bytes(speed as u64),
+                        if left >= 90.0 { format!("{:.0} min", left / 60.0) } else { format!("{left:.0} s") }
+                    )).color(t.muted));
+                    let what = if title.starts_with("Uncompressing") { "given back to the files" } else { "saved" };
+                    ui.label(RichText::new(format!("{} {what} so far", fmt_bytes(saved))).color(t.accent));
+                }
                 if matches!(job.kind, JobKind::Scan(_)) {
                     let found = xylem_session::scan_progress();
                     ui.add_space(4.0);
@@ -2255,6 +2391,15 @@ impl XylemApp {
                             }
                         });
                     }
+                    if let JobKind::Compress(_, pr, ..) = &job.kind {
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let stopping = pr.cancel.load(Ordering::Relaxed);
+                            let label = if stopping { "Stopping after the current files…" } else { "Stop" };
+                            if ui.add_enabled(!stopping, egui::Button::new(label)).on_hover_text("Files already done stay compressed; the rest are left as they are.").clicked() {
+                                pr.cancel.store(true, Ordering::Relaxed);
+                            }
+                        });
+                    }
                 });
             });
             return;
@@ -2264,7 +2409,7 @@ impl XylemApp {
         let mut confirm: Option<u32> = None;
         let mut action: Option<&'static str> = None;
         let mut jump: Option<String> = None;
-        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_));
+        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_));
         let mut leftover_marks: Option<Vec<u32>> = None;
         let mut tool_start: Option<(Action, bool)> = None;
         let mut dupes_start = false;
@@ -2584,18 +2729,97 @@ impl XylemApp {
                         ui.label(RichText::new(p.display().to_string()).monospace().size(11.0).color(t.faint));
                     }
                 }
-                Dialog::Compress(path, bytes, saving) => {
-                    ui.label(RichText::new("Compress with Windows").font(theme::semibold(16.0)));
-                    ui.label(RichText::new(visible(path)).monospace().color(t.muted));
+                Dialog::Compress(c) => {
+                    ui.label(RichText::new("Compress").font(theme::semibold(16.0)));
+                    ui.label(RichText::new(visible(&c.path)).monospace().color(t.muted));
                     ui.add_space(6.0);
-                    ui.label(format!("{} could be compressed · rough estimate: about {} saved", fmt_bytes(*bytes), fmt_bytes(*saving)));
+                    let p = &c.plan;
+                    if p.files.is_empty() {
+                        ui.label("Nothing here can be compressed further.");
+                    } else {
+                        ui.label(format!("{} in {} files can be compressed.", fmt_bytes(p.bytes), fmt_count(p.files.len() as u64)));
+                    }
+                    for (why, (n, b)) in [
+                        ("already compressed, sparse or online-only", p.skipped_already),
+                        ("photos, videos, archives and other packed formats", p.skipped_formats),
+                        ("too small to gain anything", p.skipped_tiny),
+                    ] {
+                        if n > 0 {
+                            ui.label(RichText::new(format!("Left alone: {} files ({}), {why}", fmt_count(n), fmt_bytes(b))).color(t.faint).size(12.0));
+                        }
+                    }
+                    if p.protected_inside > 0 {
+                        ui.label(RichText::new(format!("Left alone: {} protected places inside", p.protected_inside)).color(t.faint).size(12.0));
+                    }
                     ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut c.level, Level::Fast, "Fast (recommended)");
+                        ui.radio_value(&mut c.level, Level::Max, "Maximum");
+                    });
+                    let hint = match c.level {
+                        Level::Fast => "Several times faster; saves about 3/4 of what Maximum saves.",
+                        Level::Max => "The most savings, about 3-4 times slower. Best for things you rarely change.",
+                    };
+                    ui.add(egui::Label::new(RichText::new(format!("{hint} Rough estimate: about {} saved (the real result depends on the data).", fmt_bytes(p.estimate(c.level)))).color(t.muted)).wrap());
+                    ui.add_space(6.0);
+                    let undo_text = if c.undo.files.is_empty() {
+                        "Uncompress restores everything later (nothing here is compressed yet).".to_owned()
+                    } else {
+                        format!("{} files here are compressed now. Uncompress restores them; it needs {} free.", fmt_count(c.undo.files.len() as u64), fmt_bytes(c.undo.needs_free))
+                    };
                     facts(ui, &t, &[
-                        ("How", "Windows' own compact.exe with LZX compression (/EXE:LZX). Files stay where they are and open as usual."),
-                        ("Best for", "Programs, games and documents you mostly read. Photos, videos and archives are already compressed and barely shrink."),
-                        ("Note", "A file that's changed later is stored uncompressed again. Opening compressed files costs a little CPU."),
-                        ("Undo", "Uncompress restores everything (compact /U)."),
+                        ("How", "Windows' own file compression, run by Xylem on several files at once. Files keep their place, names and dates, and open as usual: Windows unpacks them as they're read."),
+                        ("Safe", "Each file is opened read-only and locked against changes while it's packed; files another program is writing are skipped. Nothing is deleted, moved or copied."),
+                        ("Best for", "Programs, games, code, logs and documents you mostly read. Photos, videos, archives and most model weights barely shrink; files that look random are skipped."),
+                        ("Note", "A file that's changed later is stored uncompressed again. Reading compressed files costs a little CPU."),
+                        ("Undo", undo_text.as_str()),
                     ]);
+                }
+                Dialog::Similar(f) => {
+                    ui.label(RichText::new("Similar folders").font(theme::semibold(16.0)));
+                    ui.add(egui::Label::new(RichText::new(format!(
+                        "{} folders looked at in {:.2} s. Likely copies have the same size, file count and names inside (contents aren't compared). Similar names share a name once case, versions and copy marks are ignored. Click a folder to show it in the tree.",
+                        fmt_count(f.folders),
+                        f.secs
+                    )).color(t.muted)).wrap());
+                    ui.add_space(6.0);
+                    let member_rows = |ui: &mut Ui, g: &similar::Group, jump_node: &mut Option<u32>| {
+                        for m in &g.members {
+                            ui.horizontal(|ui| {
+                                ui.add_sized(vec2(70.0, 18.0), egui::Label::new(RichText::new(fmt_bytes(m.bytes)).color(t.muted)));
+                                let age = if m.mtime > 0 { xylem_session::age_text(xylem_session::today_days(), m.mtime) } else { String::new() };
+                                ui.add_sized(vec2(90.0, 18.0), egui::Label::new(RichText::new(age).color(t.faint).size(11.5)));
+                                let r = ui.add(egui::Label::new(visible(&m.path)).truncate().sense(Sense::click()));
+                                if r.on_hover_text(format!("{} · {}\nClick to show it in the tree", visible(&m.path), fmt_files(u64::from(m.files)))).clicked() {
+                                    *jump_node = Some(m.node);
+                                }
+                            });
+                        }
+                    };
+                    egui::ScrollArea::vertical().id_salt("similar").max_height(420.0).show(ui, |ui| {
+                        let freeable: u64 = f.copies.iter().map(|g| g.reclaim).sum();
+                        ui.label(RichText::new(format!("Likely copies ({}) · up to {} could be freed", f.copies.len(), fmt_bytes(freeable))).font(theme::semibold(13.5)));
+                        if f.copies.is_empty() {
+                            ui.label(RichText::new("None found.").color(t.faint));
+                        }
+                        for (gi, g) in f.copies.iter().enumerate() {
+                            egui::CollapsingHeader::new(format!("{} · {} copies · {} · {} could be freed", visible(&g.label), g.members.len(), fmt_bytes(g.bytes), fmt_bytes(g.reclaim)))
+                                .id_salt(("copies", gi))
+                                .show(ui, |ui| member_rows(ui, g, &mut jump_node));
+                        }
+                        ui.add_space(8.0);
+                        ui.label(RichText::new(format!("Similar names ({})", f.names.len())).font(theme::semibold(13.5)));
+                        if f.names.is_empty() {
+                            ui.label(RichText::new("None found.").color(t.faint));
+                        }
+                        for (gi, g) in f.names.iter().enumerate() {
+                            egui::CollapsingHeader::new(format!("{}… · {} folders · {}", visible(&g.label), g.members.len(), fmt_bytes(g.bytes)))
+                                .id_salt(("names", gi))
+                                .show(ui, |ui| member_rows(ui, g, &mut jump_node));
+                        }
+                    });
+                    ui.add_space(4.0);
+                    ui.add(egui::Label::new(RichText::new("Xylem never deletes from here. Check what a copy is before removing it: two folders can look alike and still differ inside.").color(t.muted).size(11.5)).wrap());
                 }
                 Dialog::Vhdx(path, size, busy) => {
                     ui.label(RichText::new("Compact a virtual disk").font(theme::semibold(16.0)));
@@ -2781,12 +3005,12 @@ impl XylemApp {
                         }
                         return;
                     }
-                    Dialog::Compress(..) => {
+                    Dialog::Compress(c) => {
                         let b = egui::Button::new(RichText::new("Compress").color(t.accent_ink)).fill(t.accent).min_size(vec2(90.0, 26.0));
-                        if ui.add(b).clicked() {
+                        if ui.add_enabled(!c.plan.files.is_empty(), b).clicked() {
                             action = Some("compress-go");
                         }
-                        if ui.button("Uncompress").clicked() {
+                        if ui.add_enabled(!c.undo.files.is_empty(), egui::Button::new("Uncompress")).clicked() {
                             action = Some("uncompress-go");
                         }
                         if ui.button("Cancel").clicked() {
@@ -2873,12 +3097,22 @@ impl XylemApp {
                 }
             }
             Some(a @ ("compress-go" | "uncompress-go")) => {
-                if let Some(Dialog::Compress(path, _, _)) = self.dialog.take() {
-                    let undo = a == "uncompress-go";
-                    let name = if undo { "Uncompressing with Windows (compact.exe)" } else { "Compressing with Windows (compact.exe)" };
-                    self.run_tool_job(name.into(), move || {
-                        xylem_session::power::compact_folder(std::path::Path::new(&path), undo).map(|m| m + " Scan again to see the new sizes.")
-                    });
+                if let Some(Dialog::Compress(c)) = self.dialog.take() {
+                    let CompressAsk { plan, undo, level, .. } = *c;
+                    if a == "compress-go" {
+                        self.start_compress(plan, Some(level));
+                    } else {
+                        // Restored files need their full size back: check first.
+                        let free = compress::free_space(&undo.root).unwrap_or(u64::MAX);
+                        if free < undo.needs_free.saturating_add(1 << 30) {
+                            self.dialog = Some(Dialog::Message(
+                                "Not enough free space".into(),
+                                format!("Uncompressing needs about {} free (plus 1 GB to spare), and the drive has {}. Free some space first.", fmt_bytes(undo.needs_free), fmt_bytes(free)),
+                            ));
+                        } else {
+                            self.start_compress(undo, None);
+                        }
+                    }
                 }
             }
             Some("vhdx-check") => {
