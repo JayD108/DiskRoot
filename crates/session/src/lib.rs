@@ -10,6 +10,7 @@ pub mod dupes;
 pub mod elevate;
 pub mod helper;
 pub mod integrity;
+pub mod lockdown;
 pub mod recycle;
 pub mod remember;
 pub mod safety;
@@ -698,10 +699,6 @@ pub struct PendingDelete {
 }
 
 impl PendingDelete {
-    /// Step 2: re-check the item on disk, move it to the Recycle Bin, and
-    /// write the result to the local deletion log. Blocking (Windows may
-    /// show its own progress or "too big to recycle" prompt): use a worker
-    /// thread.
     /// Records the on-disk identity of the item and of every folder above
     /// it, up to and including the scan root. Call it when the confirmation
     /// dialog opens; `recycle` then refuses if anything was swapped in the
@@ -714,16 +711,25 @@ impl PendingDelete {
         Ok(())
     }
 
+    /// Step 2: re-check the item on disk, move it to the Recycle Bin, and
+    /// write the result to the local deletion log. Blocking (Windows may
+    /// show its own progress or "too big to recycle" prompt): use a worker
+    /// thread.
     pub fn recycle(&self) -> Result<DeleteOut, String> {
         let identity = match &self.identity {
             Some(chain) => Ok(chain.clone()),
             None => safety::identity_chain(&self.path, &self.scan_root),
         };
-        let result = identity
-            .and_then(|chain| safety::check_identity(&chain))
-            .and_then(|()| safety::hard_lock(&self.path).map_or(Ok(()), Err))
-            .and_then(|()| safety::verify_before_recycle(&self.path, &self.scan_root, self.dir, self.was_link))
-            .and_then(|()| recycle::to_recycle_bin(&self.path));
+        // The folders above the item stay pinned (can't be renamed or
+        // swapped) from the identity check until the move is done.
+        let result = identity.and_then(|chain| safety::pin_identity(&chain)).and_then(|pinned| {
+            let r = safety::hard_lock(&self.path)
+                .map_or(Ok(()), Err)
+                .and_then(|()| safety::verify_before_recycle(&self.path, &self.scan_root, self.dir, self.was_link))
+                .and_then(|()| recycle::to_recycle_bin(&self.path));
+            drop(pinned);
+            r
+        });
         let cancelled = matches!(result, Ok(recycle::Outcome::Cancelled));
         safety::append_log(&safety::LogEntry {
             time: safety::utc_now(),
