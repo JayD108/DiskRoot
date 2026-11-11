@@ -51,4 +51,4 @@
 12. **VHDX compaction, guided (#7).**
 13. Later / under review: **Archive & replace (#14)** and **Space Shifter (#8)**.
 
-Every item ships with: tests, a measured benchmark (no scan regression), docs (README feature line + SECURITY-AND-PRIVACY where relevant), and a DEVLOG entry.
+Every item ships with: tests, a measured benchmark (no scan regression), docs (README feature line + SECURITY-AND-PRIVACY where relevant), and a changelog entry in the release notes.

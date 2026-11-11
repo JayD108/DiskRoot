@@ -1,6 +1,5 @@
 //! The native window: menu bar, toolbar, tree-table, map, details pane,
-//! status bar. Same structure as the design prototype ("classic utility,
-//! modern finish"). All data comes from `xylem_session`; scans and deletes
+//! status bar ("classic utility, modern finish"). All data comes from `xylem_session`; scans and deletes
 //! run on worker threads so the window never freezes.
 
 use std::collections::{BTreeSet, HashSet};

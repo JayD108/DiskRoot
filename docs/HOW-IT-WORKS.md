@@ -65,7 +65,6 @@ Each file record becomes exactly one entry, so a hardlinked file is counted **on
   - Layout: menu bar, toolbar, tree-table, map, details pane and status bar.
   - Fonts come from Windows (Segoe UI, Consolas); nothing is bundled.
   - Scans and deletes run on worker threads.
-- **Design reference:** `xylem-ui-prototype/` is the HTML mock-up the look was taken from (not shipped).
 
 ## 5. Memory: instant reopen and "what changed" (`crates/session/src/remember.rs`)
 - After a scan is on screen, a background thread saves two files per scanned root:

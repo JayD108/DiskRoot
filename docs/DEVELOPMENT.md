@@ -61,10 +61,9 @@ crates/
   native/      xylem.exe: the app (egui) + helper mode
   cli/         xylem-cli.exe
   bench/       xylem-bench.exe: gen | run | time | verify | modes
-installer/     NSIS script (xylem.nsi)
+fuzz/          coverage-guided fuzz targets (cargo-fuzz)
+installer/     NSIS script (xylem.nsi) and its welcome image
 .github/       CI and the release pipeline
-tools/         release.ps1, benchmark and UI-test scripts
-docs/          these documents, plus DEVLOG (history), HANDOFF (current state), ROADMAP
-xylem-ui-prototype/  HTML design reference
-spikes/        throwaway experiments
+tools/         release, full test, benchmark, fuzzing, icon and UI-test scripts
+docs/          user and project documentation, logo, screenshots
 ```

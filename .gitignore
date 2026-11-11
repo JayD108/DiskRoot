@@ -1,7 +1,6 @@
 /target
 /crates/app/gen
 *.idx
-/spikes/*/target
 /dist
 
 /fuzz/target

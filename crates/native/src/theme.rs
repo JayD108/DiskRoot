@@ -1,7 +1,6 @@
 //! Xylem's look: "classic utility, modern finish".
 //!
-//! The tokens are the same as the design prototype (`xylem-ui-prototype/
-//! styles.css`): warm paper surfaces, hairline borders, a moss-green accent
+//! Warm paper surfaces, hairline borders, a moss-green accent
 //! (the sap), and one botanical colour per category. Segoe UI is loaded
 //! from Windows at start-up instead of being bundled (keeps the exe small).
 
@@ -17,7 +16,7 @@ pub enum Theme {
     Dark,
 }
 
-/// Design tokens. Names match the prototype's CSS variables.
+/// Design tokens: every colour the UI uses.
 #[derive(Clone, Copy)]
 pub struct Tokens {
     pub win: Color32,
