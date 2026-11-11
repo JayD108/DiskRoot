@@ -178,7 +178,7 @@ mod tests {
         let p = std::env::var("XYLEM_INDEX_FILE").unwrap();
         let bytes = std::fs::read(&p).unwrap();
         let (idx, stats, mode) = Index::load_checked(&mut bytes.as_slice(), bytes.len() as u64).unwrap();
-        println!("{} ({}): {} items, {} files, {} on disk, mode {mode}", &p, String::from_utf8_lossy(&bytes[..8]), idx.len(), stats.files, crate::format::bytes(idx.alloc(0)));
+        println!("{} ({}): {} items, {} files, {} on disk, mode {mode}", p, String::from_utf8_lossy(&bytes[..8]), idx.len(), stats.files, crate::format::bytes(idx.alloc(0)));
     }
 
     #[test]
