@@ -9,9 +9,10 @@ use std::time::Duration;
 
 use crate::{Columns, Index, ScanStats, flags};
 
-/// Version 2 adds the last-modified column. Older files are refused (a
-/// remembered scan from an older version simply isn't reopened).
+/// Version 2 adds the last-modified column. Version 1 files (remembered
+/// scans from Xylem 0.1) are still read, with every date "unknown".
 const MAGIC: &[u8; 8] = b"XYLMIDX2";
+const MAGIC_V1: &[u8; 8] = b"XYLMIDX1";
 /// Refuse absurd sizes from a corrupt file before allocating.
 const MAX_NODES: u64 = 1 << 32;
 const MAX_NAME_BYTES: u64 = 16 << 30;
@@ -78,7 +79,8 @@ impl Index {
     fn load_inner(r: &mut impl Read, file_len: Option<u64>) -> io::Result<(Index, ScanStats, String)> {
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
-        if &magic != MAGIC {
+        let v1 = &magic == MAGIC_V1;
+        if &magic != MAGIC && !v1 {
             return Err(bad("not a xylem index"));
         }
         let mut head = [0u64; 7];
@@ -100,7 +102,7 @@ impl Index {
         }
         if let Some(len) = file_len {
             // magic + 7 header words + mode length + mode + columns + names
-            let expected = 8 + 7 * 8 + 4 + mode_len as u64 + n as u64 * (4 + 8 + 8 + 1 + 4 + 2 + 2) + name_bytes as u64;
+            let expected = 8 + 7 * 8 + 4 + mode_len as u64 + n as u64 * (4 + 8 + 8 + 1 + 4 + 2 + if v1 { 0 } else { 2 }) + name_bytes as u64;
             if expected != len {
                 return Err(bad("size doesn't match its header"));
             }
@@ -121,7 +123,7 @@ impl Index {
         r.read_exact(&mut flag_bytes)?;
         let name_off = column(r, n, u32::from_le_bytes)?;
         let name_len = column(r, n, u16::from_le_bytes)?;
-        let mtime = column(r, n, u16::from_le_bytes)?;
+        let mtime = if v1 { Vec::new() } else { column(r, n, u16::from_le_bytes)? };
         let mut names = vec![0u8; name_bytes];
         r.read_exact(&mut names)?;
         let names = String::from_utf8(names).map_err(|_| bad("names not UTF-8"))?;
@@ -158,9 +160,25 @@ mod tests {
         idx.save(&ScanStats::default(), "t", &mut buf).unwrap();
         let (back, _, _) = Index::load_checked(&mut buf.as_slice(), buf.len() as u64).unwrap();
         assert_eq!((back.mtime(f), back.mtime(d), back.mtime(0)), (20_000, 20_000, 20_000));
-        let mut v1 = buf.clone();
+        // A version 1 file (no date column) still loads, dates unknown.
+        let cols = 8 + 7 * 8 + 4 + 1 + 3 * (4 + 8 + 8 + 1 + 4 + 2);
+        let mut v1: Vec<u8> = buf[..cols].iter().chain(&buf[cols + 3 * 2..]).copied().collect();
         v1[7] = b'1';
-        assert!(Index::load(&mut v1.as_slice()).is_err(), "old format refused");
+        let (old, _, _) = Index::load_checked(&mut v1.as_slice(), v1.len() as u64).unwrap();
+        assert_eq!((old.len(), old.name(f), old.mtime(f), old.mtime(0)), (3, "f", 0, 0));
+        let mut v9 = buf.clone();
+        v9[7] = b'9';
+        assert!(Index::load(&mut v9.as_slice()).is_err(), "unknown versions refused");
+    }
+
+    /// `XYLEM_INDEX_FILE=<path> cargo test -p xylem-core loads_a_real_index_file -- --ignored --nocapture`
+    #[test]
+    #[ignore = "reads an index file named by XYLEM_INDEX_FILE"]
+    fn loads_a_real_index_file() {
+        let p = std::env::var("XYLEM_INDEX_FILE").unwrap();
+        let bytes = std::fs::read(&p).unwrap();
+        let (idx, stats, mode) = Index::load_checked(&mut bytes.as_slice(), bytes.len() as u64).unwrap();
+        println!("{} ({}): {} items, {} files, {} on disk, mode {mode}", &p, String::from_utf8_lossy(&bytes[..8]), idx.len(), stats.files, crate::format::bytes(idx.alloc(0)));
     }
 
     #[test]
