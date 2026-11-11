@@ -69,7 +69,7 @@ Xylem only reads your disk and never goes online. It doesn't open your files' co
 
 Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/) *(application pending; until approved, releases are unsigned and the app says so)*.
 
-- **Builds:** every release file is built by GitHub Actions from this repository, and each signing request is approved by hand. Nothing built on a personal computer is signed. Details: [docs/SIGNPATH.md](docs/SIGNPATH.md).
+- **Builds:** every release file is built by GitHub Actions from this repository, and each signing request is approved by hand. Nothing built on a personal computer is signed.
 - **Team roles:** committers and reviewers: [JayD108](https://github.com/JayD108). Approvers: [JayD108](https://github.com/JayD108).
 - **Privacy policy:** this program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
@@ -80,9 +80,8 @@ Free code signing provided by [SignPath.io](https://about.signpath.io/), certifi
 | [How it works](docs/HOW-IT-WORKS.md) | Scanners, data model, categories, accuracy, the name |
 | [Security and privacy](docs/SECURITY-AND-PRIVACY.md) | What Xylem reads, admin rights, safe delete, testing |
 | [Development](docs/DEVELOPMENT.md) | Build from source, command line, tests, project layout, releases |
-| [Roadmap](docs/ROADMAP.md) | What's next |
+| [Roadmap](docs/ROADMAP.md) | Releases, planned features and what's next |
 | [Benchmarks](docs/BENCHMARKS.md) | Speed against WizTree, WinDirStat and eDirStat, with the method |
-| [Competitors](docs/COMPETITORS.md) | How Xylem compares with other disk analyzers |
 
 ## Acknowledgements
 

@@ -46,8 +46,3 @@ Medians of 3 timed runs (after 1 warm-up run per tool). Individual runs are in `
   - **SizeTrend 4.0:** no documented command line to time.
 - **WizTree "scan only"** still writes a tiny CSV; WizTree has no scan-only command. Its scan+CSV numbers are the more direct comparison.
 - Versions: Xylem 0.1.0 (commit after d0223b4), WizTree 4.33, WinDirStat 2.9.3, eDirStat 2.0.0.
-
-## How to describe it
-> In our benchmark on a 1.5 TB NVMe drive, Xylem scanned the whole drive in **1.07 s**: 2.3x faster than eDirStat, 4.1x faster than WizTree. With a full CSV of every file it took **1.59 s**: 5x faster than WinDirStat 2.9 and 10x faster than WizTree.
-
-"Fastest in our tests", with a link to this page, is accurate. "The fastest in the world" isn't: it's one machine, and not every tool was measured.

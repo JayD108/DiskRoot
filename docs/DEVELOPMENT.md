@@ -45,7 +45,7 @@ The tests cover:
 ## Releases
 - **Official releases:** push a tag matching `Cargo.toml`'s version (`git tag v0.1.0 && git push origin v0.1.0`). `.github/workflows/release.yml` then:
   - tests and builds;
-  - signs through SignPath once that's enabled ([SIGNPATH.md](SIGNPATH.md));
+  - signs through SignPath once the repository secret `SIGNPATH_API_TOKEN` and variable `SIGNPATH_ORGANIZATION_ID` exist;
   - builds the NSIS installer and portable zip;
   - runs a real install/uninstall test;
   - publishes a GitHub Release with checksums.
