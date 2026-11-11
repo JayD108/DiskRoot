@@ -26,12 +26,15 @@ pub struct DeleteWarnings {
     /// On a USB stick or network share: Windows may have no Recycle Bin
     /// there and delete it permanently (after its own prompt).
     pub no_recycle_bin: bool,
+    /// Programs that use this place and are running now (e.g. Spotify for
+    /// its cache): close them first, or files in use may stay or break.
+    pub apps_running: Vec<String>,
 }
 
 impl DeleteWarnings {
     /// True if the user should explicitly tick "I understand" first.
     pub fn needs_ack(&self) -> bool {
-        self.cloud || self.git_repos > 0 || self.large || self.no_recycle_bin
+        self.cloud || self.git_repos > 0 || self.large || self.no_recycle_bin || !self.apps_running.is_empty()
     }
 }
 

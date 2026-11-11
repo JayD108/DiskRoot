@@ -14,9 +14,10 @@ pub mod lockdown;
 pub mod recycle;
 pub mod remember;
 pub mod safety;
+pub mod tools;
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, RwLock};
 use std::time::Instant;
 
 use serde::Serialize;
@@ -25,11 +26,92 @@ use xylem_core::view::{Children, ViewLimits, ViewNode, ancestors, build_view};
 use xylem_core::{Index, NO_PARENT, ScanStats, flags};
 use xylem_scan_mft::{Mode, Used, scan_auto};
 
-pub use xylem_core::classify::{Category, RuleInfo, Safety, SubType};
+pub use xylem_core::classify::{Action, Category, RuleInfo, Safety, SubType};
 pub use xylem_core::view::ViewNode as Shape;
 
-/// The built-in classification rules (compiled in, not editable at runtime).
-pub static RULES: LazyLock<Rules> = LazyLock::new(Rules::builtin);
+/// The rules in effect: the built-in ones plus the user's own
+/// (`%APPDATA%\Xylem\rules.json`). Reloadable while the app runs; each
+/// scan keeps the rules it was classified with.
+static CURRENT_RULES: LazyLock<RwLock<Arc<Rules>>> = LazyLock::new(|| RwLock::new(Arc::new(load_rules().0)));
+
+/// The rules new scans are classified with.
+pub fn rules() -> Arc<Rules> {
+    Arc::clone(&CURRENT_RULES.read().unwrap_or_else(std::sync::PoisonError::into_inner))
+}
+
+/// Where the user's own rules live.
+pub fn user_rules_path() -> Option<PathBuf> {
+    std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("Xylem").join("rules.json"))
+}
+
+/// What loading the user's rules gave.
+#[derive(Clone, Debug, Default)]
+pub struct RulesStatus {
+    pub path: Option<PathBuf>,
+    /// The file exists.
+    pub found: bool,
+    pub user_rules: usize,
+    /// Why the file was ignored (the built-in rules are used alone then).
+    pub error: Option<String>,
+}
+
+fn load_rules() -> (Rules, RulesStatus) {
+    let mut st = RulesStatus { path: user_rules_path(), ..Default::default() };
+    let text = st.path.as_ref().and_then(|p| std::fs::read(p).ok());
+    let Some(bytes) = text else { return (Rules::builtin(), st) };
+    st.found = true;
+    let rules = String::from_utf8(bytes)
+        .map_err(|_| "the file isn't UTF-8 text".to_owned())
+        .and_then(|t| Rules::builtin().with_user_rules(t.trim_start_matches('\u{feff}')));
+    match rules {
+        Ok(r) => {
+            st.user_rules = r.user_rules();
+            (r, st)
+        }
+        Err(e) => {
+            st.error = Some(e);
+            (Rules::builtin(), st)
+        }
+    }
+}
+
+/// Re-reads the user's rules; later scans (and [`Scanned::reclassify`]) use them.
+pub fn reload_rules() -> RulesStatus {
+    let (r, st) = load_rules();
+    *CURRENT_RULES.write().unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(r);
+    st
+}
+
+/// Creates an example rules file if there is none, and returns its path.
+pub fn create_example_rules() -> Result<PathBuf, String> {
+    let p = user_rules_path().ok_or("APPDATA isn't set")?;
+    if !p.exists() {
+        std::fs::create_dir_all(p.parent().expect("has a parent")).map_err(|e| e.to_string())?;
+        std::fs::write(&p, EXAMPLE_RULES).map_err(|e| e.to_string())?;
+    }
+    Ok(p)
+}
+
+const EXAMPLE_RULES: &str = r#"{
+  "_doc": [
+    "Your own Xylem categories. Edit this file, then use File > Custom rules > Reload.",
+    "match: a folder or file path pattern, '/' separated, case-insensitive.",
+    "  '/Data/Projects' is anchored at the drive root; 'Projects/*/out' matches the end of any path.",
+    "  '*' inside a part matches any text.",
+    "kind: dir | file | any (default any).",
+    "cat: apps | media | docs | dev | ai | system | temp | downloads | cloud | other.",
+    "sub: your own sub-type name, shown in the Category view.",
+    "Your rules can't change what Xylem protects: they don't apply where a built-in rule",
+    "matches, nor inside protected places like C:\\Windows. Safety labels stay 'Unknown'."
+  ],
+  "rules": [
+    { "match": "Projects/*/out", "kind": "dir", "cat": "dev", "sub": "My build output", "note": "Example: rebuilt by my build script." }
+  ],
+  "extensions": [
+    { "ext": ["blend"], "cat": "media", "sub": "3D scenes" }
+  ]
+}
+"#;
 
 pub fn categories() -> &'static [Category] {
     &CATEGORIES
@@ -257,6 +339,22 @@ pub struct TypeRow {
     pub files: u64,
 }
 
+/// Something that's often left behind: see [`Scanned::leftovers`].
+#[derive(Clone, Debug)]
+pub struct Leftover {
+    pub id: u32,
+    pub name: String,
+    pub path: String,
+    pub on_disk: u64,
+    /// "Installer", "Archive", "Disk image" or the sub-type name.
+    pub kind: String,
+    pub note: String,
+    /// The Windows tool that removes it (when Xylem shouldn't).
+    pub action: Option<xylem_core::classify::Action>,
+    /// Xylem may move it to the Recycle Bin (not protected).
+    pub deletable: bool,
+}
+
 /// One scan, classified, ready to answer UI questions.
 pub struct Scanned {
     /// Shared so the "remember this scan" thread can save it while the UI
@@ -270,26 +368,130 @@ pub struct Scanned {
     classify_ms: f64,
     /// Folders deleted through Xylem (files come from the live totals).
     removed_dirs: u64,
+    /// The rules this scan was classified with.
+    rules: Arc<Rules>,
 }
 
 impl Scanned {
     pub fn new(mut index: Index, stats: ScanStats, mode: String) -> Self {
         let t = Instant::now();
+        let rules = rules();
         index.shrink_to_fit();
         // The child lists don't depend on classification, so build them on
         // a second thread (measured on C:, 1.84M items: 213 -> 168 ms).
         let (children, cls, cats) = std::thread::scope(|s| {
             let children = s.spawn(|| Children::build(&index));
-            let cls = Classification::run(&index, &RULES);
-            let cats = CatStats::compute(&index, &cls, RULES.subs.len());
+            let cls = Classification::run(&index, &rules);
+            let cats = CatStats::compute(&index, &cls, rules.subs.len());
             (children.join().expect("Children::build doesn't panic"), cls, cats)
         });
         let classify_ms = t.elapsed().as_secs_f64() * 1000.0;
-        Self { index: Arc::new(index), children, cls, cats, stats, mode, classify_ms, removed_dirs: 0 }
+        Self { index: Arc::new(index), children, cls, cats, stats, mode, classify_ms, removed_dirs: 0, rules }
+    }
+
+    /// The rules this scan was classified with (for notes and labels).
+    pub fn rules(&self) -> &Rules {
+        &self.rules
+    }
+
+    /// Classifies again with the current rules (after a rules reload).
+    pub fn reclassify(&mut self) {
+        self.rules = rules();
+        self.cls = Classification::run(&self.index, &self.rules);
+        self.cats = CatStats::compute(&self.index, &self.cls, self.rules.subs.len());
+    }
+
+    /// "Mark all" for a sub-type ("sub:N"): its places that a rule labelled
+    /// "safe to clear" matched directly, minus anything protected. Places
+    /// found by file extension are never included: they're the folders
+    /// holding such files, and marking one would take the rest with it.
+    pub fn markable(&self, key: &str) -> Vec<u32> {
+        let Some(CatKey::Sub(s)) = CatKey::parse(key, &self.rules) else { return Vec::new() };
+        self.cats.places_by_sub[s as usize]
+            .iter()
+            .map(|p| p.node)
+            .filter(|&n| {
+                let r = self.cls.rule[n as usize];
+                n != 0
+                    && self.index.flags(n) & flags::DELETED == 0
+                    && self.cls.matched_here(n)
+                    && self.rules.info.get(r as usize).is_some_and(|i| i.safety == Some(Safety::Green) && !i.user)
+                    && self.cls.protection(&self.index, &self.rules, n).is_none()
+            })
+            .collect()
+    }
+
+    /// Leftovers: Windows upgrade folders (removed through Windows' own
+    /// cleanup) and installers, archives and disk images in Downloads
+    /// folders. Biggest first.
+    pub fn leftovers(&self, limit: usize) -> Vec<Leftover> {
+        const KINDS: [(&str, &[&str]); 3] = [
+            ("Installer", &["exe", "msi", "msix", "msixbundle", "appx"]),
+            ("Archive", &["zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "zst"]),
+            ("Disk image", &["iso", "img"]),
+        ];
+        let idx = &self.index;
+        let mut out = Vec::new();
+        for id in 1..idx.len() as u32 {
+            if idx.flags(id) & flags::DELETED != 0 {
+                continue;
+            }
+            if idx.is_dir(id) {
+                let r = self.cls.rule[id as usize];
+                if self.cls.matched_here(id)
+                    && let Some(info) = self.rules.info.get(r as usize)
+                    && info.action == Some(xylem_core::classify::Action::StorageSettings)
+                {
+                    out.push(self.leftover(id, self.rules.subs[self.cls.sub[id as usize] as usize].name.clone(), info.note.clone().unwrap_or_default()));
+                }
+                continue;
+            }
+            let name = idx.name(id);
+            let Some(ext) = name.rsplit_once('.').map(|x| x.1) else { continue };
+            let Some((kind, _)) = KINDS.iter().find(|(_, exts)| exts.iter().any(|e| e.eq_ignore_ascii_case(ext))) else { continue };
+            // Inside a folder named Downloads (any depth, usually 1-3 up).
+            let mut up = idx.parent(id);
+            let mut in_downloads = false;
+            for _ in 0..32 {
+                if up == NO_PARENT {
+                    break;
+                }
+                if idx.name(up).eq_ignore_ascii_case("Downloads") || (up == 0 && idx.name(0).to_ascii_lowercase().ends_with("\\downloads")) {
+                    in_downloads = true;
+                    break;
+                }
+                up = idx.parent(up);
+            }
+            if in_downloads {
+                let note = match *kind {
+                    "Installer" => "A downloaded installer. Once the program is installed, the installer is usually not needed.",
+                    "Archive" => "A downloaded archive. If you've extracted what you need, it can usually go.",
+                    _ => "A downloaded disk image. If it's installed or burned, it can usually go.",
+                };
+                out.push(self.leftover(id, (*kind).to_owned(), note.to_owned()));
+            }
+        }
+        out.sort_unstable_by_key(|l| std::cmp::Reverse(l.on_disk));
+        out.truncate(limit);
+        out
+    }
+
+    fn leftover(&self, id: u32, kind: String, note: String) -> Leftover {
+        let r = self.cls.rule[id as usize];
+        Leftover {
+            id,
+            name: self.index.name(id).to_owned(),
+            path: self.index.path(id),
+            on_disk: self.index.alloc(id),
+            kind,
+            note,
+            action: self.rules.info.get(r as usize).and_then(|i| i.action),
+            deletable: self.cls.protection(&self.index, &self.rules, id).is_none(),
+        }
     }
 
     fn model(&self) -> CatModel<'_> {
-        CatModel { idx: &self.index, cls: &self.cls, stats: &self.cats, rules: &RULES }
+        CatModel { idx: &self.index, cls: &self.cls, stats: &self.cats, rules: &self.rules }
     }
 
     /// Ok if `node` exists and wasn't deleted.
@@ -355,7 +557,7 @@ impl Scanned {
             own_cat: self.cls.cat[c as usize],
             sub: self.cls.sub[c as usize],
             rule: self.cls.rule[c as usize],
-            protected: self.cls.protection(idx, &RULES, c).is_some(),
+            protected: self.cls.protection(idx, &self.rules, c).is_some(),
         }
     }
 
@@ -394,7 +596,7 @@ impl Scanned {
 
     /// The by-category diagram rooted at `key` ("", "cat:3", "sub:12").
     pub fn category_view(&self, key: &str) -> Result<CatViewOut, String> {
-        let k = CatKey::parse(key, &RULES).ok_or("Unknown category")?;
+        let k = CatKey::parse(key, &self.rules).ok_or("Unknown category")?;
         let m = self.model();
         let mut nodes = m.view(k, 0.002);
         self.decorate(&mut nodes);
@@ -403,7 +605,7 @@ impl Scanned {
 
     /// Bytes and files of a category key ("" = everything).
     pub fn cat_total(&self, key: &str) -> (u64, u64) {
-        match CatKey::parse(key, &RULES) {
+        match CatKey::parse(key, &self.rules) {
             Some(CatKey::Cat(c)) => (self.cats.cat_total[c as usize], self.cats.cat_files[c as usize]),
             Some(CatKey::Sub(s)) => (self.cats.sub_total[s as usize], self.cats.sub_files[s as usize]),
             _ => (self.cats.cat_total.iter().sum(), self.cats.cat_files.iter().sum()),
@@ -413,7 +615,7 @@ impl Scanned {
     /// Rows under a by-category key: "" -> categories, "cat:N" -> sub-types,
     /// "sub:N" -> places (all of them, biggest first).
     pub fn cat_children(&self, key: &str, limit: usize) -> Result<Vec<CatRow>, String> {
-        let k = CatKey::parse(key, &RULES).ok_or("Unknown category")?;
+        let k = CatKey::parse(key, &self.rules).ok_or("Unknown category")?;
         let st = &self.cats;
         let rows = match k {
             CatKey::All => {
@@ -434,15 +636,15 @@ impl Scanned {
                     .collect()
             }
             CatKey::Cat(c) => {
-                let mut subs: Vec<u16> = (0..RULES.subs.len() as u16)
-                    .filter(|&s| RULES.sub_cat(s) == c && st.sub_total[s as usize] > 0)
+                let mut subs: Vec<u16> = (0..self.rules.subs.len() as u16)
+                    .filter(|&s| self.rules.sub_cat(s) == c && st.sub_total[s as usize] > 0)
                     .collect();
                 subs.sort_unstable_by_key(|&s| std::cmp::Reverse(st.sub_total[s as usize]));
                 subs.into_iter()
                     .map(|s| CatRow {
                         key: CatKey::Sub(s).key(),
                         node: None,
-                        name: RULES.subs[s as usize].name.clone(),
+                        name: self.rules.subs[s as usize].name.clone(),
                         bytes: st.sub_total[s as usize],
                         files: st.sub_files[s as usize],
                         cat: c,
@@ -462,7 +664,7 @@ impl Scanned {
                     name: self.index.name(p.node).to_owned(),
                     bytes: p.bytes,
                     files: u64::from(p.files),
-                    cat: RULES.sub_cat(s),
+                    cat: self.rules.sub_cat(s),
                     sub: s,
                     rule: self.cls.rule[p.node as usize],
                     has_children: false,
@@ -488,7 +690,7 @@ impl Scanned {
             cat: self.cls.cat[i],
             sub: self.cls.sub[i],
             rule: self.cls.rule[i],
-            protected: self.cls.protection(idx, &RULES, node),
+            protected: self.cls.protection(idx, &self.rules, node),
             folder: if idx.is_dir(node) || parent == NO_PARENT { node } else { parent },
             parent: (parent != NO_PARENT).then_some(parent),
         })
@@ -515,18 +717,31 @@ impl Scanned {
             git_repos: 0,
             large: info.on_disk >= safety::LARGE_BYTES || info.files >= safety::LARGE_FILES,
             no_recycle_bin: matches!(drive_type(&info.path), 2 | 4),
+            apps_running: Vec::new(),
         };
+        // Programs that use this place (rules name them, e.g. Spotify for
+        // its cache): from the rule in effect and rules matched inside.
+        let mut apps: Vec<&str> = Vec::new();
+        let mut add_apps = |r: u16| {
+            if let Some(i) = self.rules.info.get(r as usize) {
+                apps.extend(i.app.iter().map(String::as_str));
+            }
+        };
+        add_apps(self.cls.rule[node as usize]);
         // One pass over the subtree: protected places inside (refuse), Git
         // repos and cloud placeholders (warn).
         let mut stack = vec![node];
         while let Some(x) = stack.pop() {
             if x != node
-                && let Some(what) = self.cls.protected_here(&RULES, x)
+                && let Some(what) = self.cls.protected_here(&self.rules, x)
             {
                 return Err(format!("It contains {}, which Xylem protects ({what}).", idx.path(x)));
             }
             if x != node && idx.name(x).eq_ignore_ascii_case(".git") {
                 warnings.git_repos += 1;
+            }
+            if x != node && self.cls.matched_here(x) {
+                add_apps(self.cls.rule[x as usize]);
             }
             if idx.flags(x) & flags::CLOUD != 0 {
                 warnings.cloud = true;
@@ -537,6 +752,15 @@ impl Scanned {
         }
         if idx.name(node).eq_ignore_ascii_case(".git") {
             warnings.git_repos += 1;
+        }
+        if !apps.is_empty() {
+            let running = tools::running_programs();
+            let mut seen = std::collections::HashSet::new();
+            for a in apps {
+                if running.contains(&a.to_lowercase()) && seen.insert(a.to_lowercase()) {
+                    warnings.apps_running.push(a.to_owned());
+                }
+            }
         }
         Ok(PendingDelete {
             node,
@@ -564,7 +788,7 @@ impl Scanned {
             stack.extend(self.children.live(&self.index, x));
         }
         Arc::make_mut(&mut self.index).remove_subtree(node, &self.children);
-        self.cats = CatStats::compute(&self.index, &self.cls, RULES.subs.len());
+        self.cats = CatStats::compute(&self.index, &self.cls, self.rules.subs.len());
     }
 
     /// The `limit` largest files (size on disk), optionally only those whose
@@ -961,6 +1185,64 @@ mod tests {
         let types = s.file_types(10);
         assert_eq!((types[0].ext.as_str(), types[0].bytes, types[0].files), ("mp4", 9000, 1));
         assert_eq!(types.len(), 3);
+    }
+
+    /// "Mark all" takes folders a green rule matched (node_modules, a
+    /// CACHEDIR.TAG build folder), never the folder holding files found by
+    /// extension (Desktop for videos).
+    #[test]
+    fn mark_all_takes_only_safe_matched_places() {
+        let mut idx = Index::new("D:\\");
+        let users = idx.push(0, "Users", 0, 0, flags::DIR);
+        let me = idx.push(users, "me", 0, 0, flags::DIR);
+        let proj = idx.push(me, "proj", 0, 0, flags::DIR);
+        let nm = idx.push(proj, "node_modules", 0, 0, flags::DIR);
+        idx.push(nm, "x.js", 10, 4096, 0);
+        let nested = idx.push(nm, "dep", 0, 0, flags::DIR);
+        let nm2 = idx.push(nested, "node_modules", 0, 0, flags::DIR);
+        idx.push(nm2, "y.js", 10, 4096, 0);
+        let target = idx.push(proj, "target", 0, 0, flags::DIR);
+        idx.push(target, "CACHEDIR.TAG", 1, 4096, 0);
+        idx.push(target, "app.exe", 10, 4096, 0);
+        let desk = idx.push(me, "Desktop", 0, 0, flags::DIR);
+        idx.push(desk, "film.mp4", 10, 4096, 0);
+        idx.push(desk, "notes.txt", 10, 4096, 0);
+        idx.compute_totals();
+        let s = Scanned::new(idx, ScanStats::default(), "test".into());
+        let key = |name: &str| {
+            let i = s.rules().subs.iter().position(|x| x.name == name).unwrap();
+            CatKey::Sub(i as u16).key()
+        };
+        let nm_marks = s.markable(&key("node_modules"));
+        assert!(nm_marks.contains(&nm) && nm_marks.contains(&nm2), "{nm_marks:?}");
+        assert_eq!(s.markable(&key("Build output")), vec![target]);
+        assert!(s.markable(&key("Video")).is_empty(), "Desktop must never be marked for its videos");
+        assert!(s.markable("cat:3").is_empty() && s.markable("bogus").is_empty());
+        // No program uses node_modules: nothing to warn about.
+        assert!(s.prepare_delete(nm).unwrap().warnings.apps_running.is_empty());
+    }
+
+    #[test]
+    fn leftovers_lists_upgrade_folders_and_downloaded_installers() {
+        let mut idx = Index::new("C:\\");
+        let bt = idx.push(0, "$WINDOWS.~BT", 0, 0, flags::DIR);
+        idx.push(bt, "x.esd", 0, 5 << 30, 0);
+        let users = idx.push(0, "Users", 0, 0, flags::DIR);
+        let me = idx.push(users, "me", 0, 0, flags::DIR);
+        let dl = idx.push(me, "Downloads", 0, 0, flags::DIR);
+        let setup = idx.push(dl, "setup.exe", 0, 100 << 20, 0);
+        let sub = idx.push(dl, "old", 0, 0, flags::DIR);
+        let iso = idx.push(sub, "ubuntu.iso", 0, 3 << 30, 0);
+        idx.push(dl, "photo.jpg", 0, 1 << 20, 0);
+        let docs = idx.push(me, "Documents", 0, 0, flags::DIR);
+        idx.push(docs, "tool.exe", 0, 1 << 30, 0);
+        idx.compute_totals();
+        let s = Scanned::new(idx, ScanStats::default(), "test".into());
+        let l = s.leftovers(100);
+        let ids: Vec<u32> = l.iter().map(|x| x.id).collect();
+        assert_eq!(ids, vec![bt, iso, setup], "biggest first; nothing outside Downloads");
+        assert!(!l[0].deletable && l[0].action == Some(Action::StorageSettings), "Windows removes it, not Xylem");
+        assert!(l[1].deletable && l[1].kind == "Disk image" && l[2].kind == "Installer");
     }
 
     #[test]

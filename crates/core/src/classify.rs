@@ -75,10 +75,37 @@ enum Kind {
     Any,
 }
 
+/// A Windows tool Xylem can start for a place. Rules only pick from this
+/// list; there are no free-form commands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Action {
+    /// `Dism.exe /Online /Cleanup-Image /StartComponentCleanup` (UAC).
+    DismCleanup,
+    /// Windows' System Protection settings (restore points).
+    SystemProtection,
+    /// Settings > System > Storage (temporary files, previous Windows).
+    StorageSettings,
+}
+
 #[derive(Deserialize)]
 struct RawFile {
     rules: Vec<RawRule>,
     extensions: Vec<RawExt>,
+    #[serde(default)]
+    markers: Vec<RawMarker>,
+}
+
+/// A folder that contains a file with this name is classified like a rule
+/// matched it (e.g. `CACHEDIR.TAG`, the standard marker of build and cache
+/// folders such as Rust's `target`).
+#[derive(Deserialize)]
+struct RawMarker {
+    file: String,
+    cat: String,
+    sub: String,
+    safety: Option<Safety>,
+    note: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -94,6 +121,11 @@ struct RawRule {
     #[serde(default)]
     weak: bool,
     note: Option<String>,
+    /// Programs that use this place (e.g. "Spotify.exe"): the delete dialog
+    /// warns while one is running.
+    #[serde(default)]
+    app: Vec<String>,
+    action: Option<Action>,
 }
 
 #[derive(Deserialize)]
@@ -105,6 +137,46 @@ struct RawExt {
     strong: bool,
 }
 
+/// The user's own rules (`%APPDATA%\Xylem\rules.json`). Deliberately
+/// narrower than the built-in format: a user rule names a category, a
+/// sub-type and a note, never protection, safety labels or actions. Unknown
+/// fields are errors, so "protect" is refused rather than silently ignored.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UserFile {
+    #[serde(default, rename = "_doc")]
+    _doc: Option<serde_json::Value>,
+    #[serde(default)]
+    rules: Vec<UserRule>,
+    #[serde(default)]
+    extensions: Vec<UserExt>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UserRule {
+    #[serde(rename = "match")]
+    pattern: String,
+    #[serde(default)]
+    kind: Kind,
+    cat: String,
+    sub: String,
+    note: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UserExt {
+    ext: Vec<String>,
+    cat: String,
+    sub: String,
+}
+
+/// Limits for a user rule file: it's the user's own, but a broken or huge
+/// file must not slow every scan.
+pub const USER_MAX_RULES: usize = 500;
+pub const USER_MAX_FILE_BYTES: usize = 256 * 1024;
+
 /// Public facts about a rule, for notes, badges and delete checks.
 #[derive(Clone, Debug, Serialize)]
 pub struct RuleInfo {
@@ -112,6 +184,11 @@ pub struct RuleInfo {
     pub note: Option<String>,
     #[serde(skip)]
     pub protect: Option<Protect>,
+    /// Programs that use this place (warn if one runs when deleting it).
+    pub app: Vec<String>,
+    pub action: Option<Action>,
+    /// One of the user's own rules.
+    pub user: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -145,6 +222,12 @@ pub struct Rules {
     /// Rules whose last component contains '*'.
     wild_last: Vec<usize>,
     ext: HashMap<u64, ExtRule>,
+    /// Marker files (lowercase name, rule index): a folder holding one is
+    /// classified by that rule.
+    markers: Vec<(String, usize)>,
+    /// Rules from this index on are the user's. They never apply where a
+    /// built-in rule matches, nor inside a place protected as a tree.
+    user_start: usize,
 }
 
 fn hash_ci(s: &str) -> u64 {
@@ -221,7 +304,16 @@ impl Rules {
                 by_last.entry(hash_ci(last)).or_default().push(i);
             }
             rules.push(Rule { comps, anchored, kind: r.kind, sub: sub_id(&r.cat, &r.sub)?, weak: r.weak });
-            info.push(RuleInfo { safety: r.safety, note: r.note, protect: r.protect });
+            info.push(RuleInfo { safety: r.safety, note: r.note, protect: r.protect, app: r.app, action: r.action, user: false });
+        }
+        let mut markers = Vec::new();
+        for m in raw.markers {
+            let sub = sub_id(&m.cat, &m.sub)?;
+            markers.push((m.file.to_ascii_lowercase(), rules.len()));
+            // Not in the name lookups: a marker rule applies only through
+            // its marker file.
+            rules.push(Rule { comps: Vec::new(), anchored: false, kind: Kind::Dir, sub, weak: false });
+            info.push(RuleInfo { safety: m.safety, note: m.note, protect: None, app: Vec::new(), action: None, user: false });
         }
         if rules.len() >= NO_RULE as usize {
             return Err("rules: too many rules".into());
@@ -233,13 +325,98 @@ impl Rules {
                 ext.insert(hash_ci(&x), ExtRule { sub, strong: e.strong });
             }
         }
-        // Prefer the most specific rule: more components, then no wildcards.
+        let user_start = rules.len();
+        let mut r = Self { rules, info, subs, by_last, wild_last, ext, markers, user_start };
+        r.sort_lookups();
+        Ok(r)
+    }
+
+    /// Prefer the most specific rule: more components, then no wildcards.
+    fn sort_lookups(&mut self) {
+        let rules = &self.rules;
         let specificity = |r: &Rule| (r.comps.len(), !r.comps.iter().any(|c| c.contains('*')));
-        for v in by_last.values_mut() {
+        for v in self.by_last.values_mut() {
             v.sort_by_key(|&i| std::cmp::Reverse(specificity(&rules[i])));
         }
-        wild_last.sort_by_key(|&i| std::cmp::Reverse(specificity(&rules[i])));
-        Ok(Self { rules, info, subs, by_last, wild_last, ext })
+        self.wild_last.sort_by_key(|&i| std::cmp::Reverse(specificity(&rules[i])));
+    }
+
+    /// Adds the user's own rules (see [`UserFile`] for what they may do).
+    /// On an error the caller keeps using the built-in rules alone.
+    pub fn with_user_rules(mut self, text: &str) -> Result<Self, String> {
+        if text.len() > USER_MAX_FILE_BYTES {
+            return Err(format!("the file is larger than {} KB", USER_MAX_FILE_BYTES / 1024));
+        }
+        let raw: UserFile = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        if raw.rules.len() + raw.extensions.len() > USER_MAX_RULES {
+            return Err(format!("more than {USER_MAX_RULES} rules"));
+        }
+        let clean = |what: &str, s: &str, max: usize| -> Result<(), String> {
+            if s.trim().is_empty() || s.chars().count() > max || s.chars().any(char::is_control) {
+                Err(format!("{what} \"{s}\" must be 1-{max} characters, without control characters"))
+            } else {
+                Ok(())
+            }
+        };
+        for r in raw.rules {
+            clean("match", &r.pattern, 260)?;
+            clean("sub", &r.sub, 60)?;
+            if let Some(n) = &r.note {
+                clean("note", n, 400)?;
+            }
+            let comps: Vec<String> =
+                r.pattern.split(['/', '\\']).filter(|c| !c.is_empty()).map(|c| c.to_ascii_lowercase()).collect();
+            if comps.is_empty() || comps.len() > 32 {
+                return Err(format!("match \"{}\" needs 1-32 parts", r.pattern));
+            }
+            let sub = self.sub_for(&r.cat, &r.sub)?;
+            let i = self.rules.len();
+            let last = comps.last().expect("not empty");
+            if last.contains('*') {
+                self.wild_last.push(i);
+            } else {
+                self.by_last.entry(hash_ci(last)).or_default().push(i);
+            }
+            let anchored = r.pattern.starts_with(['/', '\\']);
+            self.rules.push(Rule { comps, anchored, kind: r.kind, sub, weak: false });
+            self.info.push(RuleInfo { safety: None, note: r.note, protect: None, app: Vec::new(), action: None, user: true });
+        }
+        for e in raw.extensions {
+            clean("sub", &e.sub, 60)?;
+            let sub = self.sub_for(&e.cat, &e.sub)?;
+            for x in e.ext {
+                let x = x.trim_start_matches('.');
+                clean("ext", x, 32)?;
+                let h = hash_ci(x);
+                // Built-in "strong" extensions (model files) keep their meaning.
+                if self.ext.get(&h).is_none_or(|old| !old.strong) {
+                    self.ext.insert(h, ExtRule { sub, strong: false });
+                }
+            }
+        }
+        if self.rules.len() >= NO_RULE as usize || self.subs.len() >= u16::MAX as usize {
+            return Err("too many rules".into());
+        }
+        self.sort_lookups();
+        Ok(self)
+    }
+
+    /// Number of the user's own rules loaded.
+    pub fn user_rules(&self) -> usize {
+        self.rules.len() - self.user_start
+    }
+
+    fn sub_for(&mut self, cat: &str, name: &str) -> Result<u16, String> {
+        let keys = || CATEGORIES.iter().map(|c| c.key).collect::<Vec<_>>().join(", ");
+        let cat = CATEGORIES
+            .iter()
+            .position(|c| c.key == cat)
+            .ok_or_else(|| format!("unknown category \"{cat}\" (use one of: {})", keys()))? as u8;
+        if let Some(i) = self.subs.iter().position(|s| s.cat == cat && s.name == name) {
+            return Ok(i as u16);
+        }
+        self.subs.push(SubType { cat, name: name.to_owned() });
+        Ok((self.subs.len() - 1) as u16)
     }
 
     pub fn sub_cat(&self, sub: u16) -> u8 {
@@ -290,6 +467,9 @@ pub struct Classification {
 
 const WEAK: u8 = 1;
 const MATCHED_HERE: u8 = 2;
+/// Inside a place protected as a whole tree (e.g. C:\Windows). User rules
+/// and marker files don't apply there.
+const IN_PROT: u8 = 4;
 
 fn split_root(name: &str) -> Vec<&str> {
     name.split(['\\', '/']).filter(|c| !c.is_empty()).collect()
@@ -338,28 +518,56 @@ impl Classification {
             !r.anchored || (up.next().is_some_and(|d| d.ends_with(':')) && up.next().is_none())
         };
 
-        let find = |id: u32, name: &str, is_dir: bool, d: u16, comps: &[&str]| -> Option<usize> {
+        // (best built-in rule, best user rule). A user rule is used only
+        // where no built-in rule matches.
+        let find = |id: u32, name: &str, is_dir: bool, d: u16, comps: &[&str], users: bool| -> (Option<usize>, Option<usize>) {
             let exact = rules.by_last.get(&hash_ci(name)).into_iter().flatten();
-            let mut best: Option<usize> = None;
+            let (mut best, mut best_user): (Option<usize>, Option<usize>) = (None, None);
             for &i in exact.chain(rules.wild_last.iter()) {
-                let better = best.is_none_or(|b| rules.rules[i].comps.len() > rules.rules[b].comps.len());
+                let user = i >= rules.user_start;
+                if user && !users {
+                    continue;
+                }
+                let slot = if user { &mut best_user } else { &mut best };
+                let better = slot.is_none_or(|b| rules.rules[i].comps.len() > rules.rules[b].comps.len());
                 if better && matches(&rules.rules[i], id, is_dir, d, comps) {
-                    best = Some(i);
+                    *slot = Some(i);
                 }
             }
-            best
+            (best, best_user)
         };
+
+        // Folders holding a marker file (e.g. CACHEDIR.TAG). One cheap pass
+        // over file names; only a handful match.
+        let mut marked: HashMap<u32, usize> = HashMap::new();
+        if !rules.markers.is_empty() {
+            let max_len = rules.markers.iter().map(|m| m.0.len()).max().unwrap_or(0);
+            for id in 1..n as u32 {
+                let name = idx.name(id);
+                if !idx.is_dir(id)
+                    && name.len() <= max_len
+                    && let Some(m) = rules.markers.iter().find(|m| m.0.eq_ignore_ascii_case(name))
+                {
+                    marked.insert(idx.parent(id), m.1);
+                }
+            }
+        }
 
         // The root: if the scan started inside a classified place, apply that
         // rule from the start. Check the root's own path and then each of its
         // ancestors, deepest first: a scan of C:\Windows\Fonts must still be
         // "System > Windows" (and protected) because it's inside C:\Windows.
-        let root_rule = (1..=root_comps.len()).rev().find_map(|k| {
-            let comps = &root_comps[..k];
-            find(0, comps[k - 1], true, (k - 1) as u16, comps)
-        });
-        if let Some(r) = root_rule {
-            c.apply_rule(0, r, rules);
+        // Built-in rules on every level first, so a user rule can never hide
+        // a protected place above the scan root.
+        let root_find = |users: bool| {
+            (1..=root_comps.len()).rev().find_map(|k| {
+                let comps = &root_comps[..k];
+                let (b, u) = find(0, comps[k - 1], true, (k - 1) as u16, comps, users);
+                if users { u } else { b }
+            })
+        };
+        if let Some(r) = root_find(false).or_else(|| marked.get(&0).copied()).or_else(|| root_find(true)) {
+            c.apply_rule(0, r, rules, false);
         }
 
         for id in 1..n as u32 {
@@ -368,13 +576,16 @@ impl Classification {
             let name = idx.name(id);
             let is_dir = idx.is_dir(id);
             depth[i] = depth[p].saturating_add(1);
-            if let Some(r) = find(id, name, is_dir, depth[i], &root_comps) {
-                c.apply_rule(id, r, rules);
+            let prot = c.bits[p] & IN_PROT != 0;
+            let (builtin, user) = find(id, name, is_dir, depth[i], &root_comps, !prot);
+            let marker = || if prot || !is_dir || marked.is_empty() { None } else { marked.get(&id).copied() };
+            if let Some(r) = builtin.or_else(marker).or(user) {
+                c.apply_rule(id, r, rules, prot);
                 continue;
             }
             // Inherit from the parent.
             (c.cat[i], c.sub[i], c.anchor[i], c.rule[i]) = (c.cat[p], c.sub[p], c.anchor[p], c.rule[p]);
-            c.bits[i] = c.bits[p] & WEAK;
+            c.bits[i] = c.bits[p] & (WEAK | IN_PROT);
             if !is_dir
                 && let Some(dot) = name.rfind('.')
                 && let Some(e) = rules.ext.get(&hash_ci(&name[dot + 1..]))
@@ -385,7 +596,7 @@ impl Classification {
                 // Group by the folder holding them ("this folder has 40 GB
                 // of datasets"), not one place per file.
                 c.anchor[i] = p as u32;
-                c.bits[i] = 0;
+                c.bits[i] = c.bits[p] & IN_PROT;
             } else if p == 0 && c.sub[i] == SUB_UNCLASSIFIED {
                 // Unclassified top-level items anchor themselves, so "Other"
                 // breaks down by top-level folder instead of one blob.
@@ -395,14 +606,23 @@ impl Classification {
         c
     }
 
-    fn apply_rule(&mut self, id: u32, r: usize, rules: &Rules) {
+    fn apply_rule(&mut self, id: u32, r: usize, rules: &Rules, in_prot: bool) {
         let i = id as usize;
         let rule = &rules.rules[r];
         self.cat[i] = rules.sub_cat(rule.sub);
         self.sub[i] = rule.sub;
         self.anchor[i] = id;
         self.rule[i] = r as u16;
-        self.bits[i] = MATCHED_HERE | if rule.weak { WEAK } else { 0 };
+        let prot = in_prot || rules.info[r].protect == Some(Protect::Tree);
+        self.bits[i] = MATCHED_HERE | if rule.weak { WEAK } else { 0 } | if prot { IN_PROT } else { 0 };
+    }
+
+    /// A rule matched at this very node (not just inherited). "Mark all"
+    /// only marks such places: a sub-type found by file extension is
+    /// anchored at the folder holding the files, and marking that folder
+    /// would take everything else in it too.
+    pub fn matched_here(&self, id: u32) -> bool {
+        self.bits[id as usize] & MATCHED_HERE != 0
     }
 
     pub fn heap_bytes(&self) -> Vec<(&'static str, usize)> {
@@ -974,6 +1194,123 @@ mod tests {
         assert!(t.idx.flags(3) & flags::DELETED != 0, "file inside is flagged too");
         t.idx.remove_subtree(b, &ch); // idempotent
         assert_eq!(t.idx.alloc(0), 5);
+    }
+
+    /// A folder holding CACHEDIR.TAG is "Build output" (and green), unless
+    /// it's inside a protected place; the marker file itself is inside it.
+    #[test]
+    fn marker_files_classify_their_folder() {
+        let rules = Rules::builtin();
+        let mut t = T::new("C:\\");
+        let users = t.dir(0, "Users");
+        let me = t.dir(users, "me");
+        let proj = t.dir(me, "proj");
+        let target = t.dir(proj, "target");
+        let tag = t.file(target, "CACHEDIR.TAG", 1);
+        let obj = t.file(target, "app.rlib", 100);
+        let pf = t.dir(0, "Program Files");
+        let tool = t.dir(pf, "tool");
+        let inner = t.dir(tool, "build");
+        t.file(inner, "CACHEDIR.TAG", 1);
+        t.idx.compute_totals();
+        let c = Classification::run(&t.idx, &rules);
+        assert_eq!(sub_name(&rules, &c, target), "Dev stuff > Build output");
+        assert_eq!(sub_name(&rules, &c, obj), "Dev stuff > Build output");
+        assert_eq!(sub_name(&rules, &c, tag), "Dev stuff > Build output");
+        assert!(c.matched_here(target) && !c.matched_here(obj));
+        assert_eq!(rules.info[c.rule[target as usize] as usize].safety, Some(Safety::Green));
+        assert!(c.protection(&t.idx, &rules, target).is_none());
+        // Inside Program Files the marker changes nothing: still protected.
+        assert!(sub_name(&rules, &c, inner).contains("Installed programs"));
+        assert!(c.protection(&t.idx, &rules, inner).is_some());
+    }
+
+    /// User rules classify ordinary places, but can never take over a node a
+    /// built-in rule matches, never apply inside a protected tree, and can't
+    /// carry protection, safety or actions at all.
+    #[test]
+    fn user_rules_never_unlock_protection() {
+        let user = r#"{
+            "rules": [
+                { "match": "*/Windows", "cat": "media", "sub": "Mine" },
+                { "match": "Windows/Temp", "cat": "media", "sub": "Mine" },
+                { "match": "Fonts", "cat": "media", "sub": "Mine" },
+                { "match": "System Volume Information", "cat": "media", "sub": "Mine" },
+                { "match": "Projects/*/out", "kind": "dir", "cat": "dev", "sub": "My build output", "note": "mine" }
+            ],
+            "extensions": [ { "ext": [".blend"], "cat": "media", "sub": "3D scenes" }, { "ext": ["gguf"], "cat": "media", "sub": "Mine" } ]
+        }"#;
+        let rules = Rules::builtin().with_user_rules(user).unwrap();
+        assert_eq!(rules.user_rules(), 5);
+        let mut t = T::new("C:\\");
+        let win = t.dir(0, "Windows");
+        let fonts = t.dir(win, "Fonts");
+        let font = t.file(fonts, "a.ttf", 1);
+        let svi = t.dir(0, "System Volume Information");
+        let users = t.dir(0, "Users");
+        let me = t.dir(users, "me");
+        let docs = t.dir(me, "Documents");
+        let scene = t.file(docs, "x.blend", 5);
+        let model = t.file(docs, "m.gguf", 5);
+        let projects = t.dir(me, "Projects");
+        let p = t.dir(projects, "app");
+        let out = t.dir(p, "out");
+        t.idx.compute_totals();
+        let c = Classification::run(&t.idx, &rules);
+        assert_eq!(sub_name(&rules, &c, win), "System > Windows", "built-in wins at C:\\Windows");
+        assert_eq!(sub_name(&rules, &c, fonts), "System > Windows", "no user rules inside a protected tree");
+        for n in [win, fonts, font, svi] {
+            assert!(c.protection(&t.idx, &rules, n).is_some(), "node {n} must stay protected");
+        }
+        assert_eq!(sub_name(&rules, &c, scene), "Media > 3D scenes");
+        assert_eq!(sub_name(&rules, &c, model), "AI & data > Model files", "strong built-in extensions stay");
+        assert_eq!(sub_name(&rules, &c, out), "Dev stuff > My build output");
+        let info = &rules.info[c.rule[out as usize] as usize];
+        assert!(info.user && info.safety.is_none() && info.action.is_none() && info.protect.is_none());
+        assert!(c.protection(&t.idx, &rules, out).is_none());
+
+        // Scanning inside Windows: a user rule for the scan root's own name
+        // must not beat the protected place above it.
+        let mut t = T::new(r"C:\Windows\Fonts");
+        let x = t.file(0, "a.ttf", 1);
+        t.idx.compute_totals();
+        let c = Classification::run(&t.idx, &rules);
+        assert_eq!(sub_name(&rules, &c, x), "System > Windows");
+        assert!(c.protection(&t.idx, &rules, x).is_some());
+
+        // Refused outright: protection, safety, actions, unknown categories,
+        // control characters, empty patterns, oversized files.
+        for bad in [
+            r#"{"rules":[{"match":"x","cat":"dev","sub":"y","protect":"tree"}]}"#,
+            r#"{"rules":[{"match":"x","cat":"dev","sub":"y","safety":"green"}]}"#,
+            r#"{"rules":[{"match":"x","cat":"dev","sub":"y","action":"dism-cleanup"}]}"#,
+            r#"{"rules":[{"match":"x","cat":"nope","sub":"y"}]}"#,
+            r#"{"rules":[{"match":"x","cat":"dev","sub":"a\u0007b"}]}"#,
+            r#"{"rules":[{"match":"//","cat":"dev","sub":"y"}]}"#,
+            r#"{"rules":[], "markers":[]}"#,
+        ] {
+            assert!(Rules::builtin().with_user_rules(bad).is_err(), "{bad}");
+        }
+        assert!(Rules::builtin().with_user_rules(&" ".repeat(USER_MAX_FILE_BYTES + 1)).is_err());
+        assert!(Rules::builtin().with_user_rules(r#"{"_doc":["notes are fine"]}"#).is_ok());
+    }
+
+    #[test]
+    fn windows_upgrade_leftovers_have_a_route() {
+        let rules = Rules::builtin();
+        let mut t = T::new("C:\\");
+        let bt = t.dir(0, "$WINDOWS.~BT");
+        let old = t.dir(0, "Windows.old");
+        let sxs_parent = t.dir(0, "Windows");
+        let sxs = t.dir(sxs_parent, "WinSxS");
+        t.idx.compute_totals();
+        let c = Classification::run(&t.idx, &rules);
+        for (n, sub) in [(bt, "Windows upgrade files"), (old, "Previous Windows")] {
+            assert!(sub_name(&rules, &c, n).ends_with(sub), "{}", sub_name(&rules, &c, n));
+            assert_eq!(rules.info[c.rule[n as usize] as usize].action, Some(Action::StorageSettings));
+            assert!(c.protection(&t.idx, &rules, n).is_some(), "deleted through Windows, not Xylem");
+        }
+        assert_eq!(rules.info[c.rule[sxs as usize] as usize].action, Some(Action::DismCleanup));
     }
 
     #[test]

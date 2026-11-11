@@ -15,7 +15,7 @@ use eframe::egui::{
 use xylem_session::integrity::{Integrity, SignatureState};
 use xylem_session::remember::{self, Changes, PrevSizes};
 use xylem_session::safety::{DeleteWarnings, LogEntry, visible};
-use xylem_session::{DeleteOut, FileRow, ItemInfo, PendingDelete, RULES, Safety, Scanned, Shape, Summary, TypeRow};
+use xylem_session::{Action, DeleteOut, FileRow, ItemInfo, Leftover, PendingDelete, RulesStatus, Safety, Scanned, Shape, Summary, TypeRow};
 
 use crate::map::{self, Hit, Kind, Layout as MapLayout, PaintCtx};
 use crate::settings::Settings;
@@ -55,6 +55,8 @@ enum JobKind {
     Reopen(String),
     Export(String),
     DeleteMany(usize),
+    /// A Windows tool Xylem started and waits for (e.g. DISM).
+    Tool(String),
 }
 
 /// A remembered scan opened at startup: the scan, when it was made, the
@@ -73,6 +75,7 @@ enum Done {
     Reopened(Box<Option<Reopened>>),
     Exported(Result<std::path::PathBuf, String>),
     DeletedMany(Vec<(u32, Result<DeleteOut, String>)>),
+    Tool(Result<String, String>),
 }
 
 struct Job {
@@ -95,6 +98,12 @@ enum Dialog {
     Message(String, String),
     ConfirmDelete(Box<Confirm>),
     ConfirmMany(Box<ConfirmMany>),
+    /// File > Custom rules: where the file is and whether it loaded.
+    Rules,
+    /// View > Leftovers.
+    Leftovers(Vec<Leftover>),
+    /// Explains a Windows tool before starting it.
+    Tool(Action),
 }
 
 /// Deleting several marked items at once: each one prepared and armed on
@@ -205,6 +214,8 @@ pub struct XylemApp {
     /// The Xylem logo (start screen, About), uploaded once.
     logo: egui::TextureHandle,
     scroll_to_selected: bool,
+    /// The user's own rules: loaded or not, and why.
+    rules_status: RulesStatus,
 }
 
 impl XylemApp {
@@ -244,7 +255,11 @@ impl XylemApp {
                 egui::TextureOptions::LINEAR,
             ),
             scroll_to_selected: false,
+            rules_status: xylem_session::reload_rules(),
         };
+        if let Some(e) = &app.rules_status.error {
+            app.say(format!("Your custom rules weren't loaded ({e}). File > Custom rules shows where they are."));
+        }
         if !app.settings.seen_notice {
             app.dialog = Some(Dialog::Welcome);
             app.scan_after_welcome = start.is_some();
@@ -386,6 +401,13 @@ impl XylemApp {
             Ok(Done::Deleted(node, r)) => self.finish_delete(node, r),
             Ok(Done::Reopened(r)) => self.finish_reopen(*r),
             Ok(Done::DeletedMany(results)) => self.finish_delete_many(results),
+            Ok(Done::Tool(r)) => {
+                self.job = None;
+                self.dialog = Some(match r {
+                    Ok(msg) => Dialog::Message("Done".into(), msg),
+                    Err(e) => Dialog::Message("The Windows tool didn't finish".into(), e),
+                });
+            }
             Ok(Done::Exported(r)) => {
                 self.job = None;
                 match r {
@@ -497,7 +519,7 @@ impl XylemApp {
 
     fn cat_label(&self, own_cat: u8, sub: u16) -> String {
         let c = xylem_session::categories().get(own_cat as usize).map_or("", |c| c.name);
-        match RULES.subs.get(sub as usize) {
+        match self.scanned.as_ref().and_then(|s| s.rules().subs.get(sub as usize)) {
             Some(s) if s.name != c => format!("{c} › {}", s.name),
             _ => c.to_owned(),
         }
@@ -777,6 +799,10 @@ impl XylemApp {
                     self.start_export();
                     ui.close();
                 }
+                if ui.button("Custom rules…").on_hover_text("Your own categories for folders and file types").clicked() {
+                    self.dialog = Some(Dialog::Rules);
+                    ui.close();
+                }
                 ui.separator();
                 if ui.button("Deletion history…").clicked() {
                     self.open_history();
@@ -800,6 +826,16 @@ impl XylemApp {
                 }
                 if ui.add_enabled(self.scanned.is_some(), egui::Button::new("Largest files & file types…")).clicked() {
                     self.open_files();
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(self.scanned.is_some(), egui::Button::new("Leftovers…"))
+                    .on_hover_text("Old installers, archives and disk images in Downloads, and Windows upgrade leftovers")
+                    .clicked()
+                {
+                    if let Some(s) = &self.scanned {
+                        self.dialog = Some(Dialog::Leftovers(s.leftovers(300)));
+                    }
                     ui.close();
                 }
                 ui.separator();
@@ -1236,6 +1272,16 @@ impl XylemApp {
                     if resp.double_clicked() && r.expandable {
                         toggled = Some(i);
                     }
+                    if let Key_::Cat(k) = &r.key
+                        && k.starts_with("sub:")
+                    {
+                        resp.context_menu(|ui| {
+                            if ui.button("Mark all that are safe to clear").clicked() {
+                                ctx_action = Some((i, "mark-all"));
+                                ui.close();
+                            }
+                        });
+                    }
                     if r.more == 0
                         && let Key_::Node(_) = r.key {
                             resp.context_menu(|ui| {
@@ -1285,7 +1331,11 @@ impl XylemApp {
                 }
                 rebuild = true;
             }
-            if let Some((i, act)) = ctx_action
+            if let Some((i, "mark-all")) = ctx_action
+                && let Key_::Cat(k) = &rows[i].key
+            {
+                self.mark_all(&k.clone());
+            } else if let Some((i, act)) = ctx_action
                 && let Key_::Node(n) = rows[i].key {
                     self.select(Key_::Node(n));
                     match act {
@@ -1295,6 +1345,64 @@ impl XylemApp {
                 }
             self.rows = if rebuild { None } else { Some(rows) };
         });
+    }
+
+    /// "Mark all" on a sub-type: every place a "safe to clear" rule matched
+    /// directly (never folders found by file extension, never protected).
+    fn mark_all(&mut self, key: &str) {
+        let Some(s) = &self.scanned else { return };
+        let ids = s.markable(key);
+        if ids.is_empty() {
+            self.say("Nothing here is labelled \"safe to clear\" by Xylem's rules, so nothing was marked.");
+            return;
+        }
+        let bytes: u64 = ids.iter().filter_map(|&n| s.info(n).ok()).map(|i| i.on_disk).sum();
+        let n = ids.len();
+        self.marked.extend(ids);
+        self.rows = None;
+        self.say(format!("{n} places marked ({}) · press Delete to review and move them to the Recycle Bin", fmt_bytes(bytes)));
+    }
+
+    /// Starts a Windows tool for a place. DISM is explained first; the
+    /// settings pages just open.
+    fn start_tool(&mut self, a: Action, confirmed: bool) {
+        let r = match a {
+            Action::SystemProtection => xylem_session::tools::open_system_protection(),
+            Action::StorageSettings => xylem_session::tools::open_storage_settings(),
+            Action::DismCleanup if !confirmed => {
+                self.dialog = Some(Dialog::Tool(a));
+                return;
+            }
+            Action::DismCleanup => {
+                if self.job.is_some() {
+                    return;
+                }
+                let (tx, rx) = mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(Done::Tool(xylem_session::tools::dism_component_cleanup()));
+                });
+                self.job = Some(Job { kind: JobKind::Tool("Windows component cleanup (DISM)".into()), started: Instant::now(), rx, cancel: Arc::default() });
+                return;
+            }
+        };
+        if let Err(e) = r {
+            self.dialog = Some(Dialog::Message("Couldn't open it".into(), e));
+        }
+    }
+
+    fn reload_rules(&mut self) {
+        self.rules_status = xylem_session::reload_rules();
+        if let Some(s) = &mut self.scanned {
+            s.reclassify();
+            self.summary = Some(s.summary());
+        }
+        self.marked.clear();
+        self.invalidate();
+        self.refresh_drive_bar();
+        match &self.rules_status.error {
+            Some(e) => self.say(format!("Your rules weren't loaded: {e}")),
+            None => self.say(format!("Rules reloaded · {} of your own", self.rules_status.user_rules)),
+        }
     }
 
     fn reveal_in_explorer(&mut self, n: u32) {
@@ -1349,6 +1457,11 @@ impl XylemApp {
                     warnings.git_repos += w.git_repos;
                     warnings.large |= w.large;
                     warnings.no_recycle_bin |= w.no_recycle_bin;
+                    for a in &w.apps_running {
+                        if !warnings.apps_running.contains(a) {
+                            warnings.apps_running.push(a.clone());
+                        }
+                    }
                     items.push(p);
                 }
                 Err(why) => refused.push((name, why)),
@@ -1642,6 +1755,8 @@ impl XylemApp {
                 return;
             };
             let mut action: Option<(&'static str, u32)> = None;
+            let mut tool_action: Option<Action> = None;
+            let mut mark_key: Option<String> = None;
             if !self.marked.is_empty() {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{} items marked", self.marked.len())).font(theme::semibold(13.0)).color(theme::WARN));
@@ -1657,8 +1772,14 @@ impl XylemApp {
             match &self.selected {
                 Some(Key_::Node(n)) => {
                     let Ok(info) = s.info(*n) else { return };
-                    let rule = RULES.info.get(info.rule as usize);
+                    let rule = s.rules().info.get(info.rule as usize);
+                    let tool = rule.and_then(|r| r.action);
                     let (label, color, note) = match rule.and_then(|r| r.safety) {
+                        None if rule.is_some_and(|r| r.user) => (
+                            "Your rule",
+                            t.muted,
+                            Some(rule.and_then(|r| r.note.clone()).unwrap_or_else(|| "Classified by your own rule. Check what it is before removing it.".into())),
+                        ),
                         Some(Safety::Green) => ("Safe to clear", theme::cat_color(2), rule.and_then(|r| r.note.clone())),
                         Some(Safety::Yellow) => ("Check first", theme::cat_color(6), rule.and_then(|r| r.note.clone())),
                         Some(Safety::Red) => ("Don't delete by hand", theme::cat_color(5), rule.and_then(|r| r.note.clone())),
@@ -1724,6 +1845,16 @@ impl XylemApp {
                             if btn.clicked() {
                                 action = Some(("delete", *n));
                             }
+                            if let Some(a) = tool {
+                                let (text, hint) = match a {
+                                    Action::DismCleanup => ("Clean up with Windows…", "Runs Windows' DISM component cleanup (admin). Xylem itself deletes nothing here."),
+                                    Action::SystemProtection => ("System Protection…", "Opens Windows' System Protection settings to manage restore points."),
+                                    Action::StorageSettings => ("Open Storage settings…", "Windows removes these: Settings > System > Storage > Temporary files."),
+                                };
+                                if ui.add_sized([170.0, 28.0], egui::Button::new(text)).on_hover_text(hint).clicked() {
+                                    tool_action = Some(a);
+                                }
+                            }
                         });
                     });
                 }
@@ -1736,8 +1867,28 @@ impl XylemApp {
                         RichText::new("Expand it to see the places holding these bytes. Select a place to see what it is and whether it's safe to remove.")
                             .color(t.muted),
                     );
+                    if k.starts_with("sub:") {
+                        let ids = s.markable(k);
+                        if !ids.is_empty() {
+                            let bytes: u64 = ids.iter().filter_map(|&n| s.info(n).ok()).map(|i| i.on_disk).sum();
+                            ui.add_space(4.0);
+                            if ui
+                                .add_enabled(self.job.is_none(), egui::Button::new(format!("Mark all {} that are safe to clear ({})", ids.len(), fmt_bytes(bytes))))
+                                .on_hover_text("Marks every place here that Xylem's rules label \"safe to clear\". Press Delete to review them in one confirmation.")
+                                .clicked()
+                            {
+                                mark_key = Some(k.clone());
+                            }
+                        }
+                    }
                 }
                 None => {}
+            }
+            if let Some(a) = tool_action {
+                self.start_tool(a, false);
+            }
+            if let Some(k) = mark_key {
+                self.mark_all(&k);
             }
             if let Some((a, n)) = action {
                 match a {
@@ -1768,6 +1919,10 @@ impl XylemApp {
                 JobKind::Reopen(p) => (format!("Opening the remembered scan of {p}"), "Loading the last scan from this PC…".to_owned()),
                 JobKind::Export(p) => ("Exporting to CSV".to_owned(), format!("Writing {p}…")),
                 JobKind::DeleteMany(n) => (format!("Moving {n} items to the Recycle Bin"), "Each item is re-checked on disk first…".to_owned()),
+                JobKind::Tool(name) => (
+                    name.clone(),
+                    "Approve the Windows prompt. The tool runs in its own window and can take several minutes; Xylem waits until it's done.".to_owned(),
+                ),
             };
             Modal::new(egui::Id::unique("xylem-job")).show(ctx, |ui| {
                 // Fixed size from the first frame, so the dialog doesn't jump.
@@ -1811,7 +1966,9 @@ impl XylemApp {
         let mut confirm: Option<u32> = None;
         let mut action: Option<&'static str> = None;
         let mut jump: Option<String> = None;
-        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_));
+        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_));
+        let mut leftover_marks: Option<Vec<u32>> = None;
+        let mut tool_start: Option<(Action, bool)> = None;
         let mut dupes_start = false;
         let mut dupes_mark: Option<Vec<u32>> = None;
         let mut requery: Option<String> = None;
@@ -1985,6 +2142,9 @@ impl XylemApp {
                     if w.large {
                         notes.push("This is a lot of data. Windows may offer to delete items permanently if they're too big for the Recycle Bin.".to_owned());
                     }
+                    if !w.apps_running.is_empty() {
+                        notes.push(format!("{} is running and uses some of these files. Close it first.", w.apps_running.join(", ")));
+                    }
                     for n in &notes {
                         egui::Frame::new().fill(theme::WARN.gamma_multiply(if t.dark { 0.22 } else { 0.14 })).corner_radius(CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
                             ui.set_width(ui.available_width());
@@ -2095,6 +2255,76 @@ impl XylemApp {
                         });
                     });
                 }
+                Dialog::Rules => {
+                    let st = &self.rules_status;
+                    ui.label(RichText::new("Custom rules").font(theme::semibold(16.0)));
+                    ui.add_space(4.0);
+                    ui.add(egui::Label::new(RichText::new("Add your own categories for folders and file types, e.g. \"Projects/*/out\" as Dev stuff > My build output. Your rules can't change what Xylem protects: they never apply where a built-in rule matches or inside protected places like C:\\Windows, and their safety label stays \"Your rule\".").color(t.muted)).wrap());
+                    ui.add_space(8.0);
+                    let (mark, col, text) = match (&st.error, st.found) {
+                        (Some(e), _) => ("!", theme::WARN, format!("Not loaded: {e}")),
+                        (None, true) => ("✔", t.accent, format!("{} of your own rules loaded", st.user_rules)),
+                        (None, false) => ("·", t.muted, "No rules file yet. \"Edit rules\" creates one with an example.".to_owned()),
+                    };
+                    ui.label(RichText::new(format!("{mark}  {text}")).color(col).font(theme::semibold(13.0)));
+                    if let Some(p) = &st.path {
+                        ui.label(RichText::new(p.display().to_string()).monospace().size(11.0).color(t.faint));
+                    }
+                }
+                Dialog::Tool(a) => {
+                    let _ = a;
+                    ui.label(RichText::new("Clean up the component store with Windows").font(theme::semibold(16.0)));
+                    ui.add_space(6.0);
+                    ui.add(egui::Label::new(RichText::new("WinSxS holds Windows components, and much of its apparent size is shared with C:\\Windows itself. Deleting files there breaks Windows. The supported way to shrink it is Windows' own DISM tool:").color(t.muted)).wrap());
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("Dism.exe /Online /Cleanup-Image /StartComponentCleanup").monospace().size(12.0));
+                    ui.add_space(6.0);
+                    facts(ui, &t, &[
+                        ("Admin", "Windows asks for permission first."),
+                        ("Time", "Usually a few minutes, sometimes longer. It runs in its own window."),
+                        ("Effect", "Removes superseded component versions. Updates installed before it can no longer be uninstalled."),
+                        ("Xylem", "Starts DISM and waits. It deletes nothing itself here."),
+                    ]);
+                }
+                Dialog::Leftovers(list) => {
+                    ui.label(RichText::new("Leftovers").font(theme::semibold(16.0)));
+                    let total: u64 = list.iter().map(|l| l.on_disk).sum();
+                    ui.label(RichText::new(format!("{} items · {} · biggest first. Click a name to show it in the tree.", list.len(), fmt_bytes(total))).color(t.muted));
+                    ui.add_space(6.0);
+                    if list.is_empty() {
+                        ui.label(RichText::new("Nothing found: no installers, archives or disk images in Downloads folders, and no Windows upgrade leftovers.").color(t.faint));
+                    }
+                    egui::ScrollArea::vertical().id_salt("leftovers").max_height(380.0).show(ui, |ui| {
+                        for l in list.iter() {
+                            ui.horizontal(|ui| {
+                                ui.add_sized(vec2(70.0, 18.0), egui::Label::new(RichText::new(fmt_bytes(l.on_disk)).color(t.muted)));
+                                ui.allocate_ui_with_layout(vec2(160.0, 18.0), Layout::left_to_right(Align::Center), |ui| {
+                                    ui.set_min_width(160.0);
+                                    ui.add(egui::Label::new(RichText::new(&l.kind).color(if l.deletable { t.text } else { theme::WARN })).truncate());
+                                });
+                                let r = ui.add(egui::Label::new(visible(&l.name)).truncate().sense(Sense::click()));
+                                if r.on_hover_text(format!("{}\n\n{}\n\nClick to show it in the tree", visible(&l.path), l.note)).clicked() {
+                                    jump_node = Some(l.id);
+                                }
+                                if let Some(a) = l.action {
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        if ui.small_button("Open Storage settings").on_hover_text(&l.note).clicked() {
+                                            tool_start = Some((a, false));
+                                        }
+                                    });
+                                }
+                            });
+                        }
+                    });
+                    let can: Vec<u32> = list.iter().filter(|l| l.deletable).map(|l| l.id).collect();
+                    if !can.is_empty() {
+                        ui.add_space(6.0);
+                        ui.add(egui::Label::new(RichText::new("Downloads are yours to judge: Xylem can't tell whether you still need an installer or archive. Marking selects them for one review; nothing is deleted until you confirm.").color(t.muted).size(11.5)).wrap());
+                        if ui.button(format!("Mark the {} downloads for review", can.len())).clicked() {
+                            leftover_marks = Some(can);
+                        }
+                    }
+                }
                 Dialog::Message(title, msg) => {
                     ui.label(RichText::new(title.as_str()).font(theme::semibold(15.0)));
                     ui.add_space(4.0);
@@ -2107,7 +2337,7 @@ impl XylemApp {
                     ui.label(RichText::new(visible(&info.path)).monospace().color(t.muted));
                     ui.add_space(6.0);
                     ui.label(format!("Frees {} · {}", fmt_bytes(info.on_disk), fmt_files(u64::from(info.files))));
-                    if let Some(note) = RULES.info.get(info.rule as usize).and_then(|r| r.note.as_ref()) {
+                    if let Some(note) = self.scanned.as_ref().and_then(|s| s.rules().info.get(info.rule as usize)).and_then(|r| r.note.clone()) {
                         ui.add_space(4.0);
                         ui.add(egui::Label::new(RichText::new(note).color(t.muted)).wrap());
                     }
@@ -2140,6 +2370,9 @@ impl XylemApp {
                         }
                         if w.large {
                             warn(ui, "Large delete", "This is a lot of data. Windows may say it's too big for the Recycle Bin and offer to delete it permanently. Read that prompt carefully.");
+                        }
+                        if !w.apps_running.is_empty() {
+                            warn(ui, &format!("{} is running", w.apps_running.join(", ")), "It uses these files. Close it first, or files in use stay behind and the app may misbehave.");
                         }
                         if w.needs_ack() {
                             ui.checkbox(&mut c.ack, "I understand. Move it to the Recycle Bin.");
@@ -2182,6 +2415,29 @@ impl XylemApp {
                         }
                         return;
                     }
+                    Dialog::Rules => {
+                        let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
+                        if ui.add(ok).clicked() {
+                            close = true;
+                        }
+                        if ui.button("Reload").on_hover_text("Read the file again and re-sort the current scan").clicked() {
+                            action = Some("rules-reload");
+                        }
+                        if ui.button("Edit rules").on_hover_text("Opens the file in Notepad (creates it with an example first)").clicked() {
+                            action = Some("rules-edit");
+                        }
+                        return;
+                    }
+                    Dialog::Tool(a) => {
+                        let b = egui::Button::new(RichText::new("Start DISM").color(t.accent_ink)).fill(t.accent).min_size(vec2(90.0, 26.0));
+                        if ui.add(b).clicked() {
+                            tool_start = Some((*a, true));
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close = true;
+                        }
+                        return;
+                    }
                     Dialog::History(_) => {
                         let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
                         if ui.add(ok).clicked() {
@@ -2221,6 +2477,16 @@ impl XylemApp {
                     self.start_delete_many(c.items);
                 }
             }
+            Some("rules-reload") => self.reload_rules(),
+            Some("rules-edit") => match xylem_session::create_example_rules() {
+                Ok(p) => {
+                    let notepad = xylem_session::tools::system32("notepad.exe");
+                    if let Err(e) = std::process::Command::new(notepad).arg(&p).spawn() {
+                        self.say(format!("Couldn't open Notepad: {e}"));
+                    }
+                }
+                Err(e) => self.dialog = Some(Dialog::Message("Couldn't create the rules file".into(), e)),
+            },
             Some("open-log") => {
                 if let Some(p) = xylem_session::safety::log_path() {
                     let _ = xylem_session::reveal(&p.display().to_string());
@@ -2240,6 +2506,20 @@ impl XylemApp {
                 let _ = tx.send(xylem_session::dupes::find(cands, &c2, &p2));
             });
             dv.running = Some((prog, cancel, rx));
+        }
+        if let Some((a, confirmed)) = tool_start {
+            self.dialog = None;
+            self.start_tool(a, confirmed);
+        }
+        if let Some(ids) = leftover_marks {
+            self.dialog = None;
+            if self.settings.by_category {
+                self.settings.by_category = false;
+                self.regroup();
+            }
+            self.marked = ids.into_iter().collect();
+            self.rows = None;
+            self.say(format!("{} downloads marked · press Delete to review them", self.marked.len()));
         }
         if let Some(ids) = dupes_mark {
             self.dialog = None;
