@@ -207,7 +207,7 @@ checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 
 [[package]]
 name = "xylem-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -225,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "xylem-scan-mft"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "xylem-core",
  "xylem-scan-walk",
@@ -233,14 +233,14 @@ dependencies = [
 
 [[package]]
 name = "xylem-scan-walk"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "xylem-core",
 ]
 
 [[package]]
 name = "xylem-session"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "serde",
