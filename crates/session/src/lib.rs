@@ -903,6 +903,27 @@ mod tests {
         println!("{:<16} {:>7.1} MB  {:>5.1} B/node  ({n} nodes)", "TOTAL", total as f64 / 1048576.0, total as f64 / n as f64);
     }
 
+    /// The real Fast-scan path, end to end: this (non-elevated) process
+    /// creates the pipe and starts the helper through the UAC prompt; the
+    /// helper opens C:, locks itself down (exit code 5 if it can't) and
+    /// streams the index back. Also checks the cloud-flag fix on a real
+    /// drive: only a small share of items may look online-only.
+    /// `cargo build --bin xylem` first, then
+    /// `XYLEM_HELPER=<repo>\target\debug\xylem.exe cargo test -p xylem-session real_fast_scan -- --ignored --nocapture`
+    #[test]
+    #[ignore = "starts the elevated helper (UAC prompt) and scans all of C:"]
+    fn real_fast_scan_through_locked_down_helper() {
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let t = Instant::now();
+        let s = scan_admin("C:", &cancel).unwrap();
+        let n = s.index.len();
+        let cloud = (0..n as u32).filter(|&i| s.index.flags(i) & xylem_core::flags::CLOUD != 0).count();
+        println!("fast scan: {n} items, {cloud} cloud, mode {:?}, {:.2} s", s.mode, t.elapsed().as_secs_f64());
+        assert!(n > 100_000, "a whole system drive has far more items");
+        assert!(s.mode.contains("MFT"), "{}", s.mode);
+        assert!(cloud * 20 < n, "{cloud} of {n} items flagged cloud: the EA bit is leaking again");
+    }
+
     /// DEL-06/07 on real files: decoys Windows would silently rewrite
     /// ("report." → "report") must be refused, never hitting the real file.
     #[test]
