@@ -354,6 +354,10 @@ pub struct LogEntry {
 
 /// `%LOCALAPPDATA%\Xylem\deletions.log` (one JSON object per line).
 pub fn log_path() -> Option<PathBuf> {
+    // Unit tests must never write into the user's real deletion history.
+    if cfg!(test) {
+        return Some(std::env::temp_dir().join(format!("xylem-test-log-{}", std::process::id())).join("deletions.log"));
+    }
     std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Xylem").join("deletions.log"))
 }
 

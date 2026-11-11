@@ -15,6 +15,7 @@
 |---|---|---|
 | v0.1.0 | Scanners, the app, categories, safe delete | Released (unsigned) |
 | v0.2.0 | Instant reopen, "what changed", lower memory, finding space, UI refresh, Phases 8–10 below, a hardened admin helper | Released (unsigned) |
+| v0.3.0 | Own fast compression engine (right-click Compress), Similar folders, real size of compressed files in the normal scan, "what changed" knows the scan method | Released (unsigned) |
 | 1.0 | Signed, tested on more hardware | Planned |
 
 ## Done

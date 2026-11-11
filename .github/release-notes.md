@@ -2,14 +2,12 @@
 
 **Xylem {{VERSION}}**: a fast disk space analyzer for Windows 10/11. It shows what fills your drive, what each thing is, and whether it's safe to delete.
 
-## New in 0.2
-- **Instant reopen and "what changed":** your last scan opens in under a second; after a rescan, the folders that grew or shrank are listed and shown in a Change column.
-- **Clean up with confidence:** "Mark all" for safe-to-clear places (`node_modules`, Rust `target`, caches), a Leftovers view (old installers, archives and disk images in Downloads, Windows upgrade leftovers, possibly orphaned app data), custom rules, and Windows' own DISM / System Protection / Storage cleanups.
-- **See it happen:** colour by age (last modified), live updates while the app is open, size alerts.
-- **Power tools (opt-in):** export marked items as a PowerShell cleanup script (dry run by default), NTFS compression with compact.exe, guided WSL/Docker virtual-disk compaction.
-- **Finding space:** largest files with search, file types, duplicate finder, hardlink names, CSV export, Explorer right-click.
-- **Safer:** the elevated helper drops its admin rights before reading drive data; deletes keep the folder chain locked until the Recycle Bin move ends; a running app that uses a cache is pointed out before deleting it.
-- **Lighter:** scan data for 1.9M items 204 → 154 MB (including the new last-modified dates).
+## New in 0.3
+- **Fast compression, built in:** right-click any folder → **Compress…**. Xylem now runs Windows' own file compression itself, on many files at once, instead of through `compact.exe`: about 15× faster at the new **Fast** level and 5× faster at **Maximum** in our tests (763 MB of mixed data). Files stay where they are and open as usual. It skips files that won't shrink, shows real progress with speed and time left, can be stopped, and **Uncompress** undoes it.
+- **Similar folders** (View menu): finds folders that look like copies of each other, and projects with similar names (`project`, `project_v2`, `project - Copy`), with how much each group takes.
+- **Fixed: compressed files were counted as almost 0 bytes** by the normal (no-admin) scan. Folders compressed with Windows' file compression (compact /EXE, CompactOS, Xylem's Compress) now show their real size on disk. Fast scan was not affected.
+- **Fixed: "What changed" could compare a normal scan with a Fast scan** as if your files had changed. Xylem now remembers how each scan was made and says so when the two differ; it also shows how far apart the scans were.
+- Clearer text about what needs admin rights and what Xylem can change; percentages no longer round a part up to 100%.
 
 ## What it does
 - Scans a whole NTFS drive in about 1–2 seconds by reading its Master File Table, read-only, after the Windows admin prompt. Without admin it walks folders (no prompt).

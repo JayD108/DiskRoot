@@ -1651,14 +1651,14 @@ impl XylemApp {
         }
         self.rows = None;
         self.map = None;
-        let n = |c: compress::Count| fmt_count(c.0);
+        let n = |c: compress::Count| fmt_files(c.0);
         let mut lines = Vec::new();
         if r.undo {
-            lines.push(format!("{} files restored to normal storage: {} → {} on disk.", fmt_count(r.changed_files), fmt_bytes(r.before), fmt_bytes(r.after)));
+            lines.push(format!("{} restored to normal storage: {} → {} on disk.", fmt_files(r.changed_files), fmt_bytes(r.before), fmt_bytes(r.after)));
         } else {
             lines.push(format!(
-                "{} files packed: {} → {} on disk, {} saved, in {:.0} s.",
-                fmt_count(r.changed_files),
+                "{} packed: {} → {} on disk, {} saved, in {:.0} s.",
+                fmt_files(r.changed_files),
                 fmt_bytes(r.before),
                 fmt_bytes(r.after),
                 fmt_bytes(r.saved()),
@@ -1666,19 +1666,19 @@ impl XylemApp {
             ));
         }
         if r.wont_shrink.0 > 0 {
-            lines.push(format!("{} files left as they were: they wouldn't get smaller.", n(r.wont_shrink)));
+            lines.push(format!("{} left as it was: it wouldn't get smaller.", n(r.wont_shrink)));
         }
         if r.in_use.0 > 0 {
-            lines.push(format!("{} files skipped: another program is using them.", n(r.in_use)));
+            lines.push(format!("{} skipped: in use by another program.", n(r.in_use)));
         }
         if r.denied.0 > 0 {
-            lines.push(format!("{} files skipped: Windows doesn't allow changing them (read-only or no permission).", n(r.denied)));
+            lines.push(format!("{} skipped: Windows doesn't allow changing them (read-only or no permission).", n(r.denied)));
         }
         if r.skipped.0 > 0 {
-            lines.push(format!("{} files skipped: already in that state, changed since the scan, or not where the scan saw them.", n(r.skipped)));
+            lines.push(format!("{} skipped: already in that state, changed since the scan, or not where the scan saw them.", n(r.skipped)));
         }
         if r.failed.0 > 0 {
-            lines.push(format!("{} files failed: {}", n(r.failed), r.first_error.clone().unwrap_or_default()));
+            lines.push(format!("{} failed: {}", n(r.failed), r.first_error.clone().unwrap_or_default()));
         }
         if r.cancelled {
             lines.push("Stopped. Files already done stay that way (each file is all or nothing); the rest are untouched. Run it again to continue.".into());
