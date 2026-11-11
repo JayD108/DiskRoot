@@ -2,84 +2,98 @@
 
 [← Back to README](../README.md) · To report a vulnerability, see [SECURITY.md](../SECURITY.md).
 
-## What Xylem reads and doesn't do
-- It reads **file names, sizes and attributes** only. It doesn't read what's inside your files, **except the duplicate finder**, which you start yourself (View → Find duplicate files). It compares files of the same size by their contents, on your PC only. It skips online-only cloud files (reading them would download them) and treats hardlinks as one file.
-- It has **no network code**: no HTTP client and no browser engine anywhere in its dependencies. It was measured with 0 network connections.
-- It changes nothing on your computer except when **you** delete something (that goes to the Recycle Bin) or start one of Windows' own cleanup tools from it (below).
-- **Live updates** use Windows' change notifications for the scanned folder while the app is open; they read nothing else and stop when the app closes.
-- **Leftover hints** read the list of installed programs from the registry (the same list as Settings > Apps) and the names of running programs. Nothing is stored or sent.
+## In one table
 
-## Disk access
-- Drives are opened **read-only** (`GENERIC_READ`, unbuffered). The scanning code contains no write calls.
+| Xylem… | |
+|---|---|
+| reads file **names, sizes, attributes and dates** | Yes, that's what a scan is |
+| reads what's **inside** your files | Only the duplicate finder, when you start it, on your PC |
+| connects to the **internet** | Never. No network code at all; measured with 0 connections |
+| collects **telemetry** or needs an account | No |
+| **changes** anything | Only when you confirm: moving items to the Recycle Bin, or one of Windows' own cleanup tools you start from it |
+| runs **as admin** | Never the window. Only a short-lived helper, after the Windows prompt, for Fast scan or disk compaction |
+| runs **in the background** or at startup | No. Live updates and alerts stop when you close it |
+| keeps **data on your PC** | Settings, remembered scans, a deletion log (see the end of this page). Nothing leaves your PC |
+
+## What Xylem reads
+- **Scanning** reads names, sizes, attributes and last-modified dates. Drives are opened read-only (`GENERIC_READ`); the scanning code contains no write calls.
+- **The duplicate finder** (View → Find duplicate files, only when you start it) compares files of the same size by their contents. It skips online-only cloud files (reading them would download them) and treats hardlinks as one file.
+- **Live updates** use Windows' change notifications for the scanned folder while the app is open. They read nothing else, and they stop when the app closes.
+- **Leftover hints** read the list of installed programs from the registry (the same list as Settings > Apps) and the names of running programs. Nothing is stored or sent.
+- **The delete dialog** checks the list of running programs to warn about, say, Spotify running while you delete its cache.
 
 ## Admin rights
-- The app window never runs as admin.
-- **Fast scan** starts `xylem.exe --helper-scan C: --pipe <private pipe>` through the Windows UAC prompt. The helper creates no window: it scans, sends its result to the app and exits.
-- It accepts only that exact command line.
-- **No files written as admin:** the helper sends its result through a private named pipe that the app creates first (nobody else can create it; local only). The helper connects in "identification" mode, so the pipe can't borrow its admin rights. The app validates everything it receives with the fuzz-tested loader.
-- **Cancel and time limit:** Fast scan can be cancelled, and a helper that hangs is stopped after 10 minutes.
-- **Admin password from a standard account:** works. The administrator who types the password authorizes reading every file name on the drive (never file contents).
-- **Only from an installed copy:** release builds run Fast scan only from Program Files.
-- **Install location:** installed in Program Files, only administrators can replace the exe that Fast scan runs as admin.
+
+### Fast scan
+1. The window creates a **private named pipe** first: nobody else can create one with that name, and only local programs can connect.
+2. It starts `xylem.exe --helper-scan C: --pipe <name>` through the Windows UAC prompt. The helper accepts only that exact command line and creates no window.
+3. The helper opens the drive (read-only) and the pipe, then **drops its admin power before reading any drive data**: it removes every privilege, lowers itself to Low integrity (so it can't write files, registry keys or other programs), joins a job that forbids starting programs, and turns on Windows' code-loading protections. If it can't, it stops.
+4. It connects to the pipe in "identification" mode, so even a fake pipe could never act with its admin rights. It **writes nothing to disk**.
+5. The window checks everything it receives with the same fuzz-tested loader it uses for its own files.
+6. Fast scan can be cancelled; a helper that hangs is stopped after 10 minutes.
+
+Other rules:
+- **Only from an installed copy:** release builds use admin rights only from Program Files, which only administrators can change, never from a portable copy in Downloads.
+- **Standard user + admin password:** works. The administrator who types the password authorizes reading every file *name* on the drive (never contents).
+
+### Virtual-disk compaction
+`xylem.exe --helper-compact-vhdx <file>` (admin, after the UAC prompt) accepts only one existing `.vhdx` file outside Windows, refuses if anything has the disk open, and gives Windows' `diskpart` its commands through a pipe, so there's no script file another program could change. The disk is attached **read-only** while it's compacted. Release builds only do this from the installed copy.
 
 ## Deleting safely
-- Always to the Recycle Bin, and only after you confirm.
-- **Re-check right before the move:**
-  - When you confirm, Xylem records the file identity (volume + file ID) of the item and of every folder up to the scan root. Right before the move it compares them again, so a file or folder swapped in the meantime is refused.
-  - The item must still exist and be the same type, and no folder on its path may have become a link (junction or symlink).
-- **Locked:** Windows, program folders, profile roots, the scanned folder itself, and any folder that contains a protected place. Windows and Program Files are also locked by file identity, so another spelling of the path (UNC, `subst`, short 8.3 names, junctions) doesn't get around it.
+- Always to the **Recycle Bin**, and only after you confirm.
+- **Locked:** Windows, program folders, ProgramData, profile roots, the scanned folder itself, and any folder that contains a protected place. Windows and Program Files are also locked **by file identity**, so another spelling of the path (UNC, `subst`, short 8.3 names, junctions) doesn't get around it.
 - **Refused names:** names ending in a dot or space, device names (`CON`, `NUL`, …) and paths of 260+ characters, which Windows could silently turn into a different item. Use Explorer for those.
-- **Warnings that need a tick:**
-  - OneDrive folders: deleting also deletes them in the cloud and on your other devices.
-  - Folders containing Git repositories: unpushed work.
-  - Very large deletes: 10 GB or more, or 50,000+ files.
-  - USB and network drives: they may have no Recycle Bin, so the delete may be permanent.
+- **Checked right before the move:**
+  - When the dialog opens, Xylem records the file identity (volume + file ID) of the item and of every folder up to the scan root.
+  - When you confirm, it re-opens those folders, compares identities, and **keeps them open so nothing can rename or swap them** until the Recycle Bin move ends.
+  - The item must still exist and be the same type, and no folder on its path may have become a link since the scan.
+- **Warnings that need a tick:** OneDrive folders (deleting also deletes in the cloud and on your other devices), Git repositories inside (unpushed work), very large deletes (10 GB+ or 50,000+ files), USB and network drives (may have no Recycle Bin), and a program using the place that's running right now.
+- **"Mark all"** only marks places a "safe to clear" rule matched directly, never a folder that merely holds files of some type. Leftover app-data hints are never marked.
 - **Hidden characters** in names (such as right-to-left overrides) are shown visibly in the delete dialog and the history.
-- **History:** every delete (recycled, cancelled or refused) is logged in `%LOCALAPPDATA%\Xylem\deletions.log`; see File → Deletion history.
+- **History:** every delete (recycled, cancelled or refused) is logged in `%LOCALAPPDATA%\Xylem\deletions.log` (File → Deletion history).
 
 ## Windows' own tools
 Some cleanups are done by Windows, not by Xylem, and only when you click them:
-- DISM component cleanup (WinSxS) and virtual-disk compaction ask for admin through the Windows prompt. Compaction runs `xylem.exe --helper-compact-vhdx <file>`: it accepts only an existing `.vhdx` outside Windows, refuses if anything has the disk open, and hands diskpart its commands through a pipe (no script file another program could change). Release builds only do this from the installed copy.
-- `compact.exe` (folder compression) runs without admin, on your own folders, never on cloud folders; Uncompress undoes it.
-- Tools are started by their full path in System32 and never through `cmd.exe`, so no argument is interpreted by a shell.
-- The PowerShell cleanup plan is a file Xylem writes for you; Xylem never runs it. It's a dry run unless you add `-Run`, re-checks every item, and only uses the Recycle Bin.
+- **DISM** component cleanup (WinSxS) asks for admin through the Windows prompt.
+- **`compact.exe`** (folder compression) runs without admin, on your own folders, never on protected or cloud folders. Uncompress undoes it.
+- **Settings pages** (Storage, System Protection) just open.
+- All tools are started by their **full path in System32** and **never through `cmd.exe`**, so no argument is interpreted by a shell.
+- The **PowerShell cleanup plan** is a file Xylem writes for you; Xylem never runs it. It's a dry run unless you add `-Run`, re-checks every item, refuses links, writes paths so PowerShell can't interpret them, and only uses the Recycle Bin.
 
 ## Your own rules
-`%APPDATA%\Xylem\rules.json` can add categories, sub-types and notes. It can't set protection, safety labels or actions (such fields are refused), and its rules never apply where a built-in rule matches or inside a protected place.
-
-## Integrity check
-The shield button (or Help → Security & privacy) shows:
-- whether this copy runs from Program Files;
-- whether it carries a valid Authenticode signature. This uses Windows' `WinVerifyTrust`, offline: no revocation lookup.
+`%APPDATA%\Xylem\rules.json` can add categories, sub-types and notes. It **can't** set protection, safety labels or actions (such fields are refused), and its rules never apply where a built-in rule matches or inside a protected place. Size and count are limited.
 
 ## Robust parsing
-- MFT records and index files are parsed with bounds checks in safe Rust; `unsafe` is limited to small, commented Windows calls.
-- **Fuzz tests** feed the MFT parser, run lists, boot sector, tree builder and index loader hundreds of thousands of random and corrupted inputs on every test run (`XYLEM_FUZZ_ROUNDS` for longer runs; 2 million pass). They found and fixed three real bugs:
-  - A parent-link cycle in a corrupt MFT crashed the tree build.
-  - Sizes near 2⁶⁴ overflowed the totals; they now saturate.
-  - A corrupt boot sector could request huge buffers; the geometry is now limited to real NTFS values.
+- MFT records, run lists, boot sectors, index files and change notifications are parsed with bounds checks in safe Rust. `unsafe` is limited to small, commented Windows calls.
+- **Fuzzing:** built-in fuzz tests run on every test run (2 million rounds in the full test), and coverage-guided fuzzing (cargo-fuzz with AddressSanitizer) ran overnight on 6 targets. Fuzzing found and fixed three real bugs: a parent-link cycle in a corrupt MFT crashed the tree build; sizes near 2⁶⁴ overflowed the totals (they now saturate); a corrupt boot sector could request huge buffers (the geometry is now limited to real NTFS values).
 
 ## DLL planting defence
 - `xylem.exe` loads every DLL it needs from `System32` only: the `/DEPENDENTLOADFLAG:0x800` link flag covers static imports, and `SetDefaultDllDirectories` runs first thing in `main`.
-- So a malicious DLL saved next to a portable copy (for example in Downloads) is never loaded, including by the elevated Fast-scan helper. This is tested with 7 planted DLLs.
+- So a malicious DLL saved next to a portable copy (for example in Downloads) is never loaded, including by the admin helpers. Tested with planted DLLs in the full test.
 
-## Security review
-The code was reviewed against a security test plan (16 findings). All are fixed or documented:
-- The Fast-scan helper opens the drive and the result pipe, then drops every privilege, lowers itself to Low integrity and blocks child processes before reading any drive data, so a parser bug can't use admin rights.
-- Deleting keeps every folder above the item open (rename-proof) from the final identity check until the Recycle Bin move ends.
-- The installer always installs to Program Files and starts Xylem un-elevated.
-- Fast scan works only from the installed copy; the helper writes nothing to disk and has a cancel button and a time limit.
-- `explorer.exe` is started by its full path; network drives aren't probed at startup.
-- Delete checks: identity re-check, refused names, spelling-proof locks, folders containing protected places, USB/network warning (above).
-- GitHub Actions are pinned to commit SHAs; Dependabot, `cargo audit` and `cargo deny` (OSI licences, crates.io only) run in CI.
+## Integrity check
+The shield button (or Help → Security & privacy) shows whether this copy runs from Program Files, and whether it carries a valid Authenticode signature (checked with Windows' `WinVerifyTrust`, offline, without a revocation lookup).
+
+## Security review and testing
+The code was reviewed against a 16-finding security test plan; all findings are fixed or documented. Every release is checked by a 19-step local test, including:
+- the helper refusing malformed command lines;
+- planted DLLs never being loaded;
+- a planted `explorer.exe` never being run;
+- Fast scan refused from a non-installed copy;
+- **zero network sockets** during a full scan;
+- scanning changing nothing in the scanned folder.
+
+In CI, GitHub Actions are pinned to commit SHAs, and Dependabot, `cargo audit` and `cargo deny` (OSI licences only, crates.io only) run on every push.
 
 Still to do before 1.0: destructive tests on disposable machines, 24-hour fuzzing, and code signing.
 
 ## Your data on disk
-- Settings: `%APPDATA%\Xylem\settings.json`.
-- Deletion log: `%LOCALAPPDATA%\Xylem\deletions.log`.
-- **Remembered scans:** `%LOCALAPPDATA%\Xylem\cache`. These are the names and sizes from your last scans of up to 8 drives or folders, used for instant reopen and "what changed".
-  - **File → Remember scans** turns this off.
-  - **File → Forget remembered scans** deletes them.
-  - They're loaded with the same validated, fuzz-tested loader as the admin helper's result. A changed or damaged cache file is rejected, never trusted. Deleting always re-checks the real disk.
-- All of these stay on your PC. The uninstaller leaves them in place; delete the folders to remove them.
+| File | Contents | How to remove it |
+|---|---|---|
+| `%APPDATA%\Xylem\settings.json` | Theme, view choices, size alerts, last path | Delete the file |
+| `%APPDATA%\Xylem\rules.json` | Your custom rules, if you made any | Delete the file |
+| `%LOCALAPPDATA%\Xylem\cache\` | Names and sizes of your last scans (up to 8 drives or folders), for instant reopen and "what changed" | File → Forget remembered scans; File → Remember scans turns it off |
+| `%LOCALAPPDATA%\Xylem\deletions.log` | What you deleted with Xylem | Delete the file |
+| `Documents\Xylem\` | CSV exports and cleanup scripts you asked for | Delete the folder |
+
+Remembered scans are loaded with the same checked, fuzz-tested loader as the admin helper's result: a changed or damaged file is rejected, never trusted, and deleting always re-checks the real disk. The uninstaller leaves these files in place; delete the folders to remove them.

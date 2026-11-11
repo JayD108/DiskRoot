@@ -1,6 +1,6 @@
 # Roadmap
 
-[← Back to README](../README.md)
+[← Back to README](../README.md) · Every feature explained: [FEATURES-AND-DEVELOPMENT.md](FEATURES-AND-DEVELOPMENT.md)
 
 ## Rules every change keeps
 1. **Speed:** scans never get slower (C: ≈ 1.1 s with admin, ≈ 4.3 s without), no idle CPU use, memory not meaningfully higher. Every feature is benchmarked before it's merged.

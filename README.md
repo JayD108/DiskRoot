@@ -62,7 +62,7 @@ Download **`xylem-setup-<version>.exe`** from [Releases](https://github.com/JayD
 5. Next time, Xylem reopens your last scan instantly. Press **Scan** again, then **View → What changed** to see what grew.
 6. **Move to Recycle Bin…** (or the Delete key) asks before doing anything.
 
-There's also a command-line tool, `xylem-cli.exe`. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+Every feature, explained with what happens underneath: [docs/FEATURES-AND-DEVELOPMENT.md](docs/FEATURES-AND-DEVELOPMENT.md). There's also a command-line tool, `xylem-cli.exe`.
 
 ## Safety and privacy
 
@@ -80,9 +80,9 @@ Free code signing provided by [SignPath.io](https://about.signpath.io/), certifi
 
 | | |
 |---|---|
-| [How it works](docs/HOW-IT-WORKS.md) | Scanners, data model, categories, accuracy, the name |
-| [Security and privacy](docs/SECURITY-AND-PRIVACY.md) | What Xylem reads, admin rights, safe delete, testing |
-| [Development](docs/DEVELOPMENT.md) | Build from source, command line, tests, project layout, releases |
+| [How it works](docs/HOW-IT-WORKS.md) | Under the hood, step by step: reading the drive, the data model, categories, the map, reopen, live updates, deleting, accuracy |
+| [Security and privacy](docs/SECURITY-AND-PRIVACY.md) | What Xylem reads and never does, admin rights, safe delete, Windows' own tools, your data on disk |
+| [Features and development](docs/FEATURES-AND-DEVELOPMENT.md) | Every feature: what it does, how to use it, what happens underneath. Building, tests, project layout |
 | [Roadmap](docs/ROADMAP.md) | Releases, planned features and what's next |
 | [Benchmarks](docs/BENCHMARKS.md) | Speed against WizTree, WinDirStat and eDirStat, with the method |
 

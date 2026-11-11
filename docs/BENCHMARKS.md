@@ -2,6 +2,8 @@
 
 [← Back to README](../README.md) · Measured 11 Nov 2026 with [`tools/bench-competitors.ps1`](../tools/bench-competitors.ps1). Run it yourself: `.\tools\bench-competitors.ps1 -Mode user`, then the same with `-Mode admin` from an elevated PowerShell.
 
+**What's measured:** how long you wait for a whole drive to be scanned, from starting the program to its exit, the same way for every tool. "With admin" uses each tool's fast NTFS mode (reading the file table directly); "without admin" uses each tool's normal folder walk. "+ CSV" also writes a list of every file and folder, which shows how fast each tool can hand its data on.
+
 ## Result
 
 **Xylem was the fastest in every test, with and without admin rights.**
@@ -21,6 +23,24 @@
 | Scan + CSV of every file | **4.85 s** | — | 34.74 s (7.2x slower) | 21.13 s (4.4x slower) |
 
 Medians of 3 timed runs (after 1 warm-up run per tool). Individual runs are in `bench-results/results.csv` (not committed; re-run to regenerate).
+
+### Xylem 0.2 against 0.1
+0.2 added dates, live updates, rules and more. The rule is that scans don't get slower, so it was measured against the commit before Phases 8–10, the two builds alternating 5 times each on the same drive (with background fuzzing running, so both are slower than on an idle PC):
+
+| | Before (fa32b84) | 0.2 |
+|---|---|---|
+| Whole-drive folder walk (no admin), median | 5.37 s | **5.21 s** |
+| Scan data in memory, 1.99M items | 150.0 MB | 153.8 MB (+3.8 MB: one date per item) |
+| Classification, 1.8M items (synthetic) | 0.12–0.18 s | 0.12–0.16 s |
+
+No measurable slowdown; memory is up 2.5% for the dates.
+
+### Inside a scan
+| Step (drive C:, ~2M items) | Time |
+|---|---|
+| Building the tree from 1.77M MFT records | 0.16 s |
+| Classifying 1.8M items (categories, notes, safety) | 0.12–0.15 s |
+| Reopening a remembered scan | 0.3–0.4 s |
 
 ## Method
 - **Machine:** one laptop: Intel Core Ultra 9 275HX (24 threads), NVMe SSD, Windows 11 Home. Drive C: is 1.86 TB with ~1.55 TB used, ~1.67M files and ~317k folders visible without admin (~2.0M items with admin).
