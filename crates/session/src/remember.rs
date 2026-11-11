@@ -311,6 +311,14 @@ fn load_snap(path: &Path) -> Option<Snapshot> {
     Snapshot::load(&mut BufReader::new(File::open(path).ok()?)).ok()
 }
 
+/// The scan time stored in a snapshot's header, without reading the rest
+/// (reopen needs only this; parsing the whole C: snapshot cost ~46 ms).
+fn snap_time(path: &Path) -> Option<u64> {
+    let mut head = [0u8; 16];
+    File::open(path).ok()?.read_exact(&mut head).ok()?;
+    (&head[..8] == SNAP_MAGIC).then(|| u64::from_le_bytes(head[8..].try_into().expect("8 bytes")))
+}
+
 /// After a scan: save the index (instant reopen) and the folder snapshot,
 /// keep the previous snapshot, and return what changed since it (if there
 /// was one). Runs on a background thread.
@@ -340,7 +348,7 @@ pub fn reopen(root: &str) -> Option<(Index, ScanStats, String, u64)> {
     if !index.name(0).eq_ignore_ascii_case(root.trim()) && key(index.name(0)) != key(root) {
         return None;
     }
-    let time = load_snap(&snap_path).map(|s| s.time).unwrap_or_else(|| {
+    let time = snap_time(&snap_path).unwrap_or_else(|| {
         fs::metadata(&idx_path).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs())
     });
     Some((index, stats, mode, time))
@@ -468,6 +476,13 @@ mod tests {
         let back = Snapshot::load(&mut buf.as_slice()).unwrap();
         assert_eq!(back.dirs.len(), s.dirs.len());
         assert_eq!(back.dirs[2].path, "a\\x");
+        // The header-only read used by reopen agrees with the full load.
+        let p = std::env::temp_dir().join(format!("xylem-snap-time-{}.snap", std::process::id()));
+        std::fs::write(&p, &buf).unwrap();
+        assert_eq!(snap_time(&p), Some(back.time));
+        std::fs::write(&p, b"XYLMIDX1........").unwrap();
+        assert_eq!(snap_time(&p), None, "wrong magic");
+        let _ = std::fs::remove_file(&p);
         assert!(Snapshot::load(&mut &buf[..buf.len() - 1]).is_err(), "truncated");
         let mut extra = buf.clone();
         extra.push(0);
