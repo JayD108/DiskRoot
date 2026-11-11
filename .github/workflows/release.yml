@@ -6,7 +6,7 @@
 #   -> checksums -> GitHub Release (tags only)
 #
 # Signing turns on by itself once the repository secret SIGNPATH_API_TOKEN
-# and the variable SIGNPATH_ORGANIZATION_ID exist (see docs/SIGNPATH.md).
+# and the variable SIGNPATH_ORGANIZATION_ID exist.
 # Every signing request still needs manual approval in SignPath. Until
 # then, releases are published unsigned and say so.
 name: Release

@@ -12,7 +12,7 @@
 
 ## Admin rights
 - The app window never runs as admin.
-- **Fast scan** starts `xylem.exe --helper-scan C: --save-index <file>` through the Windows UAC prompt. The helper creates no window: it scans, writes its result and exits.
+- **Fast scan** starts `xylem.exe --helper-scan C: --pipe <private pipe>` through the Windows UAC prompt. The helper creates no window: it scans, sends its result to the app and exits.
 - It accepts only that exact command line.
 - **No files written as admin:** the helper sends its result through a private named pipe that the app creates first (nobody else can create it; local only). The helper connects in "identification" mode, so the pipe can't borrow its admin rights. The app validates everything it receives with the fuzz-tested loader.
 - **Cancel and time limit:** Fast scan can be cancelled, and a helper that hangs is stopped after 10 minutes.
@@ -23,15 +23,16 @@
 ## Deleting safely
 - Always to the Recycle Bin, and only after you confirm.
 - **Re-check right before the move:**
-  - The item must still exist.
-  - It must still be the same type (file or folder).
-  - No folder on its path may have become a link (junction or symlink) since the scan.
-  - Otherwise the delete is refused, so a swapped folder can't redirect it.
-- **Locked:** Windows, program folders, profile roots and the scanned folder itself.
+  - When you confirm, Xylem records the file identity (volume + file ID) of the item and of every folder up to the scan root. Right before the move it compares them again, so a file or folder swapped in the meantime is refused.
+  - The item must still exist and be the same type, and no folder on its path may have become a link (junction or symlink).
+- **Locked:** Windows, program folders, profile roots, the scanned folder itself, and any folder that contains a protected place. Windows and Program Files are also locked by file identity, so another spelling of the path (UNC, `subst`, short 8.3 names, junctions) doesn't get around it.
+- **Refused names:** names ending in a dot or space, device names (`CON`, `NUL`, …) and paths of 260+ characters, which Windows could silently turn into a different item. Use Explorer for those.
 - **Warnings that need a tick:**
   - OneDrive folders: deleting also deletes them in the cloud and on your other devices.
   - Folders containing Git repositories: unpushed work.
   - Very large deletes: 10 GB or more, or 50,000+ files.
+  - USB and network drives: they may have no Recycle Bin, so the delete may be permanent.
+- **Hidden characters** in names (such as right-to-left overrides) are shown visibly in the delete dialog and the history.
 - **History:** every delete (recycled, cancelled or refused) is logged in `%LOCALAPPDATA%\Xylem\deletions.log`; see File → Deletion history.
 
 ## Integrity check
@@ -49,6 +50,16 @@ The shield button (or Help → Security & privacy) shows:
 ## DLL planting defence
 - `xylem.exe` loads every DLL it needs from `System32` only: the `/DEPENDENTLOADFLAG:0x800` link flag covers static imports, and `SetDefaultDllDirectories` runs first thing in `main`.
 - So a malicious DLL saved next to a portable copy (for example in Downloads) is never loaded, including by the elevated Fast-scan helper. This is tested with 7 planted DLLs.
+
+## Security review
+The code was reviewed against a security test plan (16 findings). All are fixed or documented:
+- The installer always installs to Program Files and starts Xylem un-elevated.
+- Fast scan works only from the installed copy; the helper writes nothing to disk and has a cancel button and a time limit.
+- `explorer.exe` is started by its full path; network drives aren't probed at startup.
+- Delete checks: identity re-check, refused names, spelling-proof locks, folders containing protected places, USB/network warning (above).
+- GitHub Actions are pinned to commit SHAs; Dependabot, `cargo audit` and `cargo deny` (OSI licences, crates.io only) run in CI.
+
+Still to do before 1.0: destructive tests on disposable machines, 24-hour fuzzing, and code signing.
 
 ## Your data on disk
 - Settings: `%APPDATA%\Xylem\settings.json`.
