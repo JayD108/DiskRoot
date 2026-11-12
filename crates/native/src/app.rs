@@ -184,13 +184,16 @@ struct GrowthView {
     logs: Vec<xylem_session::logs::Growing>,
 }
 
+/// (kind of data, bytes, files) that a failed drive would take with it.
+type AtRisk = (&'static str, u64, u64);
+
 /// View > Drive health: each drive with its trend, and Windows' TRIM setting.
 struct HealthView {
     drives: Vec<(health::Drive, Option<health::Trend>)>,
     trim: Option<bool>,
     /// The scan on screen, if it's a whole drive: (its letter "C:", what
     /// can't be downloaded or rebuilt again: (kind, bytes, files)).
-    at_risk: Option<(String, Vec<(&'static str, u64, u64)>)>,
+    at_risk: Option<(String, Vec<AtRisk>)>,
 }
 
 impl HealthView {
