@@ -449,6 +449,10 @@ pub struct DiskRootApp {
     hist: Option<Arc<History>>,
     /// For waking the window from other threads (live updates).
     egui_ctx: egui::Context,
+    /// Drawing on the CPU (Windows' software renderer, no graphics driver):
+    /// lighter drawing (no edge smoothing, a shallower map). Decided on the
+    /// first frame.
+    light_draw: Option<bool>,
     /// Drive letter -> is it an SSD (for the nearly-full hint).
     ssd_cache: std::collections::HashMap<String, Option<bool>>,
     /// Which program or game folders belong to ("Belongs to"); loaded once
@@ -520,6 +524,7 @@ impl Footprint {
 
 impl DiskRootApp {
     pub fn new(cc: &eframe::CreationContext<'_>, start: Option<String>) -> Self {
+        STARTED.store(true, Ordering::Relaxed);
         theme::install_fonts(&cc.egui_ctx);
         // Upgrading from the previous version: move its settings and saved scans first.
         let migrated = diskroot_session::migrate_previous();
@@ -556,6 +561,7 @@ impl DiskRootApp {
             links_cache: None,
             hist: None,
             egui_ctx: cc.egui_ctx.clone(),
+            light_draw: None,
             ssd_cache: std::collections::HashMap::new(),
             owners: None,
             savings_rx: None,
@@ -1288,7 +1294,9 @@ impl DiskRootApp {
         let Some(s) = &self.scanned else { return };
         let (nodes, up) = match &root {
             MapRoot::Node(n) => {
-                let nodes = s.view(*n, 3).unwrap_or_default();
+                // A shallower map when drawing on the CPU (software renderer).
+                let depth = if self.light_draw == Some(true) { 2 } else { 3 };
+                let nodes = s.view(*n, depth).unwrap_or_default();
                 let up = s.info(*n).ok().and_then(|i| i.parent).map(Key_::Node);
                 (nodes, up)
             }
@@ -4997,8 +5005,17 @@ impl Columns {
 }
 
 impl eframe::App for DiskRootApp {
-    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        let _bench = bench_frame(&ctx, frame, self.scanned.is_some());
+        if self.light_draw.is_none() {
+            let cpu = frame.wgpu_render_state().is_some_and(|r| r.adapter.get_info().device_type == wgpu::DeviceType::Cpu);
+            self.light_draw = Some(cpu);
+            if cpu {
+                ctx.tessellation_options_mut(|o| o.feathering = false);
+                self.map = None;
+            }
+        }
         self.poll_job(&ctx);
         self.poll_remember(&ctx);
         self.poll_savings(&ctx);
@@ -5140,6 +5157,58 @@ fn size_chart(ui: &mut Ui, t: &Tokens, pts: &[(u64, u64)], size: egui::Vec2, axi
             diskroot_session::date_text((when / 86_400) as u16),
             remember::age_text(when)
         ));
+    }
+}
+
+/// Set once the window exists: a panic after this is a real crash, not a
+/// renderer that couldn't start.
+pub static STARTED: AtomicBool = AtomicBool::new(false);
+
+/// Frame-time benchmark, off unless DISKROOT_BENCH=<seconds> is set: once a
+/// scan is on screen, redraws continuously for that long, then writes frame
+/// intervals and UI build times (ms) to DISKROOT_BENCH_OUT and closes.
+struct BenchGuard(Instant);
+
+static BENCH: std::sync::Mutex<Option<(Instant, Instant, Vec<f32>, Vec<f32>)>> = std::sync::Mutex::new(None);
+
+impl Drop for BenchGuard {
+    fn drop(&mut self) {
+        if let Some(b) = BENCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_mut() {
+            b.3.push(self.0.elapsed().as_secs_f32() * 1000.0);
+        }
+    }
+}
+
+fn bench_frame(ctx: &egui::Context, frame: &eframe::Frame, ready: bool) -> Option<BenchGuard> {
+    let secs = std::env::var("DISKROOT_BENCH").ok().and_then(|s| s.parse::<f64>().ok())?;
+    if !ready {
+        return None;
+    }
+    let now = Instant::now();
+    let mut st = BENCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (start, last, frames, builds) = st.get_or_insert_with(|| (now, now, Vec::new(), Vec::new()));
+    frames.push(now.duration_since(*last).as_secs_f32() * 1000.0);
+    *last = now;
+    if now.duration_since(*start).as_secs_f64() >= secs {
+        let stats = |v: &[f32]| {
+            let mut v = v.to_vec();
+            v.sort_by(f32::total_cmp);
+            let q = |f: f64| v.get(((v.len().max(1) - 1) as f64 * f) as usize).copied().unwrap_or(0.0);
+            format!("n {} mean {:.2} p50 {:.2} p95 {:.2} p99 {:.2} max {:.2}", v.len(), v.iter().sum::<f32>() / v.len().max(1) as f32, q(0.5), q(0.95), q(0.99), q(1.0))
+        };
+        let adapter = frame.wgpu_render_state().map(|r| format!("{:?}", r.adapter.get_info())).unwrap_or_default();
+        let line = format!("adapter  {adapter}
+interval {}
+build    {}
+", stats(&frames[1..]), stats(builds));
+        if let Some(out) = std::env::var_os("DISKROOT_BENCH_OUT") {
+            let _ = std::fs::write(out, line);
+        }
+        ctx.send_viewport_cmd(ViewportCommand::Close);
+        None
+    } else {
+        ctx.request_repaint();
+        Some(BenchGuard(now))
     }
 }
 

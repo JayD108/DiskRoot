@@ -71,6 +71,40 @@ pub fn fmt_pct(part: u64, whole: u64) -> String {
     if p >= 10.0 { format!("{p:.0}%") } else { format!("{p:.1}%") }
 }
 
+/// Drawing: Direct3D 12 through wgpu. Any graphics chip works (the low-power
+/// one is preferred: an interface needs little); with no graphics driver
+/// at all (virtual machines, Remote Desktop, "Microsoft Basic Display
+/// Adapter"), Windows' built-in software renderer WARP draws on the CPU.
+/// DISKROOT_RENDERER=software forces WARP (for testing slow PCs).
+fn wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
+    use eframe::egui_wgpu::{WgpuConfiguration, WgpuSetup, wgpu};
+    let force_software = std::env::var("DISKROOT_RENDERER").is_ok_and(|v| v.eq_ignore_ascii_case("software"));
+    let mut cfg = WgpuConfiguration::default();
+    // A UI redraws only on change: one frame in flight is enough, and lowest latency.
+    cfg.surface = eframe::egui_wgpu::SurfaceConfig { present_mode: wgpu::PresentMode::AutoNoVsync, desired_maximum_frame_latency: Some(1) };
+    if let WgpuSetup::CreateNew(new) = &mut cfg.wgpu_setup {
+        new.instance_descriptor.backends = wgpu::Backends::DX12;
+        new.power_preference = wgpu::PowerPreference::LowPower;
+        new.native_adapter_selector = Some(Arc::new(move |adapters: &[wgpu::Adapter], surface: Option<&wgpu::Surface<'_>>| {
+            let fits = |a: &&wgpu::Adapter| surface.is_none_or(|s| a.is_surface_supported(s));
+            let software = |a: &&wgpu::Adapter| a.get_info().device_type == wgpu::DeviceType::Cpu;
+            let rank = |a: &&wgpu::Adapter| match a.get_info().device_type {
+                wgpu::DeviceType::IntegratedGpu => 0,
+                wgpu::DeviceType::DiscreteGpu => 1,
+                wgpu::DeviceType::VirtualGpu | wgpu::DeviceType::Other => 2,
+                wgpu::DeviceType::Cpu => 3,
+            };
+            let pick = if force_software {
+                adapters.iter().filter(fits).find(software)
+            } else {
+                adapters.iter().filter(fits).min_by_key(rank)
+            };
+            pick.cloned().ok_or_else(|| "no Direct3D 12 adapter (not even Windows' software renderer)".to_owned())
+        }));
+    }
+    cfg
+}
+
 fn main() {
     // Before anything can load a DLL: System32 only (DLL planting defence).
     diskroot_session::integrity::harden_dll_search();
@@ -88,6 +122,10 @@ fn main() {
         std::process::exit(code);
     }
 
+    // OpenGL by default: lightest (about 110 MB less memory than Direct3D 12
+    // on our test PC). Direct3D 12 / WARP only when asked, or as the
+    // automatic fallback when OpenGL can't start (no graphics driver).
+    let use_d3d = std::env::var("DISKROOT_RENDERER").is_ok_and(|v| v.eq_ignore_ascii_case("software") || v.eq_ignore_ascii_case("d3d12"));
     let icon = IconData { rgba: include_bytes!("../assets/icon-64.rgba").to_vec(), width: 64, height: 64 };
     let options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
@@ -95,6 +133,11 @@ fn main() {
             .with_inner_size([1360.0, 860.0])
             .with_min_inner_size([960.0, 600.0])
             .with_icon(Arc::new(icon)),
+        renderer: if use_d3d { eframe::Renderer::Wgpu } else { eframe::Renderer::Glow },
+        // Test switch for the fallback: ask OpenGL for an impossible setting so
+        // it refuses to start, like on a PC without a graphics driver.
+        multisampling: if !use_d3d && std::env::var_os("DISKROOT_TEST_GL_FAIL").is_some() { 128 } else { 0 },
+        wgpu_options: wgpu_options(),
         ..Default::default()
     };
     // Explorer's right-click menu passes "%V"; for a drive that is "C:\",
@@ -104,8 +147,28 @@ fn main() {
         .map(|a| a.trim().trim_end_matches('"'))
         .filter(|a| !a.is_empty() && !a.starts_with('-'))
         .map(str::to_owned);
-    let result = eframe::run_native("DiskRoot", options, Box::new(move |cc| Ok(Box::new(app::DiskRootApp::new(cc, start)))));
+    // OpenGL may fail with an error or a panic (eframe panics when no
+    // matching OpenGL configuration exists). Either way, before the window
+    // first appeared, it's a renderer problem: try Direct3D 12 instead.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        eframe::run_native("DiskRoot", options, Box::new(move |cc| Ok(Box::new(app::DiskRootApp::new(cc, start)))))
+    }));
+    let result = match result {
+        Ok(r) => r.map_err(|e| e.to_string()),
+        Err(_) if app::STARTED.load(std::sync::atomic::Ordering::Relaxed) => std::process::exit(101), // a real crash
+        Err(_) => Err("the renderer didn't start".to_owned()),
+    };
     if let Err(e) = result {
+        // OpenGL didn't start (e.g. no graphics driver: virtual machines,
+        // Remote Desktop, "Microsoft Basic Display Adapter"). Start again with
+        // Direct3D 12, which falls back to Windows' software renderer. A new
+        // process, because the window system can only start once per process.
+        if !use_d3d
+            && let Ok(exe) = std::env::current_exe()
+            && std::process::Command::new(exe).args(&args[1..]).env("DISKROOT_RENDERER", "d3d12").spawn().is_ok()
+        {
+            std::process::exit(0); // hand over to the new process
+        }
         eprintln!("DiskRoot could not start: {e}");
         std::process::exit(1);
     }
