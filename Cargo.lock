@@ -3247,7 +3247,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xylem"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "eframe",
  "serde",
@@ -3258,7 +3258,7 @@ dependencies = [
 
 [[package]]
 name = "xylem-bench"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "clap",
  "xylem-core",
@@ -3268,7 +3268,7 @@ dependencies = [
 
 [[package]]
 name = "xylem-cli"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "clap",
  "serde_json",
@@ -3281,7 +3281,7 @@ dependencies = [
 
 [[package]]
 name = "xylem-core"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3289,7 +3289,7 @@ dependencies = [
 
 [[package]]
 name = "xylem-scan-mft"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "xylem-core",
  "xylem-scan-walk",
@@ -3297,14 +3297,14 @@ dependencies = [
 
 [[package]]
 name = "xylem-scan-walk"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "xylem-core",
 ]
 
 [[package]]
 name = "xylem-session"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "blake3",
  "lz4_flex",

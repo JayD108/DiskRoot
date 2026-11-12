@@ -2,6 +2,14 @@
 
 **Xylem {{VERSION}}**: a fast disk space analyzer for Windows 10/11. It shows what fills your drive, what each thing is, and whether it's safe to delete.
 
+## New in 0.5.1
+Fixes from a full audit of 0.5.0, before anything new:
+- **Much less writing to your SSD:** Xylem's own saved scans are now compressed. Saving a scan of a 1.5 TB drive writes about 44 MB instead of ~150 MB, and the "while you were away" baseline costs nothing. The recommended scan interval also keeps Xylem's own writes under about 1 GB a day. Older saved scans still open.
+- **Hardlinks counted once only where that's reliable:** on local NTFS drives. On ReFS and network drives every name counts again (their file IDs can't be trusted for this), so no real file can be shown as 0 B by mistake.
+- **Started with "Run as administrator":** Xylem now says so, and its own scans stay folder walks; reading the raw drive happens only in the locked-down Fast-scan helper.
+- **Fixed:** the app and a scheduled scan saving at the same moment could damage each other's files; live updates could count a hardlinked file twice again; the window redrew every second while live updates were on (idle CPU is now near zero); scheduling from a portable copy now warns that the task points at that file.
+- **Honest numbers:** compression is about 5–9× faster than `compact.exe` in our test (not 15×), idle CPU is near zero (not zero), and scanning never changes your files but Xylem does save its own scans (docs updated).
+
 ## New in 0.5.0
 Xylem now shows not only what fills your drive, but how the drive is doing and what wears it, and it can keep watch by itself. Everything still works without admin, offline, read-only.
 

@@ -7,22 +7,23 @@
 | Xylem… | |
 |---|---|
 | reads file **names, sizes, attributes and dates** | Yes, that's what a scan is |
-| reads what's **inside** your files | Only when you start the duplicate finder or Compress, on your PC |
+| reads what's **inside** your files | Only when you start the duplicate finder or Compress, on your PC. It also reads a few small files about your PC: Steam's and Epic's game lists (for "Belongs to") and your own rules file |
 | connects to the **internet** | Never. No network code at all; measured with 0 connections |
 | collects **telemetry** or needs an account | No |
 | **changes** anything | Only when you confirm: moving items to the Recycle Bin, compressing a folder (undoable), or one of Windows' own tools you start from it. Ways to save space only suggests |
-| runs **as admin** | Never the window. Only a short-lived helper, after the Windows prompt, for Fast scan or disk compaction |
+| runs **as admin** | The window doesn't need it: started with "Run as administrator", it warns, and its own scans stay folder walks. Only a short-lived helper, after the Windows prompt, reads the raw drive (Fast scan) or compacts a virtual disk |
 | runs **in the background** or at startup | Only if you turn on scheduled scans: then Windows' Task Scheduler starts a normal scan (no admin, no window) every 30 min or more, which exits when done. Live updates and alerts stop when you close Xylem |
 | keeps **data on your PC** | Settings, remembered scans, a deletion log (see the end of this page). Nothing leaves your PC |
 
 ## What Xylem reads
-- **Scanning** reads names, sizes, attributes, last-modified dates and created dates (when a file arrived on this PC). Drives are opened read-only (`GENERIC_READ`); the scanning code contains no write calls. Last-opened dates aren't read.
+- **Scanning** reads names, sizes, attributes, last-modified dates, created dates (when a file arrived on this PC) and, on local NTFS drives, file IDs (to count hardlinked files once). Folders are opened for listing only and drives read-only; the scanning code contains no write calls. Last-opened dates aren't read. After a scan, Xylem saves it to its own folder (`%LOCALAPPDATA%\Xylem\cache`, lz4-compressed: about 45 MB for a 1.5 TB drive), which counts as SSD writes.
 - **Scheduled scans** (off until you turn them on) are the same read-only folder walk, started by a Task Scheduler task that runs as you with least privilege. They never ask for admin, never run Fast scan, and write only Xylem's own files (the remembered scan and a small log in `%LOCALAPPDATA%\Xylem`). The task is removed when you turn them off or uninstall Xylem. Their optional warnings are a local Windows notification (no network), at most once a day per reason.
 - **Drive health** asks each disk for its own reports (model, health log, TRIM support) through a handle opened with no access rights: it can't read or write any data on the disk, and needs no admin. One small note per drive per day (counters only: data written/read, wear %, hours, temperature, errors) is kept for the writes-per-day chart.
 - **Who's writing** reads Windows' list of running programs with their write counters (one system call; no program is opened or touched), each disk's write counter, and how long since the last key or mouse input (to tell idle from active). Nothing is kept except, for scheduled scans, the names and rates of the top 5 writing programs of each 30-s sample in the scan log.
 - **Ways to save space** works only from the scan in memory: it opens no file and changes nothing. Its buttons lead to the usual dialogs (Compress, the delete review, Windows' own tools).
 - **The duplicate finder** (View → Find duplicate files, only when you start it) compares files of the same size by their contents. It skips online-only cloud files (reading them would download them) and treats hardlinks as one file.
 - **Live updates** use Windows' change notifications for the scanned folder while the app is open. They read nothing else, and they stop when the app closes.
+- **Belongs to** reads Windows' list of installed programs (install folders), Steam's `libraryfolders.vdf` and `appmanifest_*.acf` and the Epic Games Launcher's `.item` manifests, once at start, to name the program or game a folder belongs to. Nothing is stored.
 - **Leftover hints** read the list of installed programs from the registry (the same list as Settings > Apps) and the names of running programs. Nothing is stored or sent.
 - **The delete dialog** checks the list of running programs to warn about, say, Spotify running while you delete its cache.
 

@@ -3,10 +3,10 @@
 [← Back to README](../README.md) · Every feature explained: [FEATURES-AND-DEVELOPMENT.md](FEATURES-AND-DEVELOPMENT.md)
 
 ## Rules every change keeps
-1. **Speed:** scans never get slower (C: ≈ 1.1 s with admin, ≈ 4.3 s without), no idle CPU use, memory not meaningfully higher. Every feature is benchmarked before it's merged.
-2. **Read-only scanning:** scanning never writes to the scanned drive.
+1. **Speed:** scans never get slower (C: ≈ 1.1 s with admin, ≈ 4.3 s without), near-zero idle CPU, memory not meaningfully higher. Every feature is benchmarked before it's merged.
+2. **Read-only scanning:** scanning never changes your files; Xylem's own cache is compressed and kept small (it's SSD writes too).
 3. **Careful changes:** anything that changes files happens only after you confirm, is re-checked on disk first, and is undoable where possible (Recycle Bin).
-4. **Least privilege:** the window never runs as admin. Admin work goes through a minimal helper, or through Windows' own tools behind Windows' own UAC prompt.
+4. **Least privilege:** the window doesn't need admin (it warns if started elevated, and never reads the raw drive itself). Admin work goes through a minimal helper, or through Windows' own tools behind Windows' own UAC prompt.
 5. **Offline and private:** no network; nothing runs at startup unless you turn it on.
 6. **Open source only:** OSI-licensed components.
 

@@ -110,6 +110,18 @@ Measured 12 Nov 2026 on the C: drive below (two real remembered scans 1.5 h apar
 
 Biggest moves: `.tmp` 7.7 GB, model weights (`.bin` next to `tokenizer_config.json`) 5.0 GB, `.csv` 4.1 GB, Oracle `.dbf` 1.5 GB, `.partial` 1.5 GB, `.jsonl` 1.1 GB.
 
+## Xylem's own writes
+
+What saving one scan of C: (1.7M files) writes, 13 Nov 2026:
+
+| | 0.5.0 | 0.5.1 (lz4) |
+|---|---|---|
+| Remembered scan (`.idx`) | 106 MB | 37.2 MB |
+| Folder list (`.snap`) | 39 MB | 6.5 MB |
+| Size history (`.hist`) | 2.7 MB | 0.6 MB |
+| "While you were away" baseline | 39 MB copy | hardlink, 0 B |
+| Reopen (load, warm cache) | ~102 ms | ~131 ms |
+
 ## Method
 - **Machine:** one laptop: Intel Core Ultra 9 275HX (24 threads), NVMe SSD, Windows 11 Home. Drive C: is 1.86 TB with ~1.55 TB used, ~1.67M files and ~317k folders visible without admin (~2.0M items with admin).
 - **Same drive, warm cache, tools interleaved round-robin** so a busy moment on the disk doesn't hit just one tool.

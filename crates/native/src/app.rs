@@ -3723,7 +3723,7 @@ impl XylemApp {
                     facts(ui, &t, &[
                         ("RAM in use", &format!("{} (the most so far: {})", fmt_bytes(f.ram), fmt_bytes(f.peak))),
                         ("Private", &format!("{} (memory only Xylem holds; Task Manager's \"Commit size\")", fmt_bytes(f.private))),
-                        ("CPU", &format!("{:.1}% of the whole processor right now. Idle, Xylem uses none.", f.cpu_pct)),
+                        ("CPU", &format!("{:.1}% of the whole processor right now. Idle, Xylem uses almost none (well under 1% of one core).", f.cpu_pct)),
                     ]);
                     ui.add_space(6.0);
                     if let Some(s) = &self.scanned {
@@ -3793,7 +3793,7 @@ impl XylemApp {
                     ui.add_space(8.0);
                     facts(ui, &t, &[
                         ("Network", "Xylem makes no network connections and sends nothing anywhere. The native app has no browser engine."),
-                        ("Disk access", "Drives are opened for reading only. Scanning never writes to the disk."),
+                        ("Disk access", "Folders and drives are opened for reading only; scanning never changes your files. Xylem saves its own scans (compressed) in %LOCALAPPDATA%\\Xylem."),
                         ("Admin rights", "Only after the Windows prompt: for Fast scan (a helper reads the file table in about 1–5 s and exits), and if you use them, Windows' DISM cleanup and virtual-disk compaction."),
                         ("Deleting", "Always to the Recycle Bin, after you confirm. Right before moving, Xylem re-checks the item: if it changed, or a folder on its path became a link since the scan, it refuses."),
                         ("Warnings", "Extra confirmation for OneDrive folders (deleting syncs to your other devices), Git repositories (unpushed work) and very large deletes."),

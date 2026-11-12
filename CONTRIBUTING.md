@@ -5,9 +5,9 @@ Thanks for helping. Xylem is a small, careful tool: it reads your drive fast, ex
 ## The rules every change keeps
 
 1. **Offline.** No network code, no telemetry, no accounts, no update checks. CI fails if an HTTP/TLS crate appears in `Cargo.lock`.
-2. **Read-only scanning.** A scan never writes to the scanned drive.
+2. **Read-only scanning.** A scan never changes the scanned files (Xylem's own cache lives in `%LOCALAPPDATA%\Xylem`, compressed, and counts as SSD writes: keep it small).
 3. **Careful changes.** Anything that changes files happens only after the user confirms, is re-checked on disk first, and can be undone where possible. Data is verified, never assumed.
-4. **Least privilege.** The window never runs as admin.
+4. **Least privilege.** The window doesn't need admin and warns if started elevated; raw drive reading only in the locked-down helper.
 5. **Fast.** Scans never get slower. Every feature is measured before it's merged.
 6. **Open source only.** MIT/Apache-2.0 for Xylem's code; dependencies must have an OSI-approved licence (`cargo deny check` enforces it).
 7. **Honest claims.** Numbers in the docs come from measurements, with the method. "Fastest in our tests", never "fastest in the world".

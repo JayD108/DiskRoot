@@ -105,7 +105,7 @@ Instead of millions of small objects, Xylem keeps **one array per property**, an
 ## 3. Meaning: what each thing is
 
 ### Rules (`classify.rs` + `rules.json`)
-Rules are data, not code: 119 folder/file patterns, 92 file extensions and marker files. Each rule gives a **category**, a **sub-type**, a plain-English **note**, a **safety label** and maybe a **protection** level, plus the programs that use the place and a Windows tool that cleans it.
+Rules are data, not code: 119 folder/file patterns, 16 marker files and 110 file extensions. Each rule gives a **category**, a **sub-type**, a plain-English **note**, a **safety label** and maybe a **protection** level, plus the programs that use the place and a Windows tool that cleans it.
 
 Patterns look like `node_modules`, `AppData/Local/Temp` (matches the end of any path), `/Windows/WinSxS` (anchored at the drive root) or `/Users/*/Downloads` (`*` = any text).
 

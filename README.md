@@ -40,8 +40,8 @@ On the developer's laptop (a 2 TB NVMe drive holding 1.5 TB in 1.7 million files
 | 🚶 **Normal scan** (no admin) | about 4.3 s |
 | 🔁 **Reopen** the last scan | about 0.4 s |
 | 🏷️ Files left **unclassified** | 1.6 GB of 1.56 TB (0.1%) |
-| 🗜️ Built-in **compression** vs Windows' `compact.exe` | about 15× faster |
-| 🪶 Idle CPU · network connections | 0 · 0 |
+| 🗜️ Built-in **compression** vs Windows' `compact.exe` | about 5–9× faster |
+| 🪶 Idle CPU with the window open · network connections | under 0.2% of one core · 0 |
 
 Method and more numbers: [BENCHMARKS.md](docs/BENCHMARKS.md).
 
@@ -86,8 +86,8 @@ Method and more numbers: [BENCHMARKS.md](docs/BENCHMARKS.md).
 
 - Shows its own RAM and CPU; free its memory with one click (your scan stays saved); gentle scanning keeps other programs fast.
 - **Teach Xylem:** right-click a folder → *This is…* (my project, a dataset, a game…), or write your own rules.
-- Light and dark themes, full keyboard control (Help → Keyboard shortcuts), screen-reader names for the map.
-- No network code at all, no accounts, no telemetry. One small program (~8 MB).
+- Light and dark themes, keyboard control of the tree and windows (Help → Keyboard shortcuts), screen-reader names for the map.
+- No network code at all, no accounts, no telemetry. One small program (~9 MB).
 </details>
 
 Every feature, with what happens underneath: [FEATURES-AND-DEVELOPMENT.md](docs/FEATURES-AND-DEVELOPMENT.md).
@@ -135,9 +135,9 @@ Every command has `--json` for scripts. Guide: [docs/CLI.md](docs/CLI.md).
                                   drive's file table (read-only), hands the result back, exits
 ```
 
-- **Offline:** no network code at all. **Read-only:** scanning never writes to your drive.
+- **Offline:** no network code at all. **Read-only scanning:** it never changes your files. Xylem's own saved scans go to `%LOCALAPPDATA%\Xylem`, compressed (about 45 MB for a 1.5 TB drive).
 - **Nothing changes without your OK:** delete goes to the Recycle Bin, compression is undoable, Save space only suggests.
-- **Least privilege:** the window never runs as admin; scheduled scans never ask for it.
+- **Least privilege:** the window doesn't need admin (started as admin, it warns, and its scans stay folder walks); only the short-lived Fast-scan helper reads the raw drive; scheduled scans never ask for admin.
 - **Tested before every release:** no network connections, read-only scanning, the admin helper's limits, fuzzing of every file parser. The shield button in the app shows exactly what Xylem does.
 
 Details: [SECURITY-AND-PRIVACY.md](docs/SECURITY-AND-PRIVACY.md). Report a problem privately: [SECURITY.md](SECURITY.md).
