@@ -477,7 +477,7 @@ pub fn trend(all: &[Snap], d: &Drive) -> Option<Trend> {
         .filter(|w| w[1].time > w[0].time && w[1].written >= w[0].written)
         .map(|w| (w[1].time, ((w[1].written - w[0].written) as f64 / ((w[1].time - w[0].time) as f64 / DAY as f64).max(1.0 / 24.0)) as u64))
         .collect();
-    let first: &Snap = *mine.iter().find(|s| s.time.saturating_add(30 * DAY) >= last.time).unwrap_or(&mine[0]);
+    let first: &Snap = mine.iter().find(|s| s.time.saturating_add(30 * DAY) >= last.time).unwrap_or(&mine[0]);
     let span = last.time.saturating_sub(first.time) as f64 / DAY as f64;
     let per_day = (span >= 2.0 && last.written >= first.written).then(|| (last.written - first.written) as f64 / span);
     let all_span = last.time.saturating_sub(mine[0].time) as f64 / DAY as f64;
