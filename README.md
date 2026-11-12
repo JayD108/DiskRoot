@@ -4,56 +4,129 @@
 
 # Xylem
 
-**See what's filling your drive, what each thing is, and whether it's safe to delete.**
+### Your drive, explained.
 
-A fast, free and open-source disk space analyzer for Windows 10 and 11.
+**What's filling it · what each thing is · whether it's safe to delete · how the drive itself is doing**
 
-**[⬇ Download Xylem for Windows](https://github.com/JayD108/Xylem/releases/latest/download/xylem-setup.exe)** · [portable zip](https://github.com/JayD108/Xylem/releases/latest/download/xylem-portable.zip) · [all releases](https://github.com/JayD108/Xylem/releases)
+Free and open source, for Windows 10 and 11. Offline. Read-only scanning. No admin needed.
+
+[![Download](https://img.shields.io/badge/⬇_Download-Xylem_for_Windows-2f6b3a?style=for-the-badge)](https://github.com/JayD108/Xylem/releases/latest/download/xylem-setup.exe)
+
+[portable zip](https://github.com/JayD108/Xylem/releases/latest/download/xylem-portable.zip) · [all releases](https://github.com/JayD108/Xylem/releases) · [what's new](https://github.com/JayD108/Xylem/releases/latest)
+
+![Windows 10 | 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4) ![Offline](https://img.shields.io/badge/network-none-2f6b3a) ![Read-only scanning](https://img.shields.io/badge/scanning-read--only-2f6b3a) ![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue) ![Rust](https://img.shields.io/badge/made%20with-Rust-b7410e)
 
 </div>
 
 ![Xylem scanning C:\Windows: tree-table, sunburst map and the details pane explaining that Windows files must not be deleted by hand](docs/screenshots/xylem-location.png)
 
-## The problem it solves
+## Three questions, answered in seconds
 
-When your drive fills up, you need three answers:
-1. **Where** is the space going?
-2. **What** is it: a game, `node_modules`, an AI model cache, Windows itself?
-3. **Is it safe to delete**, and how?
+| When your drive fills up you ask… | Xylem answers |
+|---|---|
+| 📍 **Where** is the space going? | A tree and a sunburst or treemap of every folder, by location or by category, with what changed since last time. |
+| 🔎 **What** is it? | A game, `node_modules`, an AI model, a dataset, Windows itself: every file gets a category, known folders get a plain-English note, and Xylem says which program or game a folder belongs to. |
+| ✅ **Is it safe to delete?** | *Safe to clear*, *check first* or *don't delete by hand*, and **every way to get space back** with how much each one gives. |
 
-Most tools only answer the first one, and the friendly ones are slow on big drives. Xylem answers all three, in seconds, and then shows you **every way to get space back**, with how much each one gives.
+And one more nobody else asks: 💚 **is the drive itself OK?** Xylem reads each SSD's own health report and shows which programs are wearing it out.
 
-**Its promises:** offline (no network code at all) · read-only scanning · nothing changes without your OK · the window never runs as admin · fast · open source.
+## Measured, not promised
 
-## Features
+On the developer's laptop (a 2 TB NVMe drive holding 1.5 TB in 1.7 million files):
 
-- **Fast:** maps a whole NTFS drive in about 1–2 seconds by reading its file table directly (read-only). Without admin it still works, by walking folders.
-- **Meaning, not just sizes:** every file is sorted into categories such as *Apps & Games, Dev stuff, AI & data, Media, System, Temp & caches*. You can browse by location or by category. It recognises code projects (and marks their rebuildable parts), AI models and datasets, says which program or game a folder belongs to, and you can teach it (right-click → This is…).
-- **Plain-English advice:** known folders come with a note and a label: *safe to delete*, *check first* or *don't delete by hand*.
-- **Your drive at a glance:** a strip at the bottom shows used and free space and your 5 biggest space users. The start screen shows every drive with a fill bar.
-- **Instant reopen and "what changed":** your last scan opens in under a second (a whole 1.5 TB drive in ~0.4 s). After a rescan, Xylem points at the exact folders that grew or shrank, both in a list and in a Change column right in the tree.
-- **Clear pictures:** a tree-table with size bars, next to a sunburst or a treemap. Light and dark themes, full keyboard navigation.
-- **Ways to save space:** the **Save space** button lists, biggest first:
-  - **what to compress:** folders and big files whose files haven't changed *or arrived* for 1, 3, 6 or 12 months, with the expected saving (from real measurements per file type) and a one-click Compress;
-  - **every other way:** caches and temp files, build folders in old projects, AI model stores, the Recycle Bin, the hibernation file, previous Windows, restore points, big files that won't compress (move them), WSL/Docker disks, OneDrive copies, folder copies, old installers, duplicates, and Compact OS. Each with its size and exactly how to do it.
-- **Knows when data arrived:** downloads and unpacked datasets keep their author's old dates; Xylem also reads when each file arrived on your PC, so "not changed in 2 years" really means that.
-- **Similar folders:** finds folders that look like copies of each other, and projects with similar names (`project`, `project_v2`, `project - Copy`).
-- **Find what to clean:** the largest files (with search), sizes by file type, and an opt-in duplicate finder that keeps the original-looking copy.
-- **Clean up with confidence:** "Mark all" for things that are safe to clear (every `node_modules`, Rust `target`, cache), a Leftovers view (old installers and archives in Downloads, Windows upgrade leftovers, app data of uninstalled programs), and buttons for Windows' own cleanups (DISM, System Protection, Storage settings). Add your own categories with custom rules.
-- **See it happen:** colour by age (what hasn't changed in years), live updates while Xylem is open, and alerts when a folder grows past a limit.
-- **Fast compression, built in:** right-click a folder → **Compress…**. Xylem's own engine drives Windows' file compression on many files at once (about 15× faster than `compact.exe` in our tests), skips files that won't shrink, shows real progress, can be stopped, and **Uncompress** undoes it. Files stay where they are and open as usual.
-- **Power tools, all opt-in:** export a cleanup plan as a PowerShell script to review, and shrink WSL/Docker virtual disks with a guided, checked compaction.
-- **Careful deleting:** only to the Recycle Bin, only after you confirm. Windows and system folders are locked. You get warnings for OneDrive folders, Git repositories and very large deletes, and a history of everything you deleted. Mark several items (Ctrl+click) to remove them in one go. Hardlinked files are flagged, because deleting one name frees nothing.
-- **Scans by itself, if you want:** scheduled scans every 30 minutes or more (it recommends how often), no admin, no window, nothing left running. When you open Xylem it tells you what changed while you were away.
-- **Home:** the drive at a glance when Xylem opens: how full, the forecast, drive health, what changed, the top ways to get space back, the biggest items.
-- **History and forecast:** a size chart for every folder, what grew in the last day, week or month, and "C: would be full in about 40–70 days" once there's a week of scans. Optional Windows notification when a drive runs low (at most once a day).
-- **Drive health:** how worn each SSD is, how much was written to it, temperature and errors, in plain words (the drive's own report; no admin). Warns when an SSD is nearly full, and shows **who's writing**: the programs wearing the drive, also while the PC is idle.
-- **Light on your PC:** the status bar shows Xylem's own RAM and CPU; free its memory with one click (your scan stays saved), and scan gently so other programs stay fast.
-- **Private:** no network connections, no accounts, no telemetry. One small program (~8 MB).
+| | |
+|---|---|
+| ⚡ **Fast scan** of the whole drive (admin, reads the file table) | about 1–2 s |
+| 🚶 **Normal scan** (no admin) | about 4.3 s |
+| 🔁 **Reopen** the last scan | about 0.4 s |
+| 🏷️ Files left **unclassified** | 1.6 GB of 1.56 TB (0.1%) |
+| 🗜️ Built-in **compression** vs Windows' `compact.exe` | about 15× faster |
+| 🪶 Idle CPU · network connections | 0 · 0 |
+
+Method and more numbers: [BENCHMARKS.md](docs/BENCHMARKS.md).
+
+## What you can do
+
+<details open>
+<summary><b>🏠 See it all at once</b></summary>
+
+- **Home** (Ctrl+H, opens at start): how full the drive is, when it would be full, drive health, what changed, the top ways to get space back and the biggest items. One click into any of them.
+- **Tree-table + sunburst or treemap**, by location or by category (*Apps & Games, Dev stuff, AI & data, Media, System, Temp & caches…*). Colour by age to spot what hasn't changed in years.
+- **Where every GB is:** the drive's used space next to what the scan counted, and what the rest is.
+</details>
+
+<details open>
+<summary><b>🧹 Get space back, safely</b></summary>
+
+- **Save space:** what to compress (big, not changed or added for months, with measured estimates) and every other way: caches, old build folders, AI model stores, Recycle Bin, hibernation file, previous Windows, WSL/Docker disks, old installers, duplicates, Compact OS. Each with its size and exactly how.
+- **Code projects understood:** Node, Rust, Python, .NET, Java, Gradle, CMake, Go and Unreal projects are recognised, and their rebuildable parts (`node_modules`, `target`, `bin`/`obj`, …) are marked safe to clear. *Mark all* takes every one in a click.
+- **Compress… (right-click):** Xylem's own engine drives Windows' file compression on many files at once. Same files, less space, undoable, and it tells you the SSD writes it costs.
+- **Careful deleting:** Recycle Bin only, after you confirm, re-checked on disk first. Windows and system folders are locked. Warnings for OneDrive, Git repositories, running apps and very large deletes.
+- **Also:** largest files and types, duplicate finder, similar folders (`project`, `project_v2`, `project - Copy`), leftovers of uninstalled programs, a PowerShell cleanup plan to review, guided WSL/Docker disk compaction.
+</details>
+
+<details open>
+<summary><b>💚 Drive health and who's writing</b></summary>
+
+- **Drive health:** each SSD's own report in plain words: *"Good: 1% of rated life used"*, data written, temperature, spare, errors, TRIM. Writes per day over time, an honest life estimate (a range, only when there's data), and what you'd lose if the drive failed.
+- **Who's writing:** the programs writing to your drives right now and **while the PC is idle**, next to the drive's own counter. Known offenders are flagged with what to do, with sources (like AMD's `atieclxx.exe` bug of Nov 2026).
+- No admin needed for any of it.
+</details>
+
+<details open>
+<summary><b>🕰️ Keep watch, without keeping anything running</b></summary>
+
+- **Scheduled scans:** every 30 minutes or more (Xylem recommends how often). No admin, no window, nothing left running: each run scans, saves, and exits.
+- **What changed while you were away**, a **size chart for every folder**, what grew this day/week/month, and *"C: would be full in about 40–70 days"* (after a week of scans, never a fake exact date).
+- **Quiet warnings** (Windows notifications, at most once a day): low free space, fast growth, a program writing a lot while idle, a weekly report.
+</details>
+
+<details>
+<summary><b>🪶 Light, private, yours</b></summary>
+
+- Shows its own RAM and CPU; free its memory with one click (your scan stays saved); gentle scanning keeps other programs fast.
+- **Teach Xylem:** right-click a folder → *This is…* (my project, a dataset, a game…), or write your own rules.
+- Light and dark themes, full keyboard control (Help → Keyboard shortcuts), screen-reader names for the map.
+- No network code at all, no accounts, no telemetry. One small program (~8 MB).
+</details>
+
+Every feature, with what happens underneath: [FEATURES-AND-DEVELOPMENT.md](docs/FEATURES-AND-DEVELOPMENT.md).
 
 ![Dark theme, treemap grouped by category](docs/screenshots/xylem-category.png)
 
-## How it works
+## Get started in a minute
+
+1. **[Download `xylem-setup.exe`](https://github.com/JayD108/Xylem/releases/latest/download/xylem-setup.exe)** (about 3 MB) and run it. Releases aren't signed yet, so Windows may say *"Windows protected your PC"*: click **More info → Run anyway** (check the file against `SHA256SUMS.txt` on the [release page](https://github.com/JayD108/Xylem/releases/latest) if you like).
+2. Open **Xylem**, pick a drive, press **Scan** (F5), or **Fast scan** (Ctrl+F5) for a whole drive.
+3. Click around: anything you select is explained at the bottom.
+4. Press **Save space**. Turn on **View → Scheduled scans** if you want Xylem to keep watch.
+
+<details>
+<summary>What the installer puts on your PC, portable use, silent install</summary>
+
+| | |
+|---|---|
+| `xylem.exe` | The app, in Program Files (only admins can change it there, which keeps Fast scan safe) |
+| `xylem-cli` | The command-line tool, already on PATH ([guide](docs/CLI.md)) |
+| Start menu, right-click **Analyze with Xylem**, optional desktop shortcut | Pick them on the components page |
+| Uninstaller | Settings → Apps → Xylem. Removes exactly what it installed, including the PATH entry and any scheduled scan |
+
+**No install?** Use the **[portable zip](https://github.com/JayD108/Xylem/releases/latest/download/xylem-portable.zip)**: unzip anywhere, run `xylem.exe` (Fast scan needs the installed version).
+**IT:** `xylem-setup.exe /S` installs silently; `"C:\Program Files\Xylem\uninstall.exe" /S` removes it.
+</details>
+
+## For the terminal
+
+```text
+> xylem-cli scan C:\ --top 5          what's biggest
+> xylem-cli health                    is the SSD OK?
+> xylem-cli writes --secs 10          who's writing right now?
+> xylem-cli history C: --days 30      what grew this month, when it would be full
+```
+
+Every command has `--json` for scripts. Guide: [docs/CLI.md](docs/CLI.md).
+
+## How it stays safe
 
 ```
  You ──► xylem.exe (normal user) ──► Scan: walks folders, no admin needed
@@ -62,67 +135,27 @@ Most tools only answer the first one, and the friendly ones are slow on big driv
                                   drive's file table (read-only), hands the result back, exits
 ```
 
-The window itself never runs as admin. More detail: [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
+- **Offline:** no network code at all. **Read-only:** scanning never writes to your drive.
+- **Nothing changes without your OK:** delete goes to the Recycle Bin, compression is undoable, Save space only suggests.
+- **Least privilege:** the window never runs as admin; scheduled scans never ask for it.
+- **Tested before every release:** no network connections, read-only scanning, the admin helper's limits, fuzzing of every file parser. The shield button in the app shows exactly what Xylem does.
 
-## Install
+Details: [SECURITY-AND-PRIVACY.md](docs/SECURITY-AND-PRIVACY.md). Report a problem privately: [SECURITY.md](SECURITY.md).
 
-1. **[Download `xylem-setup.exe`](https://github.com/JayD108/Xylem/releases/latest/download/xylem-setup.exe)** (always the newest version, about 3 MB).
-2. Run it and click **Install**. Windows may say *"Windows protected your PC"* because releases aren't signed yet: click **More info → Run anyway**. You can check the file against `SHA256SUMS.txt` on the [release page](https://github.com/JayD108/Xylem/releases/latest).
-3. Start **Xylem** from the Start menu, or right-click any folder → **Analyze with Xylem**.
-
-One installer gives you everything:
-
-| | |
-|---|---|
-| `xylem.exe` | The app, in Program Files (where only admins can change it, which keeps Fast scan safe) |
-| `xylem-cli` | The command-line tool, **already on PATH**: open a new terminal and type `xylem-cli scan C:\` ([guide](docs/CLI.md)) |
-| Start menu entry, right-click "Analyze with Xylem", optional desktop shortcut | Pick them on the components page |
-| Uninstaller | Settings → Apps → Xylem. It removes exactly what it installed, including the PATH entry |
-
-**No install?** Take the **[portable zip](https://github.com/JayD108/Xylem/releases/latest/download/xylem-portable.zip)**, unzip it anywhere and run `xylem.exe` (Fast scan needs the installed version). To use `xylem-cli` from any folder, add that folder to your PATH ([how](docs/CLI.md#2-make-xylem-cli-work-from-any-folder)).
-
-Silent install for IT: `xylem-setup.exe /S` (uninstall: `"C:\Program Files\Xylem\uninstall.exe" /S`).
-
-## How to use
-
-1. Pick a drive or folder in the box at the top-left.
-2. Press **Scan** (F5), or **Fast scan** (Ctrl+F5) for a whole drive (Windows asks for permission).
-3. Expand folders in the list, or click the map. Switch **Location / Category** and **Sunburst / Treemap** in the toolbar.
-4. Select anything to see what it is and whether it's safe to delete in the details pane at the bottom.
-5. Press **Save space** to see what you could compress and every other way to get space back.
-6. Next time, Xylem reopens your last scan instantly. Press **Scan** again, then **View → What changed** to see what grew.
-7. **Move to Recycle Bin…** (or the Delete key) and **Compress…** ask before doing anything.
-
-Every feature, explained with what happens underneath: [docs/FEATURES-AND-DEVELOPMENT.md](docs/FEATURES-AND-DEVELOPMENT.md). There's also a command-line tool, `xylem-cli.exe`: [docs/CLI.md](docs/CLI.md) shows how to set it up and every command.
-
-## Safety and privacy
-
-Scanning only reads your disk, and Xylem never goes online. It doesn't open your files' contents, except when you start the duplicate finder or Compress, on your PC. It changes files only when you confirm: moving them to the Recycle Bin, compressing a folder (undoable), or the opt-in power tools, which use Windows' own tools. Ways to save space only suggests. Before each release a full local test checks it end to end: no network connections, read-only scanning, the admin helper's limits, and fuzzing of every file parser. The shield button in the app shows exactly what it does. Full details: [docs/SECURITY-AND-PRIVACY.md](docs/SECURITY-AND-PRIVACY.md). To report a problem privately, see [SECURITY.md](SECURITY.md).
-
-## Code signing policy
-
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/) *(application pending; until approved, releases are unsigned and the app says so)*.
-
-- **Builds:** every release file is built by GitHub Actions from this repository, and each signing request is approved by hand. Nothing built on a personal computer is signed.
-- **Team roles:** committers and reviewers: [JayD108](https://github.com/JayD108). Approvers: [JayD108](https://github.com/JayD108).
-- **Privacy policy:** this program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
-
-## More
+## Learn more
 
 | | |
 |---|---|
-| [How it works](docs/HOW-IT-WORKS.md) | Under the hood, step by step: reading the drive, the data model, categories, the map, reopen, live updates, deleting, accuracy |
-| [Security and privacy](docs/SECURITY-AND-PRIVACY.md) | What Xylem reads and never does, admin rights, safe delete, Windows' own tools, your data on disk |
-| [Features and development](docs/FEATURES-AND-DEVELOPMENT.md) | Every feature: what it does, how to use it, what happens underneath. Building, tests, project layout |
-| [Roadmap](docs/ROADMAP.md) | Releases, planned features and what's next |
-| [Command line](docs/CLI.md) | Set up `xylem-cli`, every command and option, JSON and CSV formats, script examples |
-| [Benchmarks](docs/BENCHMARKS.md) | Speed against WizTree, WinDirStat and eDirStat, and compression measured per file type, with the method |
-| [Contributing](CONTRIBUTING.md) | How to help, the rules every change keeps, and the **call for compression research** |
-| [Help wanted](docs/HELP-WANTED.md) | Everything Xylem needs next: compression problems with measurements, known gaps, testing |
+| 🛠️ [How it works](docs/HOW-IT-WORKS.md) | Under the hood: reading the drive, the data model, categories, the map, history, deleting, accuracy |
+| 📖 [Features and development](docs/FEATURES-AND-DEVELOPMENT.md) | Every feature: what it does, how to use it, what happens underneath; building and tests |
+| 🔒 [Security and privacy](docs/SECURITY-AND-PRIVACY.md) | What Xylem reads and never does, admin rights, your data on disk |
+| 💻 [Command line](docs/CLI.md) | Every command and option, JSON and CSV, script examples |
+| 📊 [Benchmarks](docs/BENCHMARKS.md) | Speed and compression measurements, with the method |
+| 🗺️ [Roadmap](docs/ROADMAP.md) | Releases and what's next |
 
-## Help make compression better
+## Help build it
 
-Xylem's compression engine is open for research. We've measured every Windows compression algorithm (and zstd/lz4 for comparison) on real data; text and programs save 50–70%, but float arrays save ~15% and model weights or columnar files only 6–8%. The full list of what we need is in [docs/HELP-WANTED.md](docs/HELP-WANTED.md). If you know compression, read the [call for compression research](CONTRIBUTING.md#call-for-compression-research-): better estimates, smarter per-file choices, transforms, or a new safe mode. Measure on copies, open an issue, send a pull request.
+Xylem is open for contributions, and one area especially: **compression**. Text and programs save 50–70%, but float arrays save ~15% and model weights only 6–8%. If you know compression, read the [call for compression research](CONTRIBUTING.md#call-for-compression-research-). Other open problems (drive health on more SSD brands, known offenders with sources, accessibility, testing) are in [HELP-WANTED.md](docs/HELP-WANTED.md). Start with [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Acknowledgements
 

@@ -51,9 +51,7 @@ Xylem now shows not only what fills your drive, but how the drive is doing and w
 
 Signature: {{SIGNED}}
 
-## Code signing policy
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/) *(pending approval)*.
-
-Every file in this release was built by GitHub Actions from the tagged commit of [JayD108/Xylem](https://github.com/JayD108/Xylem). Team roles and the privacy policy are on the [project page](https://github.com/JayD108/Xylem#code-signing-policy).
+## How it was built
+Every file in this release was built by GitHub Actions from the tagged commit of [JayD108/Xylem](https://github.com/JayD108/Xylem). Check them against `SHA256SUMS.txt`.
 
 **Privacy:** this program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
