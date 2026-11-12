@@ -49,6 +49,10 @@ pub mod flags {
     pub const SPARSE: u8 = 1 << 5;
     /// Deleted from disk through Xylem; excluded from totals and views.
     pub const DELETED: u8 = 1 << 6;
+    /// Another name (hardlink) of a file counted under a different name:
+    /// 0 bytes here, so the data counts once (folder walk; Fast scan lists
+    /// one name per file).
+    pub const HARDLINK: u8 = 1 << 7;
 }
 
 /// Raw columns for [`Index::from_columns`]. Index `i` describes node `i`.
@@ -391,6 +395,12 @@ impl Index {
 
     pub fn add_flags(&mut self, id: u32, f: u8) {
         self.flags[id as usize] |= f;
+    }
+
+    /// Sets a node's own sizes before `compute_totals` (scanners only).
+    pub fn set_sizes(&mut self, id: u32, size: u64, alloc: u64) {
+        self.size[id as usize] = size;
+        self.alloc[id as usize] = alloc;
     }
 
     pub fn is_dir(&self, id: u32) -> bool {

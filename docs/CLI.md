@@ -216,7 +216,7 @@ A whole C: drive is about 2 million rows (~300 MB; C:\Windows alone: 277,000 row
 | Speed on a 1.5 TB drive | ~4–9 s | ~1–2 s |
 | Folders Windows hides from you | Counted as unreadable | Included |
 | Works on | Any drive or folder | Whole NTFS drives |
-| Hardlinked files (one file, several names) | Counted once per name (totals can be higher) | Counted once |
+| Hardlinked files (one file, several names) | Counted once (since 0.5.0) | Counted once |
 
 ## 7. Exit codes
 

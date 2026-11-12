@@ -319,6 +319,33 @@ pub fn scan_admin(drive: &str, cancel: &std::sync::atomic::AtomicBool) -> Result
     Ok(Scanned::new(index, stats, mode))
 }
 
+/// "Where every GB is" for a whole drive.
+#[derive(Clone, Debug, Serialize)]
+pub struct SpaceReport {
+    pub root: String,
+    pub total: u64,
+    /// What Windows reports as used (size minus free).
+    pub used: u64,
+    /// Bytes on disk of everything this scan counted.
+    pub counted: u64,
+    pub fast_scan: bool,
+    /// NTFS's own files ($MFT, $LogFile, ...), if the scan could see them.
+    pub ntfs_files: Option<u64>,
+    /// System Volume Information (restore points, shadow copies), if readable.
+    pub restore_points: Option<u64>,
+    pub unreadable: u64,
+    /// Extra names of hardlinked files (counted once, 0 B each).
+    pub hardlink_names: u64,
+}
+
+impl SpaceReport {
+    /// Used space the scan didn't find in any file it could read (negative:
+    /// it counted more than Windows reports as used).
+    pub fn not_counted(&self) -> i128 {
+        i128::from(self.used) - i128::from(self.counted)
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Summary {
     pub root: String,
@@ -828,6 +855,63 @@ It may be left over from an uninstalled program, or belong to one that's install
             }
             (n.own_cat, n.sub, n.rule) = (self.cls.cat[i], self.cls.sub[i], self.cls.rule[i]);
         }
+    }
+
+    /// A hardlinked file's extra name whose bytes are counted under its
+    /// other name (folder walk).
+    pub fn counted_elsewhere(&self, node: u32) -> bool {
+        (node as usize) < self.index.len() && self.index.flags(node) & xylem_core::flags::HARDLINK != 0
+    }
+
+    /// Folders this scan couldn't read (paths, sorted), at most `limit`.
+    pub fn unreadable_folders(&self, limit: usize) -> Vec<String> {
+        let idx = &self.index;
+        let mut v: Vec<String> = (0..idx.len() as u32)
+            .filter(|&n| idx.flags(n) & xylem_core::flags::UNREADABLE != 0 && idx.flags(n) & xylem_core::flags::DELETED == 0)
+            .filter_map(|n| self.path(n).ok())
+            .collect();
+        v.sort_by_key(|p| p.to_lowercase());
+        v.truncate(limit);
+        v
+    }
+
+    /// Where the drive's used space is: what this scan counted against what
+    /// Windows reports as used, and what a Fast scan could measure. `None`
+    /// unless the scan root is a whole drive.
+    pub fn space_report(&self) -> Option<SpaceReport> {
+        let root = self.index.name(0).to_owned();
+        if !(root.len() == 3 && root.ends_with(":\\")) {
+            return None;
+        }
+        let (total, free) = disk_space(&root)?;
+        let idx = &self.index;
+        let mft = self.mode.starts_with("MFT");
+        // Root children: NTFS's own files ($MFT, $LogFile, ...) and System
+        // Volume Information, when the scan could see them (Fast scan).
+        let (mut ntfs, mut svi) = (0u64, None);
+        for &c in self.children.of(0) {
+            let name = idx.name(c);
+            if idx.flags(c) & xylem_core::flags::DELETED != 0 {
+                continue;
+            }
+            if name.starts_with('$') && !name.eq_ignore_ascii_case("$Recycle.Bin") && !name.eq_ignore_ascii_case("$WinREAgent") {
+                ntfs += idx.alloc(c);
+            } else if name.eq_ignore_ascii_case("System Volume Information") && idx.flags(c) & xylem_core::flags::UNREADABLE == 0 {
+                svi = Some(idx.alloc(c));
+            }
+        }
+        let hardlinks = (0..idx.len() as u32).filter(|&n| idx.flags(n) & xylem_core::flags::HARDLINK != 0).count() as u64;
+        Some(SpaceReport {
+            root,
+            total,
+            used: total.saturating_sub(free),
+            counted: idx.alloc(0),
+            fast_scan: mft,
+            ntfs_files: (mft || ntfs > 0).then_some(ntfs),
+            restore_points: svi,
+            unreadable: self.stats.unreadable,
+            hardlink_names: hardlinks,
+        })
     }
 
     pub fn summary(&self) -> Summary {

@@ -41,6 +41,12 @@ const OFF_NAME_LEN: usize = 60;
 /// Holds the reparse tag when the entry is a reparse point.
 const OFF_EA_SIZE: usize = 64;
 const OFF_NAME: usize = 68;
+// FILE_ID_FULL_DIR_INFORMATION: the same, then FileId (8-byte aligned) and the name.
+const OFF_FILE_ID: usize = 72;
+const OFF_NAME_WITH_ID: usize = 80;
+/// Whether listings with file IDs work on this volume (cleared on the first
+/// "not supported", e.g. FAT/exFAT, which have no hardlinks anyway).
+static IDS_OK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 const BACKSLASH: u16 = b'\\' as u16;
 
@@ -134,6 +140,9 @@ impl Stack {
 
 struct Meta {
     name_len: u16,
+    /// NTFS file ID (0 = unknown): the same file under several names
+    /// (hardlinks) is counted once.
+    file_id: u64,
     size: u64,
     alloc: u64,
     flags: u8,
@@ -179,6 +188,8 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> io::Result<Scan> {
     let (display, nt_path) = prepare_root(root)?;
     let mut index = Index::new(&display);
     let mut stats = ScanStats::default();
+    // (file ID, node) of every file: hardlinks are counted once at the end.
+    let mut file_ids: Vec<(u64, u32)> = Vec::new();
     let threads = opts.threads.max(1);
 
     let stack = Stack::new();
@@ -224,6 +235,9 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> io::Result<Scan> {
             for m in &listing.metas {
                 let end = pos + m.name_len as usize;
                 let id = index.push(listing.node, &listing.names[pos..end], m.size, m.alloc, m.flags);
+                if m.file_id != 0 {
+                    file_ids.push((m.file_id, id));
+                }
                 index.set_mtime(id, m.mtime);
                 index.set_added(id, m.added);
                 pos = end;
@@ -246,9 +260,57 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> io::Result<Scan> {
         stack.close(); // lets the workers' loops end
     });
 
+    count_hardlinks_once(&mut index, file_ids);
     index.compute_totals();
     stats.elapsed = start.elapsed();
     Ok(Scan { index, stats })
+}
+
+/// Files listed under several names (hardlinks) share one file ID. One name
+/// keeps the bytes; the others get 0 bytes and the HARDLINK flag, so totals
+/// count the data once (like Fast scan, which reads one record per file).
+/// Which name keeps them must not change between scans (or "what changed"
+/// would show bytes moving): the name outside `WinSxS` (Windows' component
+/// store, whose "actual size" excludes files shared with the system), then
+/// the alphabetically first path.
+fn count_hardlinks_once(index: &mut Index, mut ids: Vec<(u64, u32)>) {
+    ids.sort_unstable();
+    let path = |index: &Index, mut id: u32| -> String {
+        let mut parts = Vec::new();
+        while id != 0 && parts.len() < 1024 {
+            parts.push(index.name(id).to_lowercase());
+            id = index.parent(id);
+            if id == xylem_core::NO_PARENT {
+                break;
+            }
+        }
+        parts.reverse();
+        parts.join("\\")
+    };
+    let mut i = 0;
+    while i < ids.len() {
+        let mut j = i + 1;
+        while j < ids.len() && ids[j].0 == ids[i].0 {
+            j += 1;
+        }
+        if j - i > 1 {
+            let keep = ids[i..j]
+                .iter()
+                .map(|&(_, n)| {
+                    let p = path(index, n);
+                    (format!(r"\{p}\").contains(r"\winsxs\"), p, n)
+                })
+                .min()
+                .map(|x| x.2);
+            for &(_, n) in &ids[i..j] {
+                if Some(n) != keep {
+                    index.set_sizes(n, 0, 0);
+                    index.add_flags(n, flags::HARDLINK);
+                }
+            }
+        }
+        i = j;
+    }
 }
 
 /// Expands 8.3 short names ("MRITTU~1") to the real folder names, so paths
@@ -354,6 +416,7 @@ fn list_dir(task: &Task, buf: &mut [u64], units: &mut Vec<u16>) -> Listing {
 
     let buf_bytes = buf.len() * 8;
     let mut restart = true;
+    let mut ids = IDS_OK.load(std::sync::atomic::Ordering::Relaxed);
     loop {
         let mut iosb = IoStatusBlock::default();
         // SAFETY: the handle is open for listing and was opened without
@@ -368,12 +431,18 @@ fn list_dir(task: &Task, buf: &mut [u64], units: &mut Vec<u16>) -> Listing {
                 &mut iosb,
                 buf.as_mut_ptr().cast(),
                 buf_bytes as u32,
-                FILE_FULL_DIRECTORY_INFORMATION,
+                if ids { FILE_ID_FULL_DIRECTORY_INFORMATION } else { FILE_FULL_DIRECTORY_INFORMATION },
                 0,
                 null_mut(),
                 u8::from(restart),
             )
         } as u32;
+        if ids && restart && matches!(status, STATUS_INVALID_INFO_CLASS | STATUS_NOT_SUPPORTED | STATUS_INVALID_PARAMETER) {
+            // This file system can't list file IDs: plain listings from now on.
+            IDS_OK.store(false, std::sync::atomic::Ordering::Relaxed);
+            ids = false;
+            continue;
+        }
         restart = false;
 
         if status == STATUS_NO_MORE_FILES || status == STATUS_NO_SUCH_FILE {
@@ -386,7 +455,7 @@ fn list_dir(task: &Task, buf: &mut [u64], units: &mut Vec<u16>) -> Listing {
         let filled = iosb.information.min(buf_bytes);
         // SAFETY: the first `filled` bytes of `buf` are initialized u64 memory.
         let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), filled) };
-        if !parse_entries(bytes, units, &mut out) {
+        if !parse_entries(bytes, units, &mut out, ids) {
             out.unreadable = true;
             break;
         }
@@ -447,16 +516,17 @@ fn real_on_disk(dir: &OwnedHandle, name: &[u16]) -> Option<u64> {
 
 /// Parses one buffer of FILE_FULL_DIR_INFORMATION records. Returns false
 /// if the buffer looks malformed.
-fn parse_entries(bytes: &[u8], units: &mut Vec<u16>, out: &mut Listing) -> bool {
+fn parse_entries(bytes: &[u8], units: &mut Vec<u16>, out: &mut Listing, ids: bool) -> bool {
+    let name_at = if ids { OFF_NAME_WITH_ID } else { OFF_NAME };
     let mut off = 0usize;
     loop {
         let Some(e) = bytes.get(off..) else { return false };
-        if e.len() < OFF_NAME {
+        if e.len() < name_at {
             return e.is_empty() && off == 0; // an empty buffer is fine
         }
         let next = rd_u32(e, OFF_NEXT) as usize;
         let name_bytes = rd_u32(e, OFF_NAME_LEN) as usize;
-        let Some(raw_name) = e.get(OFF_NAME..OFF_NAME + name_bytes) else { return false };
+        let Some(raw_name) = e.get(name_at..name_at + name_bytes) else { return false };
         units.clear();
         units.extend(raw_name.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)));
 
@@ -485,7 +555,8 @@ fn parse_entries(bytes: &[u8], units: &mut Vec<u16>, out: &mut Listing) -> bool 
             }
             let mtime = xylem_core::filetime_days(rd_u64(e, OFF_LAST_WRITE));
             let added = xylem_core::filetime_days(rd_u64(e, OFF_CREATION));
-            out.metas.push(Meta { name_len, size, alloc, flags: f, mtime, added });
+            let file_id = if ids && !is_dir { rd_u64(e, OFF_FILE_ID) } else { 0 };
+            out.metas.push(Meta { name_len, file_id, size, alloc, flags: f, mtime, added });
         }
 
         if next == 0 {
@@ -513,6 +584,36 @@ mod tests {
     use super::*;
     use xylem_core::win::FILE_ATTRIBUTE_DIRECTORY;
 
+    /// Hardlinks in a real folder: counted once, under the same name on
+    /// every scan, and the other names are flagged.
+    #[test]
+    fn hardlinks_are_counted_once() {
+        let dir = std::env::temp_dir().join(format!("xylem-hardlinks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("b")).unwrap();
+        std::fs::create_dir_all(dir.join("a")).unwrap();
+        std::fs::create_dir_all(dir.join("WinSxS")).unwrap();
+        std::fs::write(dir.join("WinSxS").join("data.bin"), vec![7u8; 1 << 20]).unwrap();
+        std::fs::hard_link(dir.join("WinSxS").join("data.bin"), dir.join("b").join("data.bin")).unwrap();
+        std::fs::hard_link(dir.join("WinSxS").join("data.bin"), dir.join("a").join("copy.bin")).unwrap();
+        std::fs::write(dir.join("a").join("own.bin"), vec![1u8; 4096]).unwrap();
+        for _ in 0..3 {
+            let s = scan(&dir, &ScanOptions { threads: 4 }).unwrap();
+            let idx = &s.index;
+            let find = |folder: &str, name: &str| -> u32 {
+                (1..idx.len() as u32).find(|&i| idx.name(i) == name && idx.name(idx.parent(i)) == folder).unwrap()
+            };
+            let (sxs, b, a, own) = (find("WinSxS", "data.bin"), find("b", "data.bin"), find("a", "copy.bin"), find("a", "own.bin"));
+            // Outside WinSxS first, then alphabetically: a\copy.bin keeps the bytes.
+            assert_eq!(idx.alloc(a), 1 << 20);
+            assert_eq!((idx.alloc(b), idx.alloc(sxs)), (0, 0));
+            assert!(idx.flags(b) & flags::HARDLINK != 0 && idx.flags(sxs) & flags::HARDLINK != 0 && idx.flags(a) & flags::HARDLINK == 0);
+            assert_eq!(idx.alloc(own), 4096);
+            assert_eq!(idx.alloc(0), (1 << 20) + 4096, "the data counts once");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn parses_a_synthetic_buffer() {
         fn record(name: &str, attrs: u32, eof: u64, alloc: u64, last: bool) -> Vec<u8> {
@@ -537,7 +638,7 @@ mod tests {
         buf.extend(record("sub", FILE_ATTRIBUTE_DIRECTORY, 0, 0, true));
 
         let mut out = Listing::default();
-        assert!(parse_entries(&buf, &mut Vec::new(), &mut out));
+        assert!(parse_entries(&buf, &mut Vec::new(), &mut out, false));
         assert_eq!(out.metas.len(), 2);
         assert_eq!(out.names, "नमस्ते.txtsub");
         assert_eq!(out.metas[0].size, 1234);
@@ -547,6 +648,6 @@ mod tests {
 
         // Truncated buffer is rejected, not read out of bounds.
         let mut out = Listing::default();
-        assert!(!parse_entries(&buf[..buf.len() - 10], &mut Vec::new(), &mut out));
+        assert!(!parse_entries(&buf[..buf.len() - 10], &mut Vec::new(), &mut out, false));
     }
 }

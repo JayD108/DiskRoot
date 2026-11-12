@@ -42,6 +42,11 @@ pub struct ObjectAttributes {
 // NtQueryDirectoryFile
 /// FILE_FULL_DIR_INFORMATION: no short (8.3) names, which are costly to look up.
 pub const FILE_FULL_DIRECTORY_INFORMATION: u32 = 2;
+/// Same as FILE_FULL_DIRECTORY_INFORMATION plus the file ID (NTFS, ReFS).
+pub const FILE_ID_FULL_DIRECTORY_INFORMATION: u32 = 38;
+pub const STATUS_INVALID_INFO_CLASS: u32 = 0xC000_0003;
+pub const STATUS_NOT_SUPPORTED: u32 = 0xC000_00BB;
+pub const STATUS_INVALID_PARAMETER: u32 = 0xC000_000D;
 pub const STATUS_SUCCESS: u32 = 0;
 pub const STATUS_NO_MORE_FILES: u32 = 0x8000_0006;
 pub const STATUS_NO_SUCH_FILE: u32 = 0xC000_000F;

@@ -211,7 +211,7 @@ Comparisons with other tools are in [BENCHMARKS.md](BENCHMARKS.md).
 
 | Situation | What Xylem does |
 |---|---|
-| Hardlinks (one file, several names) | Fast scan counts them once. The folder walk can't tell, so it counts each name. The details pane lists all names of a file. |
+| Hardlinks (one file, several names) | Both count them once. Fast scan reads one record per file; the folder walk asks for each file's ID and gives the bytes to one name (outside WinSxS first, then the alphabetically first path), 0 B to the others. The details pane lists all names of a file. |
 | Compressed, sparse and CompactOS files | Size on disk = bytes actually used. Files packed by Windows' file compression list as ~0 bytes, so the folder walk asks Windows for their real size |
 | OneDrive online-only files | Size on disk ≈ 0, tagged *cloud* |
 | Symlinks and junctions | Tagged *link*, never followed |

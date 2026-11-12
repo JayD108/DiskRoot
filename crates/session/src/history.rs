@@ -66,7 +66,7 @@ pub struct History {
 }
 
 fn method_of(mode: &str) -> u8 {
-    if mode.contains("MFT") {
+    if mode.starts_with("MFT") {
         2
     } else if mode.starts_with("folder walk") {
         1

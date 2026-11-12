@@ -55,7 +55,7 @@ A study of a faster, leaner engine. Results ship when they're measured to help:
 - ~~Skip unused file-table records~~: measured, no gain (99% of records are in use on a real C:).
 - ~~Find out why the first raw read is slow~~: about 0.15 s on every new drive handle, wherever it reads; nothing to overlap it with. Read size and thread count are already at the disk's limit (3.6 GB/s).
 - A separate sandboxed reader for Fast scan, so a parser bug couldn't even read with admin rights.
-- Count hardlinks once in the folder walk too.
+- ~~Count hardlinks once in the folder walk too.~~ Done in 0.5.0.
 - Store repeated names once; compress the remembered-scan cache.
 
 ## Compression research (open to contributors)

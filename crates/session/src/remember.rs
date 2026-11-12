@@ -238,7 +238,7 @@ pub struct Changes {
 
 /// "mft" or "walk" for a scan-mode text, `None` if unknown.
 fn method(mode: &str) -> Option<&'static str> {
-    if mode.contains("MFT") {
+    if mode.starts_with("MFT") {
         Some("mft")
     } else if mode.starts_with("folder walk") {
         Some("walk")
@@ -629,6 +629,11 @@ mod tests {
         old.mode = String::new();
         assert!(!diff(&old, &fast, 10).mixed_methods(), "unknown method: no warning");
         assert_eq!(Changes::method_name("MFT (direct read)"), "Fast scan");
+        // A walk's reason text can mention the MFT; it's still a walk.
+        assert_eq!(Changes::method_name("folder walk (MFT read needs administrator rights)"), "folder walk");
+        let mut reason = walk.clone();
+        reason.mode = "folder walk (MFT read needs administrator rights)".into();
+        assert!(diff(&reason, &fast, 10).mixed_methods(), "walk (with reason) then Fast scan");
         assert_eq!(Changes::method_name("folder walk"), "folder walk");
     }
 

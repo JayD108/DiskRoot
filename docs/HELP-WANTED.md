@@ -51,7 +51,7 @@ How to measure: [CONTRIBUTING.md → How to contribute research](../CONTRIBUTING
 
 | # | What | Why | Where |
 |---|---|---|---|
-| S1 | **Count hardlinks once in the folder walk.** The walk counts every name; on C:\Windows that's 46 GB vs 33 GB real (Fast scan is right) | Wrong totals without admin | `crates/scan-walk` |
+| S1 | ~~Count hardlinks once in the folder walk.~~ Done in 0.5.0 (file IDs in the listing; C:\Windows 46.1 → 36.1 GB). Still open: compare with Fast scan on more PCs | Accuracy | `crates/scan-walk` |
 | S2 | **Sandboxed reader for Fast scan.** After lockdown the admin helper could still *read* other drives (finding F-17) | Defence in depth if a parser bug is ever found | `crates/session/src/lockdown.rs`, `helper.rs` |
 | S3 | **Test on more file systems and disks:** exFAT, FAT32, ReFS, HDDs, network drives, non-English names | Only NTFS SSDs are tested well | Reports welcome, no code needed |
 | S4 | **A friendlier label for a drive root** in the details pane | "C:\" shows as Other › Unclassified | `app.rs` details pane |

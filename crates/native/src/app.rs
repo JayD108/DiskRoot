@@ -134,6 +134,10 @@ enum Dialog {
     Health(Box<HealthView>),
     /// View > Who's writing.
     Writers(Box<WritersView>),
+    /// View > Where every GB is.
+    Space(Box<xylem_session::SpaceReport>),
+    /// Folders the scan couldn't read: (scan root, paths).
+    Unreadable(Box<(String, Vec<String>)>),
     /// Explains a Windows tool before starting it.
     Tool(Action),
 }
@@ -1305,6 +1309,14 @@ impl XylemApp {
                     self.open_growth();
                     ui.close();
                 }
+                if ui
+                    .add_enabled(self.scanned.is_some(), egui::Button::new("Where every GB is…"))
+                    .on_hover_text("The drive's used space against what this scan counted, and what the rest is")
+                    .clicked()
+                {
+                    self.open_space();
+                    ui.close();
+                }
                 if ui.button("Who's writing…").on_hover_text("Which programs write to your drives right now and while the PC is idle, and which folders change most (no admin)").clicked() {
                     self.dialog = Some(Dialog::Writers(Box::new(WritersView::open())));
                     ui.close();
@@ -1550,8 +1562,13 @@ impl XylemApp {
                     ui.label(muted(fmt_files(s.files)));
                     if s.unreadable > 0 {
                         ui.separator();
-                        ui.label(RichText::new(format!("{} unreadable", fmt_count(s.unreadable))).color(theme::cat_color(6)).size(11.5))
-                            .on_hover_text("Some folders couldn't be read. Fast scan (admin) sees everything.");
+                        if ui
+                            .add(egui::Label::new(RichText::new(format!("{} unreadable", fmt_count(s.unreadable))).color(theme::cat_color(6)).size(11.5)).sense(Sense::click()))
+                            .on_hover_text("Some folders couldn't be read. Click to see which. Fast scan (admin) sees everything.")
+                            .clicked()
+                        {
+                            self.open_unreadable();
+                        }
                     }
                 }
                 ui.separator();
@@ -1577,9 +1594,14 @@ impl XylemApp {
             None => (b.scanned.max(1), format!("{}  {}", b.root, fmt_bytes(b.scanned))),
         };
         let mut click: Option<u32> = None;
+        let mut open_space = false;
         ui.horizontal_centered(|ui| {
             let full = b.nearly_full.as_ref().filter(|_| is_drive);
-            let l = ui.label(RichText::new(text).font(theme::semibold(12.5)).color(if full.is_some() { theme::WARN } else { t.text }));
+            let l = ui.add(egui::Label::new(RichText::new(text).font(theme::semibold(12.5)).color(if full.is_some() { theme::WARN } else { t.text })).sense(Sense::click()));
+            if is_drive && l.clicked() {
+                open_space = true;
+            }
+            let l = if is_drive { l.on_hover_text("Click: where every GB is") } else { l };
             if let Some(w) = full {
                 l.on_hover_text(w.as_str());
                 ui.label(RichText::new("⚠ nearly full").color(theme::WARN).size(12.0)).on_hover_text(w.as_str());
@@ -1643,6 +1665,9 @@ impl XylemApp {
                 self.regroup();
             }
             self.go_to(Key_::Node(id));
+        }
+        if open_space {
+            self.open_space();
         }
     }
 
@@ -2060,6 +2085,21 @@ impl XylemApp {
             let sugg = s.compress_suggestions(min_days, SAVINGS_MIN, 200);
             let tips = s.space_tips();
             self.dialog = Some(Dialog::Savings(Box::new(SavingsView { tab: 0, min_days, sugg, tips })));
+        }
+    }
+
+    fn open_unreadable(&mut self) {
+        if let Some(sc) = &self.scanned {
+            let root = sc.summary().root;
+            self.dialog = Some(Dialog::Unreadable(Box::new((root, sc.unreadable_folders(2000)))));
+        }
+    }
+
+    /// View > Where every GB is.
+    fn open_space(&mut self) {
+        match self.scanned.as_ref().and_then(|s| s.space_report()) {
+            Some(r) => self.dialog = Some(Dialog::Space(Box::new(r))),
+            None => self.dialog = Some(Dialog::Message("Where every GB is".into(), "This works for a scan of a whole drive (like C:\\), so the drive's used space can be compared with what the scan found.".into())),
         }
     }
 
@@ -2732,6 +2772,9 @@ impl XylemApp {
                                 if let Some(ps) = parent_size {
                                     size += &format!(" · {} of its folder", fmt_pct(info.on_disk, ps));
                                 }
+                                if s.counted_elsewhere(*n) {
+                                    size += " · another name of a hardlinked file: its bytes are counted under the other name";
+                                }
                                 let links = self.links_cache.as_ref().filter(|c| c.0 == *n && c.1.len() > 1);
                                 if let Some((_, names)) = links {
                                     ui.horizontal(|ui| {
@@ -2977,7 +3020,7 @@ impl XylemApp {
         let mut confirm: Option<u32> = None;
         let mut action: Option<&'static str> = None;
         let mut jump: Option<String> = None;
-        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_) | Dialog::Savings(_) | Dialog::Schedule(_) | Dialog::Growth(_) | Dialog::Health(_) | Dialog::Writers(_));
+        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_) | Dialog::Savings(_) | Dialog::Schedule(_) | Dialog::Growth(_) | Dialog::Health(_) | Dialog::Writers(_) | Dialog::Space(_) | Dialog::Unreadable(_));
         let mut leftover_marks: Option<Vec<u32>> = None;
         let mut tool_start: Option<(Action, bool)> = None;
         let mut dupes_start = false;
@@ -3092,6 +3135,77 @@ impl XylemApp {
                             }
                         });
                     }
+                }
+                Dialog::Space(r) => {
+                    let drive = r.root.trim_end_matches('\\').to_owned();
+                    ui.label(RichText::new(format!("Where the space on {drive} is")).font(theme::semibold(16.0)));
+                    ui.add_space(4.0);
+                    let gap = r.not_counted();
+                    let mut rows: Vec<(String, String)> = vec![
+                        ("Used, as Windows reports it".into(), format!("{} of {}", fmt_bytes(r.used), fmt_bytes(r.total))),
+                        ("Counted by this scan".into(), format!("{} (every file it could read, on disk)", fmt_bytes(r.counted))),
+                    ];
+                    if let Some(n) = r.ntfs_files {
+                        rows.push(("  incl. NTFS's own files".into(), format!("{} ($MFT, $LogFile, ...: the file system's bookkeeping)", fmt_bytes(n))));
+                    }
+                    if let Some(v) = r.restore_points {
+                        rows.push(("  incl. System Volume Information".into(), format!("{} (restore points, shadow copies, indexing data)", fmt_bytes(v))));
+                    }
+                    rows.push(if gap >= 0 {
+                        ("Not counted".into(), fmt_bytes(gap as u64))
+                    } else {
+                        ("Counted more than used".into(), fmt_bytes(gap.unsigned_abs() as u64))
+                    });
+                    egui::Grid::new("space").num_columns(2).spacing([14.0, 4.0]).show(ui, |ui| {
+                        for (k, v) in &rows {
+                            ui.label(RichText::new(k).color(t.muted));
+                            ui.label(v);
+                            ui.end_row();
+                        }
+                    });
+                    // Bar: counted vs not counted, on the used space.
+                    let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 12.0), Sense::hover());
+                    let p = ui.painter_at(bar);
+                    p.rect_filled(bar, CornerRadius::same(4), t.head);
+                    let frac = if r.used == 0 { 1.0 } else { (r.counted as f64 / r.used as f64).clamp(0.0, 1.0) as f32 };
+                    p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac, bar.height())), CornerRadius::same(4), t.accent);
+                    ui.add_space(6.0);
+                    let small = gap.unsigned_abs() as f64 <= r.used as f64 * 0.01;
+                    let text = if r.fast_scan {
+                        if small {
+                            "Everything is accounted for, within 1% of the used space. What's left is space NTFS keeps for itself (reserved storage and bookkeeping that isn't a file).".to_owned()
+                        } else if gap > 0 {
+                            format!("{} isn't in any file Fast scan found: Windows' reserved storage (space set aside for updates), and space NTFS keeps for itself. Shown as is; Xylem doesn't guess.", fmt_bytes(gap as u64))
+                        } else {
+                            "Fast scan counted a little more than Windows reports as used (sizes rounded to whole clusters, and files changing during the scan).".to_owned()
+                        }
+                    } else if gap > 0 {
+                        format!(
+                            "A folder walk (no admin) can't see everything. The {} not counted is most likely in: the {} folders it couldn't read (System Volume Information with restore points and shadow copies, other users' folders, protected app folders), NTFS's own files ($MFT and friends), and Windows' reserved storage. A Fast scan (admin, read-only) reads all of them and measures each.",
+                            fmt_bytes(gap as u64),
+                            fmt_count(r.unreadable)
+                        )
+                    } else {
+                        "This scan counted a little more than Windows reports as used (sizes rounded to whole clusters, and files changing during the scan).".to_owned()
+                    };
+                    ui.add(egui::Label::new(RichText::new(text).color(t.muted)).wrap());
+                    if r.hardlink_names > 0 {
+                        ui.add(egui::Label::new(RichText::new(format!("{} extra names of hardlinked files (the same data under two names, mostly in Windows' WinSxS) are counted once: 0 B each.", fmt_count(r.hardlink_names))).color(t.faint).size(12.0)).wrap());
+                    }
+                }
+                Dialog::Unreadable(v) => {
+                    let (root, paths) = (&v.0, &v.1);
+                    ui.label(RichText::new(format!("Folders this scan couldn't read ({})", fmt_count(paths.len() as u64))).font(theme::semibold(16.0)));
+                    ui.add(egui::Label::new(RichText::new("Windows didn't let a normal (no-admin) scan open these: folders only administrators or the system may read, like System Volume Information, other users' folders and WindowsApps. Their size isn't in the totals. Fast scan (admin, read-only) includes them.").color(t.muted)).wrap());
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical().id_salt("unreadable").max_height(380.0).show(ui, |ui| {
+                        for p in paths {
+                            let r = ui.add(egui::Label::new(RichText::new(visible(p)).monospace().size(12.0)).truncate().sense(Sense::click()));
+                            if r.on_hover_text("Click to show it in the tree").clicked() {
+                                jump = rel_of(root, p);
+                            }
+                        }
+                    });
                 }
                 Dialog::Writers(v) => {
                     if v.last.elapsed() >= Duration::from_secs(2) {
@@ -4095,6 +4209,26 @@ impl XylemApp {
                         }
                         return;
                     }
+                    Dialog::Space(r) => {
+                        let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
+                        if ui.add(ok).clicked() {
+                            close = true;
+                        }
+                        if r.unreadable > 0 && ui.button(format!("Show the {} unreadable folders", fmt_count(r.unreadable))).clicked() {
+                            action = Some("show-unreadable");
+                        }
+                        if !r.fast_scan && ui.button("⚡ Fast scan (admin)").on_hover_text("Reads the drive's file table: every file, including what a folder walk can't open. Read-only.").clicked() {
+                            action = Some("space-fast-scan");
+                        }
+                        return;
+                    }
+                    Dialog::Unreadable(_) => {
+                        let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
+                        if ui.add(ok).clicked() {
+                            close = true;
+                        }
+                        return;
+                    }
                     Dialog::Writers(_) => {
                         let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
                         if ui.add(ok).clicked() {
@@ -4293,6 +4427,11 @@ impl XylemApp {
                         (Ok(()), _) => "Saved. Automatic scans are off.".into(),
                     });
                 }
+            }
+            Some("show-unreadable") => self.open_unreadable(),
+            Some("space-fast-scan") => {
+                self.dialog = None;
+                self.start_scan(true);
             }
             Some("health-refresh") => {
                 self.dialog = Some(Dialog::Health(Box::new(HealthView::read())));

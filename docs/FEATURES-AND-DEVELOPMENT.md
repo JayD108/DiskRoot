@@ -27,7 +27,12 @@ This page explains every feature of Xylem 0.2: **what it does, how to use it, an
 - **What it does:** lists every folder and file under the drive or folder in the path box, with sizes.
 - **Use it:** type or pick a path (top-left), press **Scan** or F5. Works on any drive: NTFS, FAT32, exFAT, USB sticks, network shares.
 - **Underneath:** 8 worker threads ask Windows for whole folder listings at once (`NtQueryDirectoryFile`), hundreds of entries per call, each with its size, attributes and last-modified time. Each folder is opened relative to its parent, so long paths don't matter. Links (junctions, symlinks) are recorded but never followed, so nothing is counted twice through a loop. A full 1.5 TB system drive takes about 4–5 s.
-- **Limits:** folders your account can't read are counted as "unreadable" (shown in the status bar). Hardlinked files are counted once per name.
+- **Hardlinks counted once:** the listing includes each file's ID (NTFS, ReFS), so a file with several names (hardlinks, e.g. Windows' `WinSxS` and `System32`) counts once. The name outside `WinSxS` keeps the bytes (otherwise the alphabetically first path), the same on every scan; the other names show 0 B and say why. On the developer's C:\Windows: 46.1 GB before, 36.1 GB now; on all of C: about 20 GB less, 148,580 extra names. Cost: +18 MB peak memory (130 → 148 MB for a full C: walk), same speed. The first scan after updating shows that drop in What changed once.
+- **Limits:** folders your account can't read are "unreadable": click the count in the status bar for the list (and why). Their size isn't counted; Fast scan includes them.
+
+### Where every GB is (View → Where every GB is, or click the drive strip)
+- **What it does:** for a whole drive, the used space Windows reports next to what the scan counted, and what the difference is. After a Fast scan it also shows NTFS's own files (`$MFT`, `$LogFile`, ...) and System Volume Information (restore points, shadow copies) measured, and whatever is still not in any file is shown as such, never guessed. After a normal scan it says what a folder walk can't see (unreadable folders, NTFS's own files, restore points, reserved storage) and offers a Fast scan.
+- **Underneath:** used = volume size − free space (Windows); counted = the scan's size on disk. NTFS's own files can't be measured without admin (`FSCTL_GET_NTFS_VOLUME_DATA` is refused, measured).
 
 ### Fast scan (Ctrl+F5): whole NTFS drives, with admin
 - **What it does:** reads the drive's own file table directly. About 1 s for a whole 1.5 TB drive, and it sees everything, including system folders and space Windows uses for itself.
