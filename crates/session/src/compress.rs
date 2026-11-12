@@ -224,8 +224,9 @@ pub fn ratio(ext: &str) -> f64 {
         "npy" | "npz" | "mat" | "tfrecord" | "arrow" | "feather" => 0.13,
         // EEG recordings (16-bit samples): measured .edf 37.8% (LZX), 32.6% (Fast).
         "edf" | "bdf" => 0.38,
-        // Columnar files compress inside already, but less than you'd think: measured 40% on small ones.
-        "parquet" | "orc" | "avro" => 0.3,
+        // Columnar files are compressed inside: measured a 2 GB FineWeb .parquet
+        // 11.8% (LZX) / 11.0% (Fast); small ones saved more (40%), but big ones hold the bytes.
+        "parquet" | "orc" | "avro" => 0.12,
         "exe" | "dll" | "sys" | "node" | "pyd" | "so" => 0.4,
         _ => 0.5,
     }

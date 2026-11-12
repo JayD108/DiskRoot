@@ -272,6 +272,8 @@ pub struct Parsed {
     pub alloc: u64,
     /// Last-modified day from $STANDARD_INFORMATION (0 = unknown).
     pub mtime: u16,
+    /// Created-on-this-volume day from $STANDARD_INFORMATION (0 = unknown).
+    pub added: u16,
 }
 
 /// Parses one record in place (the fixup modifies `rec`). Names are
@@ -302,6 +304,7 @@ pub fn parse_record(rec_no: u32, rec: &mut [u8], names: &mut String) -> Option<P
         size: 0,
         alloc: 0,
         mtime: 0,
+        added: 0,
     };
     for a in attrs(rec, &h) {
         match a.typ {
@@ -310,7 +313,10 @@ pub fn parse_record(rec_no: u32, rec: &mut [u8], names: &mut String) -> Option<P
                     if let Some(x) = u32_at(v, 32) {
                         p.attrs = x & !SI_HAS_EA;
                     }
-                    // Offset 8: last data modification (FILETIME).
+                    // Offset 0: creation, 8: last data modification (FILETIMEs).
+                    if let Some(t) = v.get(0..8) {
+                        p.added = xylem_core::filetime_days(u64::from_le_bytes(t.try_into().expect("8 bytes")));
+                    }
                     if let Some(t) = v.get(8..16) {
                         p.mtime = xylem_core::filetime_days(u64::from_le_bytes(t.try_into().expect("8 bytes")));
                     }

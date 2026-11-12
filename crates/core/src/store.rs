@@ -9,9 +9,11 @@ use std::time::Duration;
 
 use crate::{Columns, Index, ScanStats, flags};
 
-/// Version 2 adds the last-modified column. Version 1 files (remembered
-/// scans from Xylem 0.1) are still read, with every date "unknown".
-const MAGIC: &[u8; 8] = b"XYLMIDX2";
+/// Version 2 adds the last-modified column, version 3 the created-here
+/// column. Older files (remembered scans from Xylem 0.1 to 0.3) are still
+/// read, with the missing dates "unknown".
+const MAGIC: &[u8; 8] = b"XYLMIDX3";
+const MAGIC_V2: &[u8; 8] = b"XYLMIDX2";
 const MAGIC_V1: &[u8; 8] = b"XYLMIDX1";
 /// Refuse absurd sizes from a corrupt file before allocating.
 const MAX_NODES: u64 = 1 << 32;
@@ -61,6 +63,9 @@ impl Index {
         for &d in &self.mtime {
             w.write_all(&d.to_le_bytes())?;
         }
+        for &d in &self.added {
+            w.write_all(&d.to_le_bytes())?;
+        }
         w.write_all(self.names.as_bytes())
     }
 
@@ -80,9 +85,12 @@ impl Index {
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
         let v1 = &magic == MAGIC_V1;
-        if &magic != MAGIC && !v1 {
+        let v2 = &magic == MAGIC_V2;
+        if &magic != MAGIC && !v1 && !v2 {
             return Err(bad("not a xylem index"));
         }
+        // Date columns in the file: v1 none, v2 last-modified, v3 both.
+        let dates = if v1 { 0 } else if v2 { 1 } else { 2 };
         let mut head = [0u64; 7];
         for v in &mut head {
             let mut b = [0u8; 8];
@@ -102,7 +110,7 @@ impl Index {
         }
         if let Some(len) = file_len {
             // magic + 7 header words + mode length + mode + columns + names
-            let expected = 8 + 7 * 8 + 4 + mode_len as u64 + n as u64 * (4 + 8 + 8 + 1 + 4 + 2 + if v1 { 0 } else { 2 }) + name_bytes as u64;
+            let expected = 8 + 7 * 8 + 4 + mode_len as u64 + n as u64 * (4 + 8 + 8 + 1 + 4 + 2 + 2 * dates) + name_bytes as u64;
             if expected != len {
                 return Err(bad("size doesn't match its header"));
             }
@@ -123,12 +131,13 @@ impl Index {
         r.read_exact(&mut flag_bytes)?;
         let name_off = column(r, n, u32::from_le_bytes)?;
         let name_len = column(r, n, u16::from_le_bytes)?;
-        let mtime = if v1 { Vec::new() } else { column(r, n, u16::from_le_bytes)? };
+        let mtime = if dates >= 1 { column(r, n, u16::from_le_bytes)? } else { Vec::new() };
+        let added = if dates >= 2 { column(r, n, u16::from_le_bytes)? } else { Vec::new() };
         let mut names = vec![0u8; name_bytes];
         r.read_exact(&mut names)?;
         let names = String::from_utf8(names).map_err(|_| bad("names not UTF-8"))?;
 
-        let cols = Columns { parent, size, alloc, flags: flag_bytes, name_off, name_len, names, mtime };
+        let cols = Columns { parent, size, alloc, flags: flag_bytes, name_off, name_len, names, mtime, added };
         let mut index = Index::from_columns(cols).map_err(|e| bad(&e))?;
         // A swapped or crafted file must not smuggle in names that change
         // the meaning of a path ("..\\Windows", "x:y"): only the root may
@@ -155,17 +164,24 @@ mod tests {
         let d = idx.push(0, "d", 0, 0, crate::flags::DIR);
         let f = idx.push(d, "f", 1, 1, 0);
         idx.set_mtime(f, 20_000);
+        idx.set_added(f, 20_400);
         idx.compute_totals();
         let mut buf = Vec::new();
         idx.save(&ScanStats::default(), "t", &mut buf).unwrap();
         let (back, _, _) = Index::load_checked(&mut buf.as_slice(), buf.len() as u64).unwrap();
         assert_eq!((back.mtime(f), back.mtime(d), back.mtime(0)), (20_000, 20_000, 20_000));
-        // A version 1 file (no date column) still loads, dates unknown.
+        assert_eq!((back.added(f), back.added(0), back.touched(f)), (20_400, 20_400, 20_400));
+        // A version 2 file (no created-here column) still loads, that date unknown.
         let cols = 8 + 7 * 8 + 4 + 1 + 3 * (4 + 8 + 8 + 1 + 4 + 2);
-        let mut v1: Vec<u8> = buf[..cols].iter().chain(&buf[cols + 3 * 2..]).copied().collect();
+        let mut v2: Vec<u8> = buf[..cols + 3 * 2].iter().chain(&buf[cols + 3 * 4..]).copied().collect();
+        v2[7] = b'2';
+        let (old, _, _) = Index::load_checked(&mut v2.as_slice(), v2.len() as u64).unwrap();
+        assert_eq!((old.mtime(f), old.added(f), old.touched(f)), (20_000, 0, 20_000));
+        // A version 1 file (no date column) still loads, dates unknown.
+        let mut v1: Vec<u8> = buf[..cols].iter().chain(&buf[cols + 3 * 4..]).copied().collect();
         v1[7] = b'1';
         let (old, _, _) = Index::load_checked(&mut v1.as_slice(), v1.len() as u64).unwrap();
-        assert_eq!((old.len(), old.name(f), old.mtime(f), old.mtime(0)), (3, "f", 0, 0));
+        assert_eq!((old.len(), old.name(f), old.mtime(f), old.mtime(0), old.added(f)), (3, "f", 0, 0, 0));
         let mut v9 = buf.clone();
         v9[7] = b'9';
         assert!(Index::load(&mut v9.as_slice()).is_err(), "unknown versions refused");

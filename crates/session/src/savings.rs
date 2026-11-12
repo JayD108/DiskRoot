@@ -4,10 +4,14 @@
 //! suggestion leads to the usual dialog (Compress, delete review, a Windows
 //! tool) or just explains what to do.
 //!
-//! "Not changed for a while" is the last-modified date. Windows keeps
-//! last-access dates only loosely (often switched off, updated at most
-//! once an hour), so Xylem doesn't read them and never calls something
-//! "unused".
+//! "Not changed for a while" is the later of a file's last-modified date
+//! and the day it arrived on this PC ([`Index::touched`]): downloads and
+//! unpacked datasets keep their author's modified date, often years older
+//! than the download. Windows keeps last-access dates only loosely (often
+//! switched off, updated by virus scanners and backups), so Xylem doesn't
+//! use them and never calls something "unused".
+//!
+//! [`Index::touched`]: xylem_core::Index::touched
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -35,9 +39,9 @@ pub struct Candidate {
     pub packable: u64,
     /// Rough saving with Maximum (Fast: [`compress::fast_estimate`]).
     pub estimate_max: u64,
-    /// Last-modified day of the newest file inside. Folders' own dates are
-    /// left out: they change when files are copied in or renamed, which
-    /// says nothing about whether the files themselves still change.
+    /// Newest day a file inside was changed or arrived on this PC.
+    /// Folders' own dates are left out (they change when a file is renamed
+    /// or deleted inside).
     pub mtime: u16,
 }
 
@@ -143,7 +147,7 @@ impl Scanned {
             } else {
                 // Every file counts for the date (a folder whose small files
                 // change isn't left alone), only packable ones for the saving.
-                newest[i] = idx.mtime(id);
+                newest[i] = idx.touched(id);
                 if let Verdict::Pack(e) = compress::verdict(idx.name(id), fl, idx.size(id), idx.alloc(id)) {
                     est[i] = e as u64;
                     pack[i] = idx.alloc(id);
@@ -210,6 +214,7 @@ impl Scanned {
         ));
 
         let dev = self.places_for(&["node_modules", "Build output", "Python environments"], |p| p.mtime != 0 && today.saturating_sub(p.mtime) >= 180);
+
         tips.push(tip(
             "Build folders in projects not changed for 6 months",
             dev,
@@ -269,7 +274,7 @@ impl Scanned {
                 vhdx.push(self.place(id, false, true));
                 continue;
             }
-            let m = idx.mtime(id);
+            let m = idx.touched(id);
             if a >= 512 << 20 && m != 0 && today.saturating_sub(m) >= 365 && compress::verdict(name, fl, idx.size(id), a) == Verdict::Format {
                 big_cold_bytes += a;
                 big_cold.push(self.place(id, false, false));
@@ -397,7 +402,7 @@ impl Scanned {
             node: n,
             path: self.index.path(n),
             bytes: self.index.alloc(n),
-            mtime: self.index.mtime(n),
+            mtime: self.index.touched(n),
             note: if with_note { info.and_then(|i| i.note.clone()) } else { None },
             markable: n != 0
                 && self.cls.matched_here(n)
@@ -424,7 +429,7 @@ impl Scanned {
                 }
                 if idx.is_dir(x) {
                     stack.extend(self.children.live(idx, x));
-                } else if fl & flags::CLOUD == 0 && idx.mtime(x) != 0 && today.saturating_sub(idx.mtime(x)) >= min_days {
+                } else if fl & flags::CLOUD == 0 && idx.touched(x) != 0 && today.saturating_sub(idx.touched(x)) >= min_days {
                     bytes += idx.alloc(x);
                 }
             }
@@ -486,6 +491,10 @@ mod tests {
         file(&mut idx, sub, "run.log", 600 * MB, old);
         file(&mut idx, cold, "notes.txt", 100 * MB, old);
         file(&mut idx, cold, "clip.mp4", 900 * MB, old);
+        // Downloaded last week, but the files keep their authors' old dates: not listed.
+        let fresh = idx.push(data, "new-download", 0, 0, flags::DIR);
+        let dl = file(&mut idx, fresh, "eeg.edf", 900 * MB, old);
+        idx.set_added(dl, today - 7);
         // Hot folder: not listed, but its big unchanged file is.
         let hot = idx.push(data, "work", 0, 0, flags::DIR);
         file(&mut idx, hot, "today.txt", 4096 * 2, new);
@@ -516,8 +525,12 @@ mod tests {
         assert_eq!(c.estimate_max, 350 * MB);
         assert_eq!(c.estimate(Level::Fast), compress::fast_estimate(350 * MB));
         assert_eq!(c.suggested(today), Level::Max);
+        // Once the download is old enough, it's listed with its arrival date.
+        let later = s.compress_suggestions(5, 64 * MB, 100);
+        let dl_row = later.items.iter().find(|c| c.node == fresh).expect("listed at 5 days");
+        assert_eq!(dl_row.mtime, today - 7);
         assert_eq!(c.on_disk, 1600 * MB);
-        // A shorter "unchanged for" doesn't change it; a longer one finds nothing.
+        // A shorter "unchanged for" (but longer than a week) doesn't change it; a longer one finds nothing.
         assert_eq!(s.compress_suggestions(30, 64 * MB, 100).items.len(), 2);
         assert!(s.compress_suggestions(500, 64 * MB, 100).items.is_empty());
         // The Compress dialog agrees on what it would pack.
@@ -590,7 +603,7 @@ mod tests {
         let s = crate::scan(&path).unwrap();
         let today = today_days();
         let b = xylem_core::format::bytes;
-        for days in [90, 180, 365] {
+        for days in [30, 90, 180, 365] {
             let t = Instant::now();
             let got = s.compress_suggestions(days, 256 * MB, 100);
             println!(

@@ -64,6 +64,9 @@ pub struct Columns {
     /// Last-modified day of each node ([`filetime_days`]); 0 = unknown.
     /// May be left empty (all unknown).
     pub mtime: Vec<u16>,
+    /// Day each node was created on this volume (downloaded, copied or
+    /// unpacked here); 0 = unknown. May be left empty.
+    pub added: Vec<u16>,
 }
 
 /// Seconds between 1601-01-01 (FILETIME epoch) and 1970-01-01.
@@ -156,6 +159,8 @@ pub struct Index {
     names: String,
     /// Last-modified day; for folders (after totals) the newest inside.
     mtime: Vec<u16>,
+    /// Day created on this volume; for folders (after totals) the newest inside.
+    added: Vec<u16>,
     totals_ready: bool,
 }
 
@@ -173,6 +178,7 @@ impl Index {
         self.name_len.shrink_to_fit();
         self.names.shrink_to_fit();
         self.mtime.shrink_to_fit();
+        self.added.shrink_to_fit();
     }
 
     /// Heap bytes held, per column (for memory work).
@@ -187,6 +193,7 @@ impl Index {
             ("index.name_len", self.name_len.capacity() * 2),
             ("index.names", self.names.capacity()),
             ("index.mtime", self.mtime.capacity() * 2),
+            ("index.added", self.added.capacity() * 2),
         ]
     }
 
@@ -209,6 +216,7 @@ impl Index {
             name_len: Vec::with_capacity(nodes),
             names: String::with_capacity(name_bytes + root_name.len()),
             mtime: Vec::with_capacity(nodes),
+            added: Vec::with_capacity(nodes),
             totals_ready: false,
         };
         idx.push_raw(NO_PARENT, root_name, 0, 0, flags::DIR);
@@ -248,6 +256,13 @@ impl Index {
         } else {
             return Err(format!("mtime column has {} entries for {n} nodes", c.mtime.len()));
         };
+        let added = if c.added.is_empty() {
+            vec![0; n]
+        } else if c.added.len() == n {
+            c.added
+        } else {
+            return Err(format!("added column has {} entries for {n} nodes", c.added.len()));
+        };
         let files = c.flags.iter().map(|&f| u32::from(f & flags::DIR == 0)).collect();
         Ok(Self {
             parent: c.parent,
@@ -259,6 +274,7 @@ impl Index {
             name_len: c.name_len,
             names: c.names,
             mtime,
+            added,
             totals_ready: false,
         })
     }
@@ -284,6 +300,7 @@ impl Index {
         self.name_off.push(off);
         self.name_len.push(len);
         self.mtime.push(0);
+        self.added.push(0);
         id
     }
 
@@ -296,6 +313,25 @@ impl Index {
     /// totals are computed: the newest file or folder inside.
     pub fn mtime(&self, id: u32) -> u16 {
         self.mtime[id as usize]
+    }
+
+    /// Sets the day a node was created on this volume (see [`filetime_days`]).
+    pub fn set_added(&mut self, id: u32, days: u16) {
+        self.added[id as usize] = days;
+    }
+
+    /// Day created on this volume (0 = unknown). Downloads and unpacked
+    /// archives often keep their author's old modified date; this is when
+    /// they arrived here. For folders, once totals are computed: the newest
+    /// inside.
+    pub fn added(&self, id: u32) -> u16 {
+        self.added[id as usize]
+    }
+
+    /// The later of last-modified and arrived-here: when this data last
+    /// changed *on this PC*. What "not changed for a while" should mean.
+    pub fn touched(&self, id: u32) -> u16 {
+        self.mtime[id as usize].max(self.added[id as usize])
     }
 
     /// Rolls file sizes and counts up into every folder. Runs once; later
@@ -312,6 +348,7 @@ impl Index {
             self.alloc[p] = self.alloc[p].saturating_add(self.alloc[i]);
             self.files[p] = self.files[p].saturating_add(self.files[i]);
             self.mtime[p] = self.mtime[p].max(self.mtime[i]);
+            self.added[p] = self.added[p].max(self.added[i]);
         }
         self.totals_ready = true;
     }
@@ -395,6 +432,7 @@ impl Index {
             + self.name_len.capacity() * 2
             + self.names.capacity()
             + self.mtime.capacity() * 2
+            + self.added.capacity() * 2
     }
 }
 
@@ -478,6 +516,7 @@ mod tests {
             name_len: vec![3, 5, 5],
             names: "C:\\Usersa.bin".into(),
             mtime: vec![],
+            added: vec![],
         };
         let mut idx = Index::from_columns(cols()).unwrap();
         idx.compute_totals();

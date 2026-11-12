@@ -2906,7 +2906,7 @@ impl XylemApp {
                             ui.horizontal(|ui| {
                                 ui.label("Not changed for at least");
                                 let before = v.min_days;
-                                for (d, label) in [(90u16, "3 months"), (180, "6 months"), (365, "1 year")] {
+                                for (d, label) in [(30u16, "1 month"), (90, "3 months"), (180, "6 months"), (365, "1 year")] {
                                     ui.radio_value(&mut v.min_days, d, label);
                                 }
                                 if before != v.min_days
@@ -2917,7 +2917,7 @@ impl XylemApp {
                             });
                             let n = v.sugg.items.len();
                             let summary = if n == 0 {
-                                "Nothing big enough found: no folder or file here would save 100 MB or more.".to_owned()
+                                "Nothing found: no folder or file that has been unchanged this long would save 100 MB or more. Try a shorter time.".to_owned()
                             } else {
                                 format!(
                                     "{} could save about {} with Fast, {} with Maximum. Rough estimates: the real result depends on the data. Biggest saving first; click a name to show it in the tree.",
@@ -2941,7 +2941,7 @@ impl XylemApp {
                                             ui.set_min_width(w);
                                             let r = ui.add(egui::Label::new(visible(&c.path)).truncate().sense(Sense::click()));
                                             let hover = format!(
-                                                "{}\n{} on disk, {} of it can be packed\nAbout {} saved with Fast, {} with Maximum (suggested: {})\nNewest file changed {}\n\nClick to show it in the tree",
+                                                "{}\n{} on disk, {} of it can be packed\nAbout {} saved with Fast, {} with Maximum (suggested: {})\nNewest file changed or added {}\n\nClick to show it in the tree",
                                                 visible(&c.path),
                                                 fmt_bytes(c.on_disk),
                                                 fmt_bytes(c.packable),
@@ -2962,7 +2962,7 @@ impl XylemApp {
                                 }
                             });
                             ui.add_space(6.0);
-                            ui.add(egui::Label::new(RichText::new("Judged by the newest file inside. Windows doesn't reliably record when a file was last opened, so this means \"not changed since\", not \"not used since\". Compressed files still open as usual. Zip or 7z archives save more, but the files can't be opened until unpacked, so Xylem doesn't make them.").color(t.muted).size(11.5)).wrap());
+                            ui.add(egui::Label::new(RichText::new("Age: when the newest file inside last changed or arrived on this PC (a download keeps its author's old date, so the arrival date counts too). Windows doesn't reliably record when a file was last opened, so this means \"not changed since\", not \"not used since\". Compressed files still open as usual. Zip or 7z archives save more, but the files can't be opened until unpacked, so Xylem doesn't make them.").color(t.muted).size(11.5)).wrap());
                         }
                     } else {
                         ui.add(egui::Label::new(RichText::new("Biggest first, from this scan. Xylem doesn't delete anything from here: each way says how, or opens the right place.").color(t.muted)).wrap());

@@ -282,6 +282,7 @@ pub(crate) fn build_tree(letter: char, mut chunks: Vec<ChunkOut>, total: usize) 
         name_len: vec![0; n],
         names: String::with_capacity(root_name.len() + name_bytes),
         mtime: vec![0; n],
+        added: vec![0; n],
     };
     cols.names.push_str(&root_name);
     cols.name_len[0] = root_name.len() as u16;
@@ -309,6 +310,7 @@ pub(crate) fn build_tree(letter: char, mut chunks: Vec<ChunkOut>, total: usize) 
             }
             cols.flags[node] = f;
             cols.mtime[node] = p.mtime;
+            cols.added[node] = p.added;
         }
     }
     drop((chunks, slot, node_of));
@@ -409,6 +411,7 @@ mod tests {
                     size: next() % 100_000,
                     alloc: 4096,
                     mtime: 19_000,
+                    added: 19_100,
                 });
                 if is_dir {
                     dirs.push(rec);
