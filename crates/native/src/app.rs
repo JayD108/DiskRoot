@@ -188,6 +188,9 @@ struct GrowthView {
 struct HealthView {
     drives: Vec<(health::Drive, Option<health::Trend>)>,
     trim: Option<bool>,
+    /// The scan on screen, if it's a whole drive: (its letter "C:", what
+    /// can't be downloaded or rebuilt again: (kind, bytes, files)).
+    at_risk: Option<(String, Vec<(&'static str, u64, u64)>)>,
 }
 
 impl HealthView {
@@ -200,7 +203,7 @@ impl HealthView {
         Self { drives: drives.into_iter().map(|d| {
             let t = health::trend(&snaps, &d);
             (d, t)
-        }).collect(), trim: health::trim_enabled() }
+        }).collect(), trim: health::trim_enabled(), at_risk: None }
     }
 }
 
@@ -1376,7 +1379,7 @@ impl XylemApp {
                     ui.close();
                 }
                 if ui.button("Drive health…").on_hover_text("How worn your SSDs are, how much was written to them, temperature and errors (the drives' own reports; no admin)").clicked() {
-                    self.dialog = Some(Dialog::Health(Box::new(HealthView::read())));
+                    self.open_health();
                     ui.close();
                 }
                 if ui.button("Scheduled scans…").on_hover_text("Let Xylem scan by itself every few hours (no admin, no window), so it can show what changed").clicked() {
@@ -2232,6 +2235,15 @@ impl XylemApp {
                 Err(TryRecvError::Disconnected) => v.pending = None,
             }
         }
+    }
+
+    fn open_health(&mut self) {
+        let mut v = HealthView::read();
+        v.at_risk = self.scanned.as_ref().and_then(|s| {
+            let root = s.summary().root;
+            (root.len() == 3 && root.ends_with(":\\")).then(|| (root.trim_end_matches('\\').to_owned(), s.at_risk()))
+        });
+        self.dialog = Some(Dialog::Health(Box::new(v)));
     }
 
     fn open_unreadable(&mut self) {
@@ -3565,6 +3577,14 @@ impl XylemApp {
                                 }
                                 ui.add(egui::Label::new(RichText::new(tr.life.as_str())).wrap());
                             }
+                            if let Some((letter, items)) = &v.at_risk
+                                && d.letters.iter().any(|l| l.eq_ignore_ascii_case(letter))
+                                && !items.is_empty()
+                            {
+                                let list = items.iter().map(|(k, b, f)| format!("{k} {} ({})", fmt_bytes(*b), fmt_files(*f))).collect::<Vec<_>>().join(" · ");
+                                let urgent = level != Health::Good && level != Health::Unknown;
+                                ui.add(egui::Label::new(RichText::new(format!("If {letter} failed, this would be lost unless you have a copy somewhere else: {list} (OneDrive folders aren't counted here). Keep a copy (File History, OneDrive, an external drive){}", if urgent { ", now" } else { "" }) + ".").color(if urgent { theme::WARN } else { t.muted })).wrap());
+                            }
                             if let Some(o) = xylem_session::offenders::for_drive(&d.model, &d.firmware) {
                                 ui.add(egui::Label::new(RichText::new(format!("⚠ {}: {} {}", o.title, o.what, o.todo)).color(theme::WARN)).wrap())
                                     .on_hover_text(format!("Checked {} against:\n{}", o.checked, o.sources.join("\n")));
@@ -4699,7 +4719,7 @@ impl XylemApp {
                 self.start_scan(true);
             }
             Some("health-refresh") => {
-                self.dialog = Some(Dialog::Health(Box::new(HealthView::read())));
+                self.open_health();
             }
             Some("history-clear") => {
                 if let Some(Dialog::Growth(v)) = self.dialog.take() {

@@ -864,6 +864,26 @@ It may be left over from an uninstalled program, or belong to one that's install
         (node as usize) < self.index.len() && self.index.flags(node) & xylem_core::flags::HARDLINK != 0
     }
 
+    /// "What you'd lose if this drive failed": the kinds of data that can't
+    /// be downloaded or rebuilt again (documents, photos and videos, your
+    /// code projects, your datasets), with bytes and files. Cloud-synced
+    /// folders (OneDrive) are a separate category, so they're not in here.
+    pub fn at_risk(&self) -> Vec<(&'static str, u64, u64)> {
+        let cat = |key: &str| xylem_core::classify::CATEGORIES.iter().position(|c| c.key == key).map_or((0, 0), |i| (self.cats.cat_total[i], self.cats.cat_files[i]));
+        let subs = |names: &[&str]| {
+            self.rules.subs.iter().enumerate().filter(|(_, s)| names.contains(&s.name.as_str())).fold((0u64, 0u64), |a, (i, _)| (a.0 + self.cats.sub_total[i], a.1 + self.cats.sub_files[i]))
+        };
+        let (docs, media) = (cat("docs"), cat("media"));
+        let projects = subs(&["Code projects", "My projects"]);
+        // Taught photos/videos and backups are already inside Media and Documents.
+        let data = subs(&["My datasets"]);
+        [("Documents", docs), ("Photos, videos and music", media), ("Your code projects", projects), ("Datasets you marked as yours", data)]
+            .into_iter()
+            .filter(|(_, (b, _))| *b > 0)
+            .map(|(n, (b, f))| (n, b, f))
+            .collect()
+    }
+
     /// Folders this scan couldn't read (paths, sorted), at most `limit`.
     pub fn unreadable_folders(&self, limit: usize) -> Vec<String> {
         let idx = &self.index;
