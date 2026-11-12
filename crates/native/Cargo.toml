@@ -12,7 +12,6 @@ path = "src/main.rs"
 [dependencies]
 diskroot-session.workspace = true
 eframe.workspace = true
-wgpu.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
