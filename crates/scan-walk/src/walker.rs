@@ -166,6 +166,13 @@ struct Listing {
 /// Updated once per folder, so it costs nothing measurable.
 pub static PROGRESS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Gentle scanning: worker threads run in Windows' background mode (low CPU,
+/// disk I/O and memory priority), so other programs stay fast; the scan may
+/// take longer while the PC is busy. Used by scheduled scans; a setting in
+/// the app.
+pub static GENTLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+const THREAD_MODE_BACKGROUND_BEGIN: i32 = 0x0001_0000;
+
 pub fn scan(root: &Path, opts: &ScanOptions) -> io::Result<Scan> {
     let start = Instant::now();
     PROGRESS.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -182,6 +189,11 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> io::Result<Scan> {
             let stack = &stack;
             let res_tx = res_tx.clone();
             s.spawn(move || {
+                if GENTLE.load(std::sync::atomic::Ordering::Relaxed) {
+                    // SAFETY: pseudo-handle of the current thread. Background
+                    // mode ends when the thread exits (end of the scan).
+                    unsafe { crate::ffi::SetThreadPriority(crate::ffi::GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) };
+                }
                 let mut buf = vec![0u64; BUF_BYTES / 8];
                 let mut units = Vec::with_capacity(256);
                 while let Some(task) = stack.pop() {

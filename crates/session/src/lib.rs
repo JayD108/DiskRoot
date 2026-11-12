@@ -35,6 +35,16 @@ use xylem_scan_mft::{Mode, Used, scan_auto};
 pub use xylem_core::classify::{Action, Category, RuleInfo, Safety, SubType};
 pub use xylem_core::view::ViewNode as Shape;
 pub use xylem_core::{AGE_BUCKETS, AGE_UNKNOWN, age_bucket, age_text, date_text, today_days};
+/// This process's RAM and CPU (for the app's own footprint display).
+pub use xylem_scan_walk::sys as process;
+
+/// Gentle scanning for the folder walk: Windows' background mode (low CPU,
+/// disk and memory priority). Measured on C: (E11): another program's 2 GB
+/// read took 3.0 s alone, 5.7 s during a normal scan, 3.0 s during a gentle
+/// one; the scan took ~8% longer.
+pub fn set_gentle(on: bool) {
+    xylem_scan_walk::GENTLE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
 
 /// The rules in effect: the built-in ones plus the user's own
 /// (`%APPDATA%\Xylem\rules.json`). Reloadable while the app runs; each

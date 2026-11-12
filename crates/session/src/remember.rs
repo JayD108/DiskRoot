@@ -398,6 +398,21 @@ pub fn remember(idx: &Arc<Index>, stats: &ScanStats, mode: &str) -> io::Result<O
     Ok(prev.map(|p| diff(&p, &snap, 50)))
 }
 
+/// Saves only the index of a scan (for instant reopen), leaving the folder
+/// snapshots alone: they belong to "what changed". Used before freeing a
+/// scan from memory, when the saved copy was dropped after a change.
+pub fn save_index(idx: &Index, stats: &ScanStats, mode: &str) -> io::Result<()> {
+    let (idx_path, _, _) = paths(idx.name(0)).ok_or_else(|| io::Error::other("no LOCALAPPDATA"))?;
+    fs::create_dir_all(idx_path.parent().expect("cache dir"))?;
+    let mode = mode.replace(" via admin helper", "");
+    write_atomic(&idx_path, |w| idx.save(stats, &mode, w))
+}
+
+/// Whether a remembered index exists for `root` (instant reopen possible).
+pub fn has_index(root: &str) -> bool {
+    paths(root).is_some_and(|(p, _, _)| p.is_file())
+}
+
 /// The remembered scan of `root`, if any: (index, stats, mode, scan time).
 pub fn reopen(root: &str) -> Option<(Index, ScanStats, String, u64)> {
     let (idx_path, snap_path, _) = paths(root)?;

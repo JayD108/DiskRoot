@@ -120,6 +120,8 @@ enum Dialog {
     Leftovers(Vec<Leftover>),
     /// View > Ways to save space.
     Savings(Box<SavingsView>),
+    /// Xylem's own memory and CPU, and freeing memory.
+    Memory,
     /// Explains a Windows tool before starting it.
     Tool(Action),
 }
@@ -273,6 +275,44 @@ pub struct XylemApp {
     live_overflow: bool,
     /// Flash the taskbar button (a size alert fired).
     attention: bool,
+    /// Xylem's own RAM and CPU, sampled at most every 2 s.
+    footprint: Footprint,
+    /// When the window was minimized (for "free memory when minimized").
+    minimized_since: Option<Instant>,
+    /// The scan was freed from memory and can be reopened: its root.
+    freed: Option<String>,
+}
+
+/// This process's memory and CPU, for the status bar and the Memory dialog.
+#[derive(Clone, Copy, Default)]
+struct Footprint {
+    at: Option<Instant>,
+    cpu_secs: f64,
+    /// Working set (RAM in use), peak working set, private bytes.
+    ram: u64,
+    peak: u64,
+    private: u64,
+    /// Average over the last sample interval, % of the whole CPU.
+    cpu_pct: f64,
+}
+
+impl Footprint {
+    fn sample(&mut self) {
+        let now = Instant::now();
+        if self.at.is_some_and(|t| now.duration_since(t) < Duration::from_secs(2)) {
+            return;
+        }
+        let cpu = xylem_session::process::cpu_seconds().unwrap_or(0.0);
+        if let Some(t) = self.at {
+            let cores = std::thread::available_parallelism().map_or(1, |n| n.get()) as f64;
+            let wall = now.duration_since(t).as_secs_f64().max(0.001);
+            self.cpu_pct = ((cpu - self.cpu_secs) / wall / cores * 100.0).clamp(0.0, 100.0);
+        }
+        if let Some((ram, peak, private)) = xylem_session::process::memory() {
+            (self.ram, self.peak, self.private) = (ram, peak, private);
+        }
+        (self.at, self.cpu_secs) = (Some(now), cpu);
+    }
 }
 
 impl XylemApp {
@@ -298,6 +338,9 @@ impl XylemApp {
             status: None,
             title: String::new(),
             tree_focus: true,
+            footprint: Footprint::default(),
+            minimized_since: None,
+            freed: None,
             scan_after_welcome: false,
             remember_rx: None,
             changes: None,
@@ -349,6 +392,52 @@ impl XylemApp {
         self.map = None;
     }
 
+    /// Drops the scan from memory. It stays saved (saved again first if a
+    /// delete or compress made the saved copy stale), so it reopens fast.
+    fn free_memory(&mut self) {
+        let Some(s) = self.scanned.take() else { return };
+        let root = s.summary().root;
+        if self.settings.remember_scans && !remember::has_index(&root) {
+            let (idx, stats, mode) = s.remember_parts();
+            if let Err(e) = remember::save_index(&idx, &stats, &mode) {
+                self.scanned = Some(s);
+                self.say(format!("Couldn't save the scan, so it stays in memory: {e}"));
+                return;
+            }
+        }
+        drop(s);
+        self.watcher = None;
+        self.summary = None;
+        self.rows = None;
+        self.map = None;
+        self.drive_bar = None;
+        self.changes = None;
+        self.prev_sizes = None;
+        self.selected = None;
+        self.marked.clear();
+        self.links_cache = None;
+        self.freed = self.settings.remember_scans.then(|| root.clone());
+        self.footprint.at = None; // show the new number right away
+        self.say(if self.settings.remember_scans { format!("Memory freed. Your scan of {root} is saved: open it from the start screen.") } else { "Memory freed.".to_owned() });
+    }
+
+    /// "Free memory when minimized for 10 minutes".
+    fn check_minimized(&mut self, ctx: &egui::Context) {
+        let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        if !minimized {
+            self.minimized_since = None;
+            return;
+        }
+        let since = *self.minimized_since.get_or_insert_with(Instant::now);
+        if self.settings.free_when_minimized && self.scanned.is_some() && self.job.is_none() {
+            if since.elapsed() >= Duration::from_secs(600) {
+                self.free_memory();
+            } else {
+                ctx.request_repaint_after(Duration::from_secs(60));
+            }
+        }
+    }
+
     // ------------------------------------------------------------------
     // Jobs
     // ------------------------------------------------------------------
@@ -366,6 +455,7 @@ impl XylemApp {
         let p = path.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         let c = Arc::clone(&cancel);
+        xylem_session::set_gentle(self.settings.gentle_scan);
         std::thread::spawn(move || {
             let r = if fast { xylem_session::scan_admin(&p, &c) } else { xylem_session::scan(&p) };
             let _ = tx.send(Done::Scanned(Box::new(r)));
@@ -521,6 +611,7 @@ impl XylemApp {
     }
 
     fn show_scan(&mut self, s: Scanned, sum: Summary) {
+        self.freed = None;
         self.marked.clear();
         self.summary = Some(sum);
         self.scanned = Some(s);
@@ -1076,6 +1167,10 @@ impl XylemApp {
                     self.open_security();
                     ui.close();
                 }
+                if ui.button("Memory and CPU…").clicked() {
+                    self.dialog = Some(Dialog::Memory);
+                    ui.close();
+                }
                 if ui.button("About Xylem").clicked() {
                     self.dialog = Some(Dialog::About);
                     ui.close();
@@ -1188,6 +1283,22 @@ impl XylemApp {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let muted = |s: String| RichText::new(s).color(t.muted).size(11.5);
                 ui.label(RichText::new("●  Read-only").color(t.accent).size(11.5));
+                ui.separator();
+                self.footprint.sample();
+                let f = self.footprint;
+                let r = ui
+                    .add(egui::Label::new(muted(format!("Xylem {} · {:.0}% CPU", fmt_bytes(f.ram), f.cpu_pct))).sense(Sense::click()))
+                    .on_hover_text(format!(
+                        "Xylem's own use of this PC.\nRAM in use: {} (peak {}, private {}).\nCPU: {:.1}% of the whole processor.\nClick to see what uses the memory, or to free it.",
+                        fmt_bytes(f.ram),
+                        fmt_bytes(f.peak),
+                        fmt_bytes(f.private),
+                        f.cpu_pct
+                    ))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if r.clicked() {
+                    self.dialog = Some(Dialog::Memory);
+                }
                 if self.watcher.is_some() {
                     ui.separator();
                     if self.live_overflow {
@@ -1306,6 +1417,7 @@ impl XylemApp {
     fn start_screen(&mut self, ui: &mut Ui, t: &Tokens) {
         ui.add_space(28.0);
         let mut pick: Option<String> = None;
+        let mut reopen_freed: Option<String> = None;
         ui.vertical_centered(|ui| {
             ui.add(egui::Image::new(&self.logo).fit_to_exact_size(vec2(72.0, 72.0)));
             ui.add_space(8.0);
@@ -1313,6 +1425,13 @@ impl XylemApp {
             ui.add_space(4.0);
             ui.label(RichText::new("Pick a drive to scan. Fast scan (admin) reads a whole NTFS drive in seconds.").color(t.muted));
             ui.add_space(14.0);
+            if let Some(root) = self.freed.clone() {
+                let b = egui::Button::new(RichText::new(format!("Open your saved scan of {}", visible(&root))).color(t.accent_ink)).fill(t.accent).min_size(vec2(260.0, 30.0));
+                if ui.add(b).on_hover_text("Freed from memory earlier; reopens in about a second").clicked() {
+                    reopen_freed = Some(root);
+                }
+                ui.add_space(12.0);
+            }
             for d in &self.drives {
                 let space = xylem_session::disk_space(d);
                 let (rect, resp) = ui.allocate_exact_size(vec2(420.0, 54.0), Sense::click());
@@ -1340,7 +1459,13 @@ impl XylemApp {
         });
         if let Some(d) = pick {
             self.path = d;
+            self.freed = None;
             self.start_scan(false);
+        }
+        if let Some(root) = reopen_freed {
+            self.path = root;
+            self.freed = None;
+            self.start_reopen();
         }
     }
 
@@ -2504,6 +2629,54 @@ impl XylemApp {
         let resp = Modal::new(egui::Id::unique("xylem-dialog").with(kind)).show(ctx, |ui| {
             ui.set_width(if wide { 720.0 } else { 500.0 });
             match d {
+                Dialog::Memory => {
+                    self.footprint.sample();
+                    let f = self.footprint;
+                    ui.label(RichText::new("Xylem's memory and CPU").font(theme::semibold(16.0)));
+                    ui.add_space(4.0);
+                    facts(ui, &t, &[
+                        ("RAM in use", &format!("{} (the most so far: {})", fmt_bytes(f.ram), fmt_bytes(f.peak))),
+                        ("Private", &format!("{} (memory only Xylem holds; Task Manager's \"Commit size\")", fmt_bytes(f.private))),
+                        ("CPU", &format!("{:.1}% of the whole processor right now. Idle, Xylem uses none.", f.cpu_pct)),
+                    ]);
+                    ui.add_space(6.0);
+                    if let Some(s) = &self.scanned {
+                        let rep = s.memory_report();
+                        let sum = |keys: &[&str]| rep.iter().filter(|(k, _)| keys.iter().any(|p| k.starts_with(p))).map(|r| r.1 as u64).sum::<u64>();
+                        let n = s.summary().files + s.summary().dirs;
+                        ui.label(RichText::new(format!("The scan on screen ({} items) holds:", fmt_count(n))).font(theme::semibold(13.0)));
+                        facts(ui, &t, &[
+                            ("Names", &fmt_bytes(sum(&["index.names", "index.name_"]))),
+                            ("Sizes and dates", &fmt_bytes(sum(&["index.size", "index.alloc", "index.files", "index.mtime", "index.added", "index.flags"]))),
+                            ("Folder structure", &fmt_bytes(sum(&["index.parent", "children"]))),
+                            ("Categories", &fmt_bytes(sum(&["cls.", "cats."]))),
+                        ]);
+                        ui.add_space(4.0);
+                        ui.add(egui::Label::new(RichText::new("Memory grows with the number of files scanned (about 80 bytes each), plus the window and the map. Freeing it keeps your scan saved on this PC: it reopens in about a second.").color(t.muted)).wrap());
+                    } else if let Some(root) = &self.freed {
+                        ui.add(egui::Label::new(RichText::new(format!("No scan in memory. Your scan of {} is saved and reopens in about a second.", visible(root))).color(t.muted)).wrap());
+                    } else {
+                        ui.label(RichText::new("No scan in memory.").color(t.muted));
+                    }
+                    ui.add_space(6.0);
+                    let mut gentle = self.settings.gentle_scan;
+                    if ui
+                        .checkbox(&mut gentle, "Scan gently: other programs stay fast")
+                        .on_hover_text("Scans run at Windows' background priority (CPU and disk). Measured on a full C: drive: another program's work took 85% longer during a normal scan and no longer during a gentle one; the scan itself took about 8% longer. Applies to the normal scan (Fast scan is already short).")
+                        .changed()
+                    {
+                        self.settings.gentle_scan = gentle;
+                        self.settings.save();
+                    }
+                    let mut auto = self.settings.free_when_minimized;
+                    if ui.checkbox(&mut auto, "Free memory when Xylem has been minimized for 10 minutes").changed() {
+                        self.settings.free_when_minimized = auto;
+                        self.settings.save();
+                    }
+                    if !self.settings.remember_scans {
+                        ui.label(RichText::new("Remembering scans is off (File menu), so freeing memory means scanning again later.").color(theme::WARN).size(12.0));
+                    }
+                }
                 Dialog::About => {
                     ui.horizontal(|ui| {
                         ui.add(egui::Image::new(&self.logo).fit_to_exact_size(vec2(56.0, 56.0)));
@@ -3212,6 +3385,16 @@ impl XylemApp {
                         }
                         return;
                     }
+                    Dialog::Memory => {
+                        let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
+                        if ui.add(ok).clicked() {
+                            close = true;
+                        }
+                        if ui.add_enabled(self.scanned.is_some() && self.job.is_none(), egui::Button::new("Free memory now")).on_hover_text("Closes the scan on screen; it stays saved and reopens in about a second").clicked() {
+                            action = Some("free-memory");
+                        }
+                        return;
+                    }
                     Dialog::Welcome => {
                         let b = egui::Button::new(RichText::new("Got it").color(t.accent_ink)).fill(t.accent).min_size(vec2(90.0, 26.0));
                         if ui.add(b).clicked() {
@@ -3346,6 +3529,10 @@ impl XylemApp {
                 if let Some(Dialog::Vhdx(path, _, _)) = self.dialog.take() {
                     self.run_tool_job("Compacting the virtual disk (diskpart)".into(), move || xylem_session::power::compact_vhdx(std::path::Path::new(&path)));
                 }
+            }
+            Some("free-memory") => {
+                self.dialog = None;
+                self.free_memory();
             }
             Some("rules-reload") => self.reload_rules(),
             Some("rules-edit") => match xylem_session::create_example_rules() {
@@ -3573,6 +3760,7 @@ impl eframe::App for XylemApp {
         self.poll_job(&ctx);
         self.poll_remember(&ctx);
         self.poll_watch(&ctx);
+        self.check_minimized(&ctx);
         if std::mem::take(&mut self.attention) {
             ctx.send_viewport_cmd(ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational));
         }

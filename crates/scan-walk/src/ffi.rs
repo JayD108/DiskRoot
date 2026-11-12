@@ -71,11 +71,15 @@ pub struct ProcessMemoryCounters {
 #[link(name = "kernel32", kind = "raw-dylib")]
 unsafe extern "system" {
     pub fn GetCurrentProcess() -> Handle;
+    pub fn GetCurrentThread() -> Handle;
+    pub fn SetThreadPriority(thread: Handle, priority: i32) -> i32;
     pub fn K32GetProcessMemoryInfo(
         process: Handle,
         counters: *mut ProcessMemoryCounters,
         cb: u32,
     ) -> i32;
+    /// FILETIMEs (100 ns units): creation, exit, kernel time, user time.
+    pub fn GetProcessTimes(process: Handle, creation: *mut u64, exit: *mut u64, kernel: *mut u64, user: *mut u64) -> i32;
 }
 
 #[link(name = "ntdll", kind = "raw-dylib")]

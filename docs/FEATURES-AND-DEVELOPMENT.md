@@ -193,6 +193,13 @@ All opt-in, and all done by Windows' own tools.
 - **Use it:** **Save space** in the toolbar, or **View → Ways to save space…**. Nothing is changed or deleted from this window.
 - **Underneath:** `crates/session/src/savings.rs`. "Not changed" is when the newest file inside last changed **or arrived on this PC** (the later of last-modified and created): a download or unpacked dataset keeps its author's modified date, often years older than the download. Folders' own dates are ignored, and Windows doesn't keep reliable last-opened dates, so Xylem never says "unused". Both scanners read the arrival date at no extra cost; saved scans gained it in index format v3 (older ones still load, without it). Uses the same per-file rules as the Compress dialog, so both agree. A folder named "cache" inside your own files is never offered as safe. Estimates come from measured ratios per file type ([BENCHMARKS.md → Compression](BENCHMARKS.md#compression)); Fast is counted as 85% of Maximum's saving (measured median).
 
+### Xylem's own memory and CPU
+- **What it does:** the status bar shows how much RAM and CPU Xylem itself uses right now ("Xylem 284 MB · 1% CPU"). Click it (or **Help → Memory and CPU…**) to see what holds the memory (names, sizes and dates, folder structure, categories) and to change how Xylem uses your PC.
+- **Free memory now:** closes the scan on screen. It stays saved on this PC and reopens in about a second from the start screen. Measured on a full C: drive (2 million items): 284 MB → 124 MB in the app (the rest is the window itself: graphics and fonts); the scan's own memory goes back to Windows completely (166 → 9 MB without a window).
+- **Free memory when minimized for 10 minutes:** the same, automatically.
+- **Scan gently:** the folder walk runs in Windows' background mode (low CPU, disk and memory priority). Measured on C:: another program's 2 GB read + hash took 3.0 s alone, 5.7 s during a normal scan and 3.0 s during a gentle one; the scan took about 8% longer.
+- **Underneath:** `GetProcessMemoryInfo` / `GetProcessTimes`, sampled at most every 2 seconds when the window redraws anyway (no extra idle CPU). Gentle scanning is `THREAD_MODE_BACKGROUND_BEGIN` on the walk's worker threads.
+
 ### Similar folders
 - **What it does:** lists folders that look like copies (same size, file count and names inside; contents aren't compared) and folders with similar names (same name ignoring case, separators, "- Copy" and versions anywhere; name families like `APALA`, `APALA_dev` next to each other).
 - **Use it:** **View → Similar folders…**; click a folder to show it in the tree. Xylem never deletes from this view.
