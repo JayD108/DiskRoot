@@ -89,7 +89,7 @@ What changed since the scan from 30 days ago (asked: last 30 days)
 
 ### `health`
 
-Asks every disk for its own health report (NVMe drives; SATA/USB need admin and come later). Read-only, no admin. `--json` gives every field; the 128-bit counters (bytes written, hours, errors) are strings so no digits are lost.
+Asks every disk for its own health report (NVMe drives; SATA/USB need admin and come later). Read-only on the disk, no admin; like the app, it adds today's small note to `%LOCALAPPDATA%\Xylem\health.jsonl`, from which it shows writes per day and the life estimate. `--json` gives every field; the 128-bit counters (bytes written, hours, errors) are strings so no digits are lost.
 
 ```
 > xylem-cli health

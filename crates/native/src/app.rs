@@ -130,8 +130,8 @@ enum Dialog {
     Schedule(Box<ScheduleView>),
     /// View > Size history.
     Growth(Box<GrowthView>),
-    /// View > Drive health: (drives, Windows sends TRIM).
-    Health(Box<(Vec<health::Drive>, Option<bool>)>),
+    /// View > Drive health.
+    Health(Box<HealthView>),
     /// Explains a Windows tool before starting it.
     Tool(Action),
 }
@@ -170,6 +170,26 @@ struct GrowthView {
     points: usize,
     first: u64,
     disk: u64,
+}
+
+/// View > Drive health: each drive with its trend, and Windows' TRIM setting.
+struct HealthView {
+    drives: Vec<(health::Drive, Option<health::Trend>)>,
+    trim: Option<bool>,
+}
+
+impl HealthView {
+    /// Reads the drives now (a few storage queries), saves today's note,
+    /// and works out each drive's trend from the notes.
+    fn read() -> Self {
+        let drives = health::drives();
+        health::record_daily(&drives);
+        let snaps = health::snaps();
+        Self { drives: drives.into_iter().map(|d| {
+            let t = health::trend(&snaps, &d);
+            (d, t)
+        }).collect(), trim: health::trim_enabled() }
+    }
 }
 
 /// Smallest rough saving (Maximum) a compress suggestion must reach.
@@ -545,6 +565,7 @@ impl XylemApp {
             let r = remember::remember(&idx, &stats, &mode).map_err(|e| e.to_string());
             let prev = remember::previous_sizes(idx.name(0));
             let hist = history::load(idx.name(0));
+            health::record_daily(&health::drives());
             let _ = tx.send((r, prev, hist));
         });
         self.remember_rx = Some(rx);
@@ -1189,7 +1210,7 @@ impl XylemApp {
                     ui.close();
                 }
                 if ui.button("Drive health…").on_hover_text("How worn your SSDs are, how much was written to them, temperature and errors (the drives' own reports; no admin)").clicked() {
-                    self.dialog = Some(Dialog::Health(Box::new((health::drives(), health::trim_enabled()))));
+                    self.dialog = Some(Dialog::Health(Box::new(HealthView::read())));
                     ui.close();
                 }
                 if ui.button("Scheduled scans…").on_hover_text("Let Xylem scan by itself every few hours (no admin, no window), so it can show what changed").clicked() {
@@ -2882,6 +2903,7 @@ impl XylemApp {
                                 }
                             });
                         });
+                        ui.checkbox(&mut v.s.weekly_report, "Once a week: a short report (growth, writes per day, drive health)");
                         ui.horizontal(|ui| {
                             ui.label("when what's scanned grows in a day by more than");
                             egui::ComboBox::from_id_salt("warn-grow").selected_text(gb(v.s.warn_grow_gb)).show_ui(ui, |ui| {
@@ -2923,7 +2945,7 @@ impl XylemApp {
                     }
                 }
                 Dialog::Health(v) => {
-                    let (drives, trim) = &**v;
+                    let (drives, trim) = (&v.drives, &v.trim);
                     ui.label(RichText::new("Drive health").font(theme::semibold(16.0)));
                     ui.add(egui::Label::new(RichText::new("What the drives report about themselves: how much of their rated life is used, how much was written, temperature and errors. Xylem only asks for these reports; it changes nothing and needs no admin.").color(t.muted)).wrap());
                     ui.add_space(6.0);
@@ -2931,7 +2953,7 @@ impl XylemApp {
                         if drives.is_empty() {
                             ui.label(RichText::new("Windows didn't list any drives.").color(t.faint));
                         }
-                        for d in drives {
+                        for (d, trend) in drives {
                             let kind = match d.ssd {
                                 Some(true) => format!("{} SSD", d.bus),
                                 Some(false) => format!("{} hard disk", d.bus),
@@ -2949,6 +2971,22 @@ impl XylemApp {
                             ui.add(egui::Label::new(RichText::new(text).color(col).font(theme::semibold(13.0))).wrap());
                             for f in d.facts() {
                                 ui.add(egui::Label::new(RichText::new(f).color(t.muted)).wrap());
+                            }
+                            if let Some(tr) = trend {
+                                match tr.per_day {
+                                    Some(b) => {
+                                        ui.horizontal(|ui| {
+                                            ui.label(format!("Writes: about {} a day (last {:.0} days)", fmt_bytes(b as u64), tr.days.min(30.0)));
+                                            if tr.daily.len() >= 2 {
+                                                size_chart(ui, &t, &tr.daily, vec2(180.0, 22.0), false);
+                                            }
+                                        });
+                                    }
+                                    None => {
+                                        ui.label(RichText::new("Writes per day: shown after two days of notes (Xylem notes the numbers once a day when it scans).").color(t.faint));
+                                    }
+                                }
+                                ui.add(egui::Label::new(RichText::new(tr.life.as_str())).wrap());
                             }
                             if !d.firmware.is_empty() {
                                 ui.label(RichText::new(format!("Disk {} · firmware {}", d.number, d.firmware)).color(t.faint).size(11.5));
@@ -3991,7 +4029,7 @@ impl XylemApp {
                 }
             }
             Some("health-refresh") => {
-                self.dialog = Some(Dialog::Health(Box::new((health::drives(), health::trim_enabled()))));
+                self.dialog = Some(Dialog::Health(Box::new(HealthView::read())));
             }
             Some("history-clear") => {
                 if let Some(Dialog::Growth(v)) = self.dialog.take() {

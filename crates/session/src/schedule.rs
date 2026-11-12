@@ -59,11 +59,13 @@ pub struct Schedule {
     pub warn_free_gb: u32,
     /// Warn when a scanned root grew by more than this many GB in a day (0 = off).
     pub warn_grow_gb: u32,
+    /// Once a week, a notification with growth, writes per day and drive health.
+    pub weekly_report: bool,
 }
 
 impl Default for Schedule {
     fn default() -> Self {
-        Self { every_min: 120, roots: vec!["C:\\".into()], on_battery: false, only_idle: false, warn_free_gb: 10, warn_grow_gb: 0 }
+        Self { every_min: 120, roots: vec!["C:\\".into()], on_battery: false, only_idle: false, warn_free_gb: 10, warn_grow_gb: 0, weekly_report: false }
     }
 }
 
@@ -272,6 +274,8 @@ fn run_scheduled() -> i32 {
         unsafe { CloseHandle(mutex) };
         return 2;
     };
+    // Drive health: one small daily note (a few storage queries, no admin).
+    crate::health::record_daily(&crate::health::drives());
     for root in &s.roots {
         let t = Instant::now();
         let r = scan_and_remember(root);
@@ -285,6 +289,9 @@ fn run_scheduled() -> i32 {
         };
         let warning = if error.is_none() { crate::warn::after_scan(root, s.warn_free_gb, s.warn_grow_gb, now_secs()) } else { None };
         append_run(&Run { time: now_secs(), root: root.clone(), secs, peak_ram, files, delta, error, warning });
+    }
+    if s.weekly_report {
+        let _ = crate::warn::weekly(&s.roots, now_secs());
     }
     unsafe { CloseHandle(mutex) };
     0

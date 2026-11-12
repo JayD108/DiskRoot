@@ -15,7 +15,7 @@
 
 use std::ffi::c_void;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 const IOCTL_STORAGE_QUERY_PROPERTY: u32 = 0x002D_1400;
 const IOCTL_STORAGE_GET_DEVICE_NUMBER: u32 = 0x002D_1080;
@@ -375,6 +375,152 @@ pub fn nearly_full(letter: &str, total: u64, free: u64, ssd: bool) -> Option<Str
     Some(format!("{} is {used}% full. SSDs get slower and wear faster when nearly full: aim for at least 10-15% free.", letter.trim_end_matches('\\')))
 }
 
+// ---------------------------------------------------------------------------
+// Daily snapshots and trends (writes per day, life estimate)
+// ---------------------------------------------------------------------------
+
+const DAY: u64 = 86_400;
+/// Keep at most this many snapshot lines (a few drives for years).
+const KEEP: usize = 4000;
+
+/// One day's numbers for one drive, in `%LOCALAPPDATA%\Xylem\health.jsonl`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Snap {
+    pub time: u64,
+    /// Which drive: model and disk number ("WD PC SN8000S...#0").
+    pub drive: String,
+    pub written: u64,
+    pub read: u64,
+    pub used_pct: u8,
+    pub hours: u64,
+    pub temp_c: i32,
+    pub media_errors: u64,
+}
+
+fn drive_key(d: &Drive) -> String {
+    format!("{}#{}", d.model, d.number)
+}
+
+fn snaps_path() -> Option<std::path::PathBuf> {
+    Some(std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Xylem").join("health.jsonl"))
+}
+
+/// All saved snapshots, oldest first (damaged lines are skipped).
+pub fn snaps() -> Vec<Snap> {
+    let Some(text) = snaps_path().and_then(|p| std::fs::read_to_string(p).ok()) else { return Vec::new() };
+    text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
+}
+
+/// Adds today's numbers for the NVMe drives in `drives` (one line per drive
+/// per day: a newer reading the same day replaces the earlier one).
+pub fn merge(mut all: Vec<Snap>, drives: &[Drive], now: u64) -> Vec<Snap> {
+    for d in drives {
+        let Some(h) = &d.nvme else { continue };
+        let s = Snap {
+            time: now,
+            drive: drive_key(d),
+            written: u64::try_from(h.written_bytes).unwrap_or(u64::MAX),
+            read: u64::try_from(h.read_bytes).unwrap_or(u64::MAX),
+            used_pct: h.used_pct,
+            hours: u64::try_from(h.power_on_hours).unwrap_or(u64::MAX),
+            temp_c: h.temp_c,
+            media_errors: u64::try_from(h.media_errors).unwrap_or(u64::MAX),
+        };
+        match all.iter_mut().rev().find(|x| x.drive == s.drive) {
+            Some(last) if last.time / DAY == now / DAY => *last = s,
+            _ => all.push(s),
+        }
+    }
+    if all.len() > KEEP {
+        all.drain(..all.len() - KEEP);
+    }
+    all
+}
+
+/// Saves today's snapshot of `drives`. Called by the app and by scheduled
+/// scans; cheap (one small file).
+pub fn record_daily(drives: &[Drive]) {
+    let Some(p) = snaps_path() else { return };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let all = merge(snaps(), drives, now);
+    let text: String = all.iter().filter_map(|s| serde_json::to_string(s).ok()).map(|l| l + "\n").collect();
+    if let Some(d) = p.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let tmp = p.with_extension("tmp");
+    if std::fs::write(&tmp, text).is_ok() {
+        let _ = std::fs::rename(&tmp, &p);
+    }
+}
+
+/// How a drive is doing over time.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Trend {
+    /// Days covered by all of this drive's snapshots.
+    pub days: f64,
+    /// Average bytes written per day over the last 30 days (None: under 2 days of data).
+    pub per_day: Option<f64>,
+    /// (time, average bytes written per day since the snapshot before).
+    pub daily: Vec<(u64, u64)>,
+    /// Plain-English life estimate.
+    pub life: String,
+}
+
+/// The trend of one drive from its snapshots (oldest first).
+pub fn trend(all: &[Snap], d: &Drive) -> Option<Trend> {
+    let key = drive_key(d);
+    let mine: Vec<&Snap> = all.iter().filter(|s| s.drive == key).collect();
+    let last = *mine.last()?;
+    // Written counters only go up; a lower value means a different drive or a reset.
+    let daily: Vec<(u64, u64)> = mine
+        .windows(2)
+        .filter(|w| w[1].time > w[0].time && w[1].written >= w[0].written)
+        .map(|w| (w[1].time, ((w[1].written - w[0].written) as f64 / ((w[1].time - w[0].time) as f64 / DAY as f64).max(1.0 / 24.0)) as u64))
+        .collect();
+    let first: &Snap = *mine.iter().find(|s| s.time.saturating_add(30 * DAY) >= last.time).unwrap_or(&mine[0]);
+    let span = last.time.saturating_sub(first.time) as f64 / DAY as f64;
+    let per_day = (span >= 2.0 && last.written >= first.written).then(|| (last.written - first.written) as f64 / span);
+    let all_span = last.time.saturating_sub(mine[0].time) as f64 / DAY as f64;
+    Some(Trend { days: all_span, per_day, daily, life: life_text(&mine, last) })
+}
+
+/// Rated-life estimate. The drive reports wear in whole percent, so an
+/// estimate needs the number to have gone up; until then it says how long
+/// it has *not* moved. Always a range, never a date.
+fn life_text(mine: &[&Snap], last: &Snap) -> String {
+    let left = 100u32.saturating_sub(u32::from(last.used_pct));
+    if left == 0 {
+        return "Rated life is used up (100% or more). The drive can keep working, but keep backups current.".into();
+    }
+    let years = |days: f64| days / 365.0;
+    let span_of = |s: &Snap| last.time.saturating_sub(s.time) as f64 / DAY as f64;
+    // Earliest snapshot within a year (and at least a week back) with a lower % used.
+    if let Some(from) = mine.iter().find(|s| s.used_pct < last.used_pct && span_of(s) <= 365.0 && span_of(s) >= 7.0) {
+        let span = span_of(from);
+        let rose = f64::from(last.used_pct - from.used_pct);
+        // Whole percents: the true rise is between rose-1 and rose+1.
+        let fast = years(f64::from(left) / ((rose + 1.0) / span));
+        let slow = (rose > 1.0).then(|| years(f64::from(left) / ((rose - 1.0) / span)));
+        return match slow {
+            _ if fast > 50.0 => "At this pace, rated life is decades away.".into(),
+            Some(slow) if slow < 50.0 => format!("At the pace of the last {span:.0} days, rated life would be reached in roughly {:.0}–{slow:.0} years.", fast.max(1.0)),
+            _ => format!("At the pace of the last {span:.0} days, rated life would be reached in at least {:.1} years.", fast.max(0.1)),
+        };
+    }
+    let span = span_of(mine[0]);
+    if span < 30.0 {
+        let so_far = if span < 1.0 { "started today".to_owned() } else { format!("{span:.0} days so far") };
+        return format!("Too early to tell: the drive reports wear in whole percent. Xylem keeps a daily note ({so_far}); after a month, or when it moves, there's an estimate.");
+    }
+    // Under 1% in `span` days -> more than left * span days.
+    let more_than = years(f64::from(left) * span);
+    if more_than > 50.0 {
+        format!("Wear hasn't moved in {span:.0} days: at this pace, rated life is decades away.")
+    } else {
+        format!("Wear hasn't moved in {span:.0} days: at this pace, more than {more_than:.0} years of rated life are left.")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,6 +599,49 @@ mod tests {
         assert!(nearly_full("C:\\", 1000 * GB, 50 * GB, false).is_none(), "not an SSD");
         assert!(nearly_full("C:\\", 1000 * GB, 150 * GB, true).is_none());
         assert!(nearly_full("C:\\", 0, 0, true).is_none());
+    }
+
+    fn snap(day: u64, written_gb: u64, used: u8) -> Snap {
+        Snap { time: day * DAY + 3600, drive: "X#0".into(), written: written_gb << 30, read: 0, used_pct: used, hours: day * 8, temp_c: 35, media_errors: 0 }
+    }
+
+    #[test]
+    fn one_snapshot_per_drive_per_day() {
+        let mut h = NvmeHealth::parse(&sample_log()).unwrap();
+        let d = drive(h.clone());
+        let a = merge(Vec::new(), std::slice::from_ref(&d), 10 * DAY + 100);
+        h.written_bytes += 1 << 30;
+        let d2 = drive(h);
+        let b = merge(a, std::slice::from_ref(&d2), 10 * DAY + 5000);
+        assert_eq!(b.len(), 1, "same day replaces");
+        assert_eq!(b[0].written, u64::try_from(d2.nvme.as_ref().unwrap().written_bytes).unwrap());
+        let c = merge(b, std::slice::from_ref(&d2), 11 * DAY + 10);
+        assert_eq!(c.len(), 2, "next day adds");
+        let none = Drive { nvme: None, ..d2 };
+        assert_eq!(merge(c.clone(), &[none], 12 * DAY).len(), 2, "no health report: nothing saved");
+    }
+
+    #[test]
+    fn writes_per_day_and_life_estimate() {
+        let d = drive(NvmeHealth::default());
+        // 40 GB a day for 60 days; wear 2% -> 4% over that time.
+        let all: Vec<Snap> = (0..=60).map(|day| snap(day, 1000 + 40 * day, if day < 20 { 2 } else if day < 50 { 3 } else { 4 })).collect();
+        let t = trend(&all, &d).unwrap();
+        assert!((t.per_day.unwrap() / (1u64 << 30) as f64 - 40.0).abs() < 0.01);
+        assert_eq!(t.daily.len(), 60);
+        assert!(t.life.starts_with("At the pace of the last 60 days, rated life would be reached in roughly"), "{}", t.life);
+        // Too early, and "hasn't moved".
+        let early: Vec<Snap> = (0..5).map(|day| snap(day, 100 + day, 1)).collect();
+        assert!(trend(&early, &d).unwrap().life.starts_with("Too early to tell"));
+        let flat: Vec<Snap> = (0..=40).map(|day| snap(day, 100 + day, 1)).collect();
+        let l = trend(&flat, &d).unwrap().life;
+        assert!(l.starts_with("Wear hasn't moved in 40 days: at this pace, more than 11 years"), "{l}");
+        // Another drive's snapshots are ignored; one snapshot: no per-day yet.
+        assert!(trend(&all, &Drive { number: 1, ..d.clone() }).is_none());
+        assert_eq!(trend(&all[..1], &d).unwrap().per_day, None);
+        // A counter that goes down (drive swapped) doesn't make negative writes.
+        let swapped = vec![snap(0, 500, 1), snap(1, 10, 1), snap(2, 20, 1), snap(3, 30, 1)];
+        assert!(trend(&swapped, &d).unwrap().daily.iter().all(|x| x.1 < 20 << 30));
     }
 
     /// Reads this PC's drives (read-only queries). cargo test -- --ignored real_drives --nocapture

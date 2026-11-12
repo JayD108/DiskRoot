@@ -67,7 +67,9 @@ fn state_path() -> Option<PathBuf> {
 /// Keeps only the warnings not shown in the last day, and remembers them
 /// as shown at `now`.
 pub fn due(found: Vec<Warning>, last: &mut HashMap<String, u64>, now: u64) -> Vec<Warning> {
-    let due: Vec<Warning> = found.into_iter().filter(|w| last.get(&w.key).is_none_or(|&t| now.saturating_sub(t) >= QUIET || t > now)).collect();
+    // The weekly report: once a week (with an hour of slack), others once a day.
+    let quiet = |key: &str| if key.starts_with("weekly") { 7 * DAY - 3600 } else { QUIET };
+    let due: Vec<Warning> = found.into_iter().filter(|w| last.get(&w.key).is_none_or(|&t| now.saturating_sub(t) >= quiet(&w.key) || t > now)).collect();
     for w in &due {
         last.insert(w.key.clone(), now);
     }
@@ -81,6 +83,47 @@ pub fn due(found: Vec<Warning>, last: &mut HashMap<String, u64>, now: u64) -> Ve
 pub fn after_scan(root: &str, free_gb: u32, grow_gb: u32, now: u64) -> Option<String> {
     let hist = (grow_gb > 0).then(|| history::load(root)).flatten();
     let found = check(root, crate::disk_space(root), hist.as_ref(), free_gb, grow_gb);
+    show_due(found, now)
+}
+
+/// The weekly drive report's text: growth of each scanned root over the
+/// last week, writes per day and health of each NVMe drive.
+pub fn weekly_text(growth: &[(String, i128)], drives: &[(String, Option<f64>, String)]) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for (root, d) in growth {
+        let sign = if *d >= 0 { "+" } else { "−" };
+        parts.push(format!("{} {sign}{} this week", root.trim_end_matches('\\'), xylem_core::format::bytes(d.unsigned_abs().min(u128::from(u64::MAX)) as u64)));
+    }
+    for (letters, per_day, verdict) in drives {
+        let w = per_day.map(|b| format!(", about {} written a day", xylem_core::format::bytes(b as u64))).unwrap_or_default();
+        parts.push(format!("drive {letters} ({}){w}", verdict.trim_end_matches('.')));
+    }
+    (!parts.is_empty()).then(|| format!("Weekly report: {}.", parts.join(" · ")))
+}
+
+/// After a scheduled run, if the weekly report is on: at most once a week.
+pub fn weekly(roots: &[String], now: u64) -> Option<String> {
+    let growth: Vec<(String, i128)> = roots
+        .iter()
+        .filter_map(|r| {
+            let h = history::load(r)?;
+            let g = h.growers(7 * DAY, 1)?;
+            Some((r.clone(), i128::from(g.after_total) - i128::from(g.before_total)))
+        })
+        .collect();
+    let drives = crate::health::drives();
+    let snaps = crate::health::snaps();
+    let info: Vec<(String, Option<f64>, String)> = drives
+        .iter()
+        .filter(|d| d.nvme.is_some())
+        .map(|d| (if d.letters.is_empty() { d.model.clone() } else { d.letters.join(" ") }, crate::health::trend(&snaps, d).and_then(|t| t.per_day), d.verdict().1))
+        .collect();
+    let text = weekly_text(&growth, &info)?;
+    show_due(vec![Warning { key: "weekly".into(), text }], now)
+}
+
+/// Applies the once-a-day / once-a-week rule, notifies, returns what was shown.
+fn show_due(found: Vec<Warning>, now: u64) -> Option<String> {
     if found.is_empty() {
         return None;
     }
@@ -252,6 +295,18 @@ mod tests {
         // The only older scan is a week old: not "in the last day".
         let old = hist(&[(0, 100 * GB, "a", GB), (7 * DAY, 150 * GB, "a", 51 * GB)]);
         assert!(check("C:\\", None, Some(&old), 0, 5).is_empty());
+    }
+
+    #[test]
+    fn weekly_report_reads_plainly_and_comes_once_a_week() {
+        let t = weekly_text(&[("C:\\".into(), i128::from(12 * GB))], &[("C:".into(), Some(38.0 * GB as f64), "Good: 1% of rated life used.".into())]).unwrap();
+        assert_eq!(t, "Weekly report: C: +12.0 GB this week · drive C: (Good: 1% of rated life used), about 38.0 GB written a day.");
+        assert!(weekly_text(&[], &[]).is_none());
+        let w = vec![Warning { key: "weekly".into(), text: t }];
+        let mut last = HashMap::new();
+        assert_eq!(due(w.clone(), &mut last, 1_000_000).len(), 1);
+        assert!(due(w.clone(), &mut last, 1_000_000 + 3 * DAY).is_empty(), "3 days later: quiet");
+        assert_eq!(due(w, &mut last, 1_000_000 + 7 * DAY).len(), 1, "a week later: again");
     }
 
     /// Shows one real notification. Run by hand: cargo test -- --ignored real_notification

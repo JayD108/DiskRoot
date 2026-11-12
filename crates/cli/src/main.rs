@@ -120,6 +120,8 @@ fn run_health(args: &HealthArgs) -> Result<(), String> {
     use xylem_session::health;
     let drives = health::drives();
     let trim = health::trim_enabled();
+    health::record_daily(&drives);
+    let snaps = health::snaps();
     if args.json {
         let list: Vec<_> = drives
             .iter()
@@ -139,6 +141,7 @@ fn run_health(args: &HealthArgs) -> Result<(), String> {
                         "warning_temp_minutes": h.warn_temp_minutes, "critical_temp_minutes": h.crit_temp_minutes,
                     })),
                     "note": d.note,
+                    "trend": health::trend(&snaps, d),
                 })
             })
             .collect();
@@ -160,6 +163,13 @@ fn run_health(args: &HealthArgs) -> Result<(), String> {
         println!("  {}", d.verdict().1);
         for f in d.facts() {
             println!("  {f}");
+        }
+        if let Some(t) = health::trend(&snaps, d) {
+            match t.per_day {
+                Some(b) => println!("  Writes: about {} a day (last {:.0} days)", bytes(b as u64), t.days.min(30.0)),
+                None => println!("  Writes per day: shown after two days of notes"),
+            }
+            println!("  {}", t.life);
         }
         println!();
     }
