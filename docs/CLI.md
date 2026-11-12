@@ -10,14 +10,16 @@
 
 | You have | Where `xylem-cli.exe` is |
 |---|---|
-| The installer (`xylem-setup-<version>.exe`) | `C:\Program Files\Xylem\xylem-cli.exe`. Keep **"Command-line tool (xylem-cli)"** ticked during setup (it is by default) |
+| The installer ([`xylem-setup.exe`](https://github.com/JayD108/Xylem/releases/latest/download/xylem-setup.exe)) | `C:\Program Files\Xylem\xylem-cli.exe`, **added to PATH by the installer** since 0.4.1 (component "Command-line tool (xylem-cli), on PATH", on by default). Open a new terminal and it works |
 | The portable zip (`xylem-<version>-portable.zip`) | Next to `xylem.exe` wherever you unzipped it |
 
 Downloads: [Releases](https://github.com/JayD108/Xylem/releases/latest).
 
 ## 2. Make `xylem-cli` work from any folder
 
-Windows only finds a program by name if its folder is on your **PATH**. Add it once (your account only, no admin needed). In PowerShell:
+**Installed with 0.4.1 or newer:** nothing to do. Open a *new* terminal (PATH is read when a window starts) and type `xylem-cli --version`.
+
+**Portable zip, or installed 0.4.0 or older:** Windows only finds a program by name if its folder is on your **PATH**. Add it once (your account only, no admin needed). In PowerShell:
 
 ```powershell
 $dir = "C:\Program Files\Xylem"   # or the folder you unzipped the portable version to

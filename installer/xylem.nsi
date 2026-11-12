@@ -14,7 +14,7 @@
 
 Unicode true
 !ifndef VERSION
-  !define VERSION "0.3.0"
+  !define VERSION "0.4.1"
 !endif
 !ifndef SRCDIR
   !define SRCDIR "..\target\release"
@@ -45,6 +45,7 @@ VIAddVersionKey "LegalCopyright" "MIT OR Apache-2.0"
 !include "MUI2.nsh"
 !include "x64.nsh"
 !include "LogicLib.nsh"
+!include "WinMessages.nsh"
 
 !define MUI_ICON "..\crates\native\assets\icon.ico"
 !define MUI_UNICON "..\crates\native\assets\icon.ico"
@@ -125,9 +126,18 @@ Section "Explorer right-click: Analyze with Xylem" SecExplorer
   !insertmacro XylemVerb "Drive" "%V"
 SectionEnd
 
-Section "Command-line tool (xylem-cli)" SecCli
+Section "Command-line tool (xylem-cli), on PATH" SecCli
   SetOutPath "$INSTDIR"
   File "${SRCDIR}\xylem-cli.exe"
+  ; Put the install folder on the system PATH so `xylem-cli` works in any
+  ; new terminal. Done with PowerShell on the registry value itself (NSIS
+  ; strings are limited to 1024 characters; a long PATH must never be cut):
+  ; keeps %variables%, the value type and every other entry, adds nothing if
+  ; it's already there. No script file is written (nothing to swap).
+  nsExec::ExecToLog `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$d='$INSTDIR';$$k=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\CurrentControlSet\Control\Session Manager\Environment',$$true);$$p=[string]$$k.GetValue('Path','','DoNotExpandEnvironmentNames');$$t=try{$$k.GetValueKind('Path')}catch{'ExpandString'};if(-not(($$p -split ';')|?{$$_.TrimEnd('\') -ieq $$d})){$$k.SetValue('Path',$$(if($$p -eq ''){$$d}elseif($$p.EndsWith(';')){$$p+$$d+';'}else{$$p+';'+$$d}),$$t)};$$k.Close()"`
+  Pop $0
+  ; Tell open programs (Explorer, new terminals) that PATH changed.
+  SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
 SectionEnd
 
 Section /o "Desktop shortcut" SecDesktop
@@ -136,12 +146,16 @@ SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SecApp} "The Xylem app, including the Fast scan helper."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecCli} "xylem-cli.exe: scan from the command line and export CSV."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecCli} "xylem-cli.exe: scan from the command line, export CSV/JSON. Added to PATH so $\"xylem-cli$\" works in any new terminal."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "A Xylem shortcut on the desktop."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecExplorer} "Adds $\"Analyze with Xylem$\" when you right-click a folder or drive."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
+  ; Remove only Xylem's folder from the system PATH (everything else kept as it was).
+  nsExec::ExecToLog `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$d='$INSTDIR';$$k=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\CurrentControlSet\Control\Session Manager\Environment',$$true);$$p=[string]$$k.GetValue('Path','','DoNotExpandEnvironmentNames');if($$p -ne ''){$$t=$$k.GetValueKind('Path');$$a=@($$p -split ';');$$b=@($$a|?{$$_.TrimEnd('\') -ine $$d});if($$b.Count -ne $$a.Count){$$k.SetValue('Path',($$b -join ';'),$$t)}};$$k.Close()"`
+  Pop $0
+  SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
   Delete "$INSTDIR\xylem.exe"
   Delete "$INSTDIR\xylem-cli.exe"
   Delete "$INSTDIR\README.md"

@@ -82,6 +82,9 @@ jobs:
         run: |
           $v = '${{ steps.ver.outputs.version }}'
           $dir = "$env:ProgramFiles\Xylem"
+          $envKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
+          $pathBefore = (Get-Item $envKey).GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+          $kindBefore = (Get-Item $envKey).GetValueKind('Path')
           $p = Start-Process "dist\xylem-setup-$v.exe" -ArgumentList '/S' -Wait -PassThru
           if ($p.ExitCode) { throw "installer exit code $($p.ExitCode)" }
           foreach ($f in 'xylem.exe', 'xylem-cli.exe', 'uninstall.exe', 'LICENSE-MIT') {
@@ -93,12 +96,23 @@ jobs:
           foreach ($k in "Directory","Directory\Background","Drive") { if (-not (Test-Path "HKLM:\Software\Classes\$k\shell\Xylem\command")) { throw "no right-click entry for $k" } }
           & "$dir\xylem-cli.exe" --version
           if ($LASTEXITCODE) { throw "installed xylem-cli failed" }
+          $machinePath = (Get-Item $envKey).GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+          if (-not (($machinePath -split ';') -contains $dir)) { throw "install folder not on the system PATH: $machinePath" }
+          if (-not $machinePath.StartsWith($pathBefore.TrimEnd(';'))) { throw "install changed other PATH entries" }
+          if ((Get-Item $envKey).GetValueKind('Path') -ne $kindBefore) { throw "PATH value type changed" }
+          # With the new PATH, xylem-cli is found by name (as in a fresh terminal).
+          $env:Path = [Environment]::ExpandEnvironmentVariables($machinePath)
+          $cmd = Get-Command xylem-cli -ErrorAction SilentlyContinue
+          if (-not $cmd -or $cmd.Source -ne "$dir\xylem-cli.exe") { throw "xylem-cli not found by name" }
           Start-Process "$dir\uninstall.exe" -ArgumentList '/S' -Wait
           for ($i = 0; $i -lt 60 -and (Test-Path $dir); $i++) { Start-Sleep 1 }
           if (Test-Path $dir) { throw "install folder left behind" }
           if (Test-Path $key) { throw "uninstall entry left behind" }
           foreach ($k in "Directory","Directory\Background","Drive") { if (Test-Path "HKLM:\Software\Classes\$k\shell\Xylem") { throw "right-click entry left behind ($k)" } }
           if (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Xylem.lnk") { throw "shortcut left behind" }
+          $after = (Get-Item $envKey).GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+          if (($after -split ';') -contains $dir) { throw "install folder left on PATH" }
+          if ($after -ne $pathBefore) { throw "PATH not restored exactly: '$after' vs '$pathBefore'" }
           "install/uninstall OK"
 
       - name: Upload installer (unsigned)
@@ -130,6 +144,9 @@ jobs:
           $setup = if ($env:SIGNPATH_ENABLED -eq 'true') { "signed-setup\xylem-setup-$v.exe" } else { "dist\xylem-setup-$v.exe" }
           $exes = if ($env:SIGNPATH_ENABLED -eq 'true') { 'signed-exes' } else { 'dist\stage' }
           Copy-Item $setup, "dist\xylem-$v-portable.zip", "$exes\xylem.exe", "$exes\xylem-cli.exe" out
+          # Fixed names too, so README links like .../releases/latest/download/xylem-setup.exe always get the newest.
+          Copy-Item $setup out\xylem-setup.exe
+          Copy-Item "dist\xylem-$v-portable.zip" out\xylem-portable.zip
           Get-ChildItem out -File | ForEach-Object {
             "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
           } | Join-String -Separator "`n" -OutputSuffix "`n" | ForEach-Object { [IO.File]::WriteAllText("$PWD\out\SHA256SUMS.txt", $_) }
@@ -152,4 +169,4 @@ jobs:
           $notes = (Get-Content .github\release-notes.md -Raw).Replace('{{VERSION}}', $v).Replace('{{SIGNED}}', $signed)
           $notes += "`n## SHA-256 checksums`n``````n" + (Get-Content out\SHA256SUMS.txt -Raw) + "``````n"
           Set-Content -Encoding utf8 notes.md $notes
-          gh release create $env:GITHUB_REF_NAME out\xylem-setup-$v.exe out\xylem-$v-portable.zip out\SHA256SUMS.txt --title "Xylem $v" --notes-file notes.md
+          gh release create $env:GITHUB_REF_NAME out\xylem-setup-$v.exe out\xylem-$v-portable.zip out\xylem-setup.exe out\xylem-portable.zip out\SHA256SUMS.txt --title "Xylem $v" --notes-file notes.md

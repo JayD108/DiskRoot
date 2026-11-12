@@ -2,7 +2,14 @@
 
 **Xylem {{VERSION}}**: a fast disk space analyzer for Windows 10/11. It shows what fills your drive, what each thing is, and whether it's safe to delete.
 
-## New in 0.4
+## New in 0.4.1
+- **One download, everything ready:** the installer now puts `xylem-cli` on PATH, so it works in any new terminal right after installing (the uninstaller removes exactly that entry again).
+- **Always-latest links:** `xylem-setup.exe` and `xylem-portable.zip` on every release, so https://github.com/JayD108/Xylem/releases/latest/download/xylem-setup.exe always gives the newest version.
+- **Compress skips hardlinked files** (their data is shared with names that may be outside the folder you chose).
+- **Save space warns** when the scan it uses was saved by an older Xylem without arrival dates.
+- New guide for the command line: docs/CLI.md.
+
+## In 0.4.0
 - **Ways to save space** (the new **Save space** button): two lists from your scan, biggest first.
   - **Compress:** folders and big files whose files haven't changed or arrived for 1, 3, 6 or 12 months, with the expected saving and a one-click **Compress…** (Maximum suggested for things untouched for a year).
   - **Other ways:** caches and temp files, build folders in old projects, AI model stores, Recycle Bin, hibernation file, previous Windows, restore points, big files that won't compress, WSL/Docker disks, OneDrive copies, folder copies, old installers, duplicates and Compact OS, each with its size and exactly how.

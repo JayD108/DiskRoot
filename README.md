@@ -8,6 +8,8 @@
 
 A fast, free and open-source disk space analyzer for Windows 10 and 11.
 
+**[⬇ Download Xylem for Windows](https://github.com/JayD108/Xylem/releases/latest/download/xylem-setup.exe)** · [portable zip](https://github.com/JayD108/Xylem/releases/latest/download/xylem-portable.zip) · [all releases](https://github.com/JayD108/Xylem/releases)
+
 </div>
 
 ![Xylem scanning C:\Windows: tree-table, sunburst map and the details pane explaining that Windows files must not be deleted by hand](docs/screenshots/xylem-location.png)
@@ -59,7 +61,22 @@ The window itself never runs as admin. More detail: [docs/HOW-IT-WORKS.md](docs/
 
 ## Install
 
-Download **`xylem-setup-<version>.exe`** from [Releases](https://github.com/JayD108/Xylem/releases) and run it. It installs into Program Files and adds a normal uninstaller (Settings → Apps). For no install, use **`xylem-<version>-portable.zip`**: unzip it and run `xylem.exe`.
+1. **[Download `xylem-setup.exe`](https://github.com/JayD108/Xylem/releases/latest/download/xylem-setup.exe)** (always the newest version, about 3 MB).
+2. Run it and click **Install**. Windows may say *"Windows protected your PC"* because releases aren't signed yet: click **More info → Run anyway**. You can check the file against `SHA256SUMS.txt` on the [release page](https://github.com/JayD108/Xylem/releases/latest).
+3. Start **Xylem** from the Start menu, or right-click any folder → **Analyze with Xylem**.
+
+One installer gives you everything:
+
+| | |
+|---|---|
+| `xylem.exe` | The app, in Program Files (where only admins can change it, which keeps Fast scan safe) |
+| `xylem-cli` | The command-line tool, **already on PATH**: open a new terminal and type `xylem-cli scan C:\` ([guide](docs/CLI.md)) |
+| Start menu entry, right-click "Analyze with Xylem", optional desktop shortcut | Pick them on the components page |
+| Uninstaller | Settings → Apps → Xylem. It removes exactly what it installed, including the PATH entry |
+
+**No install?** Take the **[portable zip](https://github.com/JayD108/Xylem/releases/latest/download/xylem-portable.zip)**, unzip it anywhere and run `xylem.exe` (Fast scan needs the installed version). To use `xylem-cli` from any folder, add that folder to your PATH ([how](docs/CLI.md#2-make-xylem-cli-work-from-any-folder)).
+
+Silent install for IT: `xylem-setup.exe /S` (uninstall: `"C:\Program Files\Xylem\uninstall.exe" /S`).
 
 ## How to use
 
