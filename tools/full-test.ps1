@@ -197,6 +197,12 @@ $h = $null; try { $h = $hj | ConvertFrom-Json } catch {}
 $histOk = $h -and @($h.points).Count -eq 2 -and @($h.folder).Count -eq 2 -and @($h.grew.items | Where-Object { $_.path -eq "sub" }).Count -eq 1
 Rec "SC-01" "Scheduled scan: exits, writes only Xylem's files, scanned folder untouched; CLI reads the size history" ($e1 -and $e2 -and $untouched -and $onlyOurs -and $histOk) "exit: $e1/$e2, untouched: $untouched, only ours: $onlyOurs, history: $histOk"
 
+# HL-01: drive health without admin: at least one disk, C: among the letters.
+$hj = .\target\release\xylem-cli.exe health --json 2>&1 | Out-String
+$hh = $null; try { $hh = $hj | ConvertFrom-Json } catch {}
+$hc = @($hh.drives | Where-Object { $_.letters -contains "C:" })
+Rec "HL-01" "Drive health reads without admin (CLI JSON, C: found)" ($hh -and $hc.Count -ge 1) "$(@($hh.drives).Count) disks; C: verdict: $($hc[0].verdict)"
+
 # Clean up scratch folders.
 Get-ChildItem $env:TEMP -Directory -Filter "xylem-ft-*" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $marker -ErrorAction SilentlyContinue

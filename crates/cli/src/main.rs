@@ -23,6 +23,16 @@ enum Cmd {
     /// Size history the app keeps of a remembered drive or folder: how it
     /// grew, what grew the most, and when the drive would be full
     History(HistoryArgs),
+    /// Drive health: SSD wear, data written, temperature, errors (the
+    /// drives' own reports; read-only, no admin)
+    Health(HealthArgs),
+}
+
+#[derive(Args)]
+struct HealthArgs {
+    /// Print JSON instead of text
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -89,6 +99,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Cmd::Health(args) => match run_health(&args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        },
         Cmd::History(args) => match run_history(&args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -97,6 +114,64 @@ fn main() -> ExitCode {
             }
         },
     }
+}
+
+fn run_health(args: &HealthArgs) -> Result<(), String> {
+    use xylem_session::health;
+    let drives = health::drives();
+    let trim = health::trim_enabled();
+    if args.json {
+        let list: Vec<_> = drives
+            .iter()
+            .map(|d| {
+                let (level, text) = d.verdict();
+                serde_json::json!({
+                    "disk": d.number, "letters": d.letters, "model": d.model, "firmware": d.firmware, "bus": d.bus,
+                    "ssd": d.ssd, "trim_supported": d.trim, "verdict": level, "verdict_text": text,
+                    "nvme": d.nvme.as_ref().map(|h| serde_json::json!({
+                        "critical_warning": h.critical_warning, "temperature_c": h.temp_c, "spare_pct": h.spare,
+                        "spare_threshold_pct": h.spare_threshold, "rated_life_used_pct": h.used_pct,
+                        // As strings: JSON numbers can't hold every 128-bit counter.
+                        "bytes_written": h.written_bytes.to_string(), "bytes_read": h.read_bytes.to_string(),
+                        "power_on_hours": h.power_on_hours.to_string(), "power_cycles": h.power_cycles.to_string(),
+                        "unsafe_shutdowns": h.unsafe_shutdowns.to_string(), "media_errors": h.media_errors.to_string(),
+                        "error_log_entries": h.error_log_entries.to_string(),
+                        "warning_temp_minutes": h.warn_temp_minutes, "critical_temp_minutes": h.crit_temp_minutes,
+                    })),
+                    "note": d.note,
+                })
+            })
+            .collect();
+        let out = serde_json::json!({ "windows_trim_on": trim, "drives": list });
+        println!("{}", serde_json::to_string_pretty(&out).expect("valid JSON"));
+        return Ok(());
+    }
+    if drives.is_empty() {
+        return Err("Windows didn't list any drives".into());
+    }
+    for d in &drives {
+        let kind = match d.ssd {
+            Some(true) => format!("{} SSD", d.bus),
+            Some(false) => format!("{} hard disk", d.bus),
+            None => d.bus.clone(),
+        };
+        let letters = if d.letters.is_empty() { "no letter".to_owned() } else { d.letters.join(" ") };
+        println!("Disk {} · {letters} · {} · {kind} · firmware {}", d.number, d.model, d.firmware);
+        println!("  {}", d.verdict().1);
+        for f in d.facts() {
+            println!("  {f}");
+        }
+        println!();
+    }
+    println!(
+        "{}",
+        match trim {
+            Some(true) => "Windows sends TRIM to SSDs (on).",
+            Some(false) => "Windows TRIM is OFF: run `fsutil behavior set DisableDeleteNotify 0` as admin to turn it on.",
+            None => "Couldn't read whether Windows sends TRIM.",
+        }
+    );
+    Ok(())
 }
 
 fn day(secs: u64) -> String {

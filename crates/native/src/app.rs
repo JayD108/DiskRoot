@@ -17,6 +17,7 @@ use xylem_session::integrity::{Integrity, SignatureState};
 use xylem_session::similar;
 use xylem_session::savings::{self, TipAction};
 use xylem_session::schedule::{self, Schedule};
+use xylem_session::health::{self, Level as Health};
 use xylem_session::history::{self, Forecast, History};
 use xylem_session::remember::{self, Changes, PrevSizes};
 use xylem_session::safety::{DeleteWarnings, LogEntry, visible};
@@ -129,6 +130,8 @@ enum Dialog {
     Schedule(Box<ScheduleView>),
     /// View > Size history.
     Growth(Box<GrowthView>),
+    /// View > Drive health: (drives, Windows sends TRIM).
+    Health(Box<(Vec<health::Drive>, Option<bool>)>),
     /// Explains a Windows tool before starting it.
     Tool(Action),
 }
@@ -210,6 +213,8 @@ struct DriveBar {
     scanned: u64,
     /// The 5 biggest top-level items: (node, name, bytes on disk, colour category).
     top: Vec<(u32, String, u64, u8)>,
+    /// "C: is 95% full. SSDs get slower...": an SSD under 10% free.
+    nearly_full: Option<String>,
 }
 
 /// A running duplicate search: shared progress, the cancel flag, and where
@@ -652,7 +657,9 @@ impl XylemApp {
         self.drive_bar = self.scanned.as_ref().map(|s| {
             let sum = s.summary();
             let top = s.list(0, 5).map(|l| l.items.into_iter().map(|i| (i.id, i.name, i.on_disk, i.cat)).collect()).unwrap_or_default();
-            DriveBar { space: xylem_session::disk_space(&sum.root), root: sum.root, scanned: sum.on_disk, top }
+            let space = xylem_session::disk_space(&sum.root);
+            let nearly_full = space.and_then(|(total, free)| health::nearly_full(&sum.root, total, free, health::is_ssd(&sum.root) == Some(true)));
+            DriveBar { space, root: sum.root, scanned: sum.on_disk, top, nearly_full }
         });
     }
 
@@ -1181,6 +1188,10 @@ impl XylemApp {
                     self.open_growth();
                     ui.close();
                 }
+                if ui.button("Drive health…").on_hover_text("How worn your SSDs are, how much was written to them, temperature and errors (the drives' own reports; no admin)").clicked() {
+                    self.dialog = Some(Dialog::Health(Box::new((health::drives(), health::trim_enabled()))));
+                    ui.close();
+                }
                 if ui.button("Scheduled scans…").on_hover_text("Let Xylem scan by itself every few hours (no admin, no window), so it can show what changed").clicked() {
                     self.open_schedule();
                     ui.close();
@@ -1446,7 +1457,12 @@ impl XylemApp {
         };
         let mut click: Option<u32> = None;
         ui.horizontal_centered(|ui| {
-            ui.label(RichText::new(text).font(theme::semibold(12.5)));
+            let full = b.nearly_full.as_ref().filter(|_| is_drive);
+            let l = ui.label(RichText::new(text).font(theme::semibold(12.5)).color(if full.is_some() { theme::WARN } else { t.text }));
+            if let Some(w) = full {
+                l.on_hover_text(w.as_str());
+                ui.label(RichText::new("⚠ nearly full").color(theme::WARN).size(12.0)).on_hover_text(w.as_str());
+            }
             ui.add_space(10.0);
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::click());
             let p = ui.painter_at(r);
@@ -2800,7 +2816,7 @@ impl XylemApp {
         let mut confirm: Option<u32> = None;
         let mut action: Option<&'static str> = None;
         let mut jump: Option<String> = None;
-        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_) | Dialog::Savings(_) | Dialog::Schedule(_) | Dialog::Growth(_));
+        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_) | Dialog::Savings(_) | Dialog::Schedule(_) | Dialog::Growth(_) | Dialog::Health(_));
         let mut leftover_marks: Option<Vec<u32>> = None;
         let mut tool_start: Option<(Action, bool)> = None;
         let mut dupes_start = false;
@@ -2905,6 +2921,48 @@ impl XylemApp {
                             }
                         });
                     }
+                }
+                Dialog::Health(v) => {
+                    let (drives, trim) = &**v;
+                    ui.label(RichText::new("Drive health").font(theme::semibold(16.0)));
+                    ui.add(egui::Label::new(RichText::new("What the drives report about themselves: how much of their rated life is used, how much was written, temperature and errors. Xylem only asks for these reports; it changes nothing and needs no admin.").color(t.muted)).wrap());
+                    ui.add_space(6.0);
+                    egui::ScrollArea::vertical().id_salt("health").max_height(420.0).show(ui, |ui| {
+                        if drives.is_empty() {
+                            ui.label(RichText::new("Windows didn't list any drives.").color(t.faint));
+                        }
+                        for d in drives {
+                            let kind = match d.ssd {
+                                Some(true) => format!("{} SSD", d.bus),
+                                Some(false) => format!("{} hard disk", d.bus),
+                                None => d.bus.clone(),
+                            };
+                            let letters = if d.letters.is_empty() { "no drive letter".to_owned() } else { d.letters.join(" ") };
+                            ui.label(RichText::new(format!("{letters} · {} · {kind}", if d.model.is_empty() { "unknown model" } else { &d.model })).font(theme::semibold(13.5)));
+                            let (level, text) = d.verdict();
+                            let col = match level {
+                                Health::Good => t.accent,
+                                Health::Watch => theme::WARN,
+                                Health::Bad => theme::cat_color(5),
+                                Health::Unknown => t.muted,
+                            };
+                            ui.add(egui::Label::new(RichText::new(text).color(col).font(theme::semibold(13.0))).wrap());
+                            for f in d.facts() {
+                                ui.add(egui::Label::new(RichText::new(f).color(t.muted)).wrap());
+                            }
+                            if !d.firmware.is_empty() {
+                                ui.label(RichText::new(format!("Disk {} · firmware {}", d.number, d.firmware)).color(t.faint).size(11.5));
+                            }
+                            ui.add_space(8.0);
+                        }
+                    });
+                    let trim_text = match trim {
+                        Some(true) => "Windows sends TRIM to SSDs (on, as it should be).",
+                        Some(false) => "Windows TRIM is turned off. SSDs stay faster and wear less with it on: run \"fsutil behavior set DisableDeleteNotify 0\" as admin to turn it back on.",
+                        None => "Couldn't read whether Windows sends TRIM.",
+                    };
+                    ui.add(egui::Label::new(RichText::new(trim_text).color(if *trim == Some(false) { theme::WARN } else { t.muted })).wrap());
+                    ui.add(egui::Label::new(RichText::new("\"Rated life used\" is the drive's own estimate from its flash wear; a drive often keeps working past 100%. \"Written\" is what Windows sent to it.").color(t.faint).size(11.5)).wrap());
                 }
                 Dialog::Growth(v) => {
                     ui.label(RichText::new("Size history").font(theme::semibold(16.0)));
@@ -3743,6 +3801,16 @@ impl XylemApp {
                         }
                         return;
                     }
+                    Dialog::Health(_) => {
+                        let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
+                        if ui.add(ok).clicked() {
+                            close = true;
+                        }
+                        if ui.button("Check again").clicked() {
+                            action = Some("health-refresh");
+                        }
+                        return;
+                    }
                     Dialog::Growth(_) => {
                         let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
                         if ui.add(ok).clicked() {
@@ -3921,6 +3989,9 @@ impl XylemApp {
                         (Ok(()), _) => "Saved. Automatic scans are off.".into(),
                     });
                 }
+            }
+            Some("health-refresh") => {
+                self.dialog = Some(Dialog::Health(Box::new((health::drives(), health::trim_enabled()))));
             }
             Some("history-clear") => {
                 if let Some(Dialog::Growth(v)) = self.dialog.take() {

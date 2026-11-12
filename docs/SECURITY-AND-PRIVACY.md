@@ -18,6 +18,7 @@
 ## What Xylem reads
 - **Scanning** reads names, sizes, attributes, last-modified dates and created dates (when a file arrived on this PC). Drives are opened read-only (`GENERIC_READ`); the scanning code contains no write calls. Last-opened dates aren't read.
 - **Scheduled scans** (off until you turn them on) are the same read-only folder walk, started by a Task Scheduler task that runs as you with least privilege. They never ask for admin, never run Fast scan, and write only Xylem's own files (the remembered scan and a small log in `%LOCALAPPDATA%\Xylem`). The task is removed when you turn them off or uninstall Xylem. Their optional warnings are a local Windows notification (no network), at most once a day per reason.
+- **Drive health** asks each disk for its own reports (model, health log, TRIM support) through a handle opened with no access rights: it can't read or write any data on the disk, and needs no admin. Nothing is stored yet.
 - **Ways to save space** works only from the scan in memory: it opens no file and changes nothing. Its buttons lead to the usual dialogs (Compress, the delete review, Windows' own tools).
 - **The duplicate finder** (View → Find duplicate files, only when you start it) compares files of the same size by their contents. It skips online-only cloud files (reading them would download them) and treats hardlinks as one file.
 - **Live updates** use Windows' change notifications for the scanned folder while the app is open. They read nothing else, and they stop when the app closes.

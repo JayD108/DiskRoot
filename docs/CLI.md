@@ -42,6 +42,7 @@ To undo, remove the folder from Settings → System → About → Advanced syste
 ```
 xylem-cli scan [OPTIONS] <PATH>     scan a drive or folder and report
 xylem-cli history [OPTIONS] <PATH>  size history the app keeps of a drive or folder
+xylem-cli health [--json]           drive health: SSD wear, data written, temperature, errors
 xylem-cli --version                 print the version
 xylem-cli --help                    list commands
 xylem-cli scan --help               list scan options
@@ -84,6 +85,23 @@ Latest scans
 
 What changed since the scan from 30 days ago (asked: last 30 days)
   +  4.77 GB     41.2 GB  Users\me\Downloads
+```
+
+### `health`
+
+Asks every disk for its own health report (NVMe drives; SATA/USB need admin and come later). Read-only, no admin. `--json` gives every field; the 128-bit counters (bytes written, hours, errors) are strings so no digits are lost.
+
+```
+> xylem-cli health
+Disk 0 · C: · WD PC SN8000S SDEQNRG-2T00-1002 · NVMe SSD · firmware 63100100
+  Good: 1% of rated life used.
+  33.3 TB written · 122 TB read · 1,071 powered-on hours (about 44 days)
+  33 °C now
+  Spare blocks 100% (critical at 10%) · 0 media errors
+  1,159 power cycles · 85 unsafe shutdowns (power cut or held power button)
+  Supports TRIM (lets the drive erase freed space early: faster, less wear)
+
+Windows sends TRIM to SSDs (on).
 ```
 
 ## 4. Examples

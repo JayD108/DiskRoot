@@ -13,6 +13,7 @@ pub mod similar;
 pub mod savings;
 pub mod schedule;
 pub mod elevate;
+pub mod health;
 pub mod helper;
 pub mod integrity;
 pub mod lockdown;
