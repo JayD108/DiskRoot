@@ -16,16 +16,18 @@
 | v0.1.0 | Scanners, the app, categories, safe delete | Released (unsigned) |
 | v0.2.0 | Instant reopen, "what changed", lower memory, finding space, UI refresh, Phases 8–10 below, a hardened admin helper | Released (unsigned) |
 | v0.3.0 | Own fast compression engine (right-click Compress), Similar folders, real size of compressed files in the normal scan, "what changed" knows the scan method | Released (unsigned) |
+| v0.4.0 | Ways to save space (what to compress, other ways to get space back), arrival dates ("changed or added"), measured compression estimates, cache rules safe only in app data, compression research call | Next |
 | 1.0 | Signed, tested on more hardware | Planned |
 
 ## Done
-- **Scanning:** MFT reader (C: ≈ 1.1 s with admin) and folder walk (≈ 4.3 s without); fastest in [our benchmark](BENCHMARKS.md). Last-modified dates come along for free (+2 bytes per item).
+- **Scanning:** MFT reader (C: ≈ 1.1 s with admin) and folder walk (≈ 4.3 s without); fastest in [our benchmark](BENCHMARKS.md). Last-modified and created dates come along for free (+2 bytes per item each).
 - **Understanding:** categories, plain-English notes, safety labels, protected places, marker files (`CACHEDIR.TAG`), custom rules.
 - **The app:** tree-table, sunburst and treemap (curved labels), colour by category or by age, drive strip with % used and the top 5, start screen with drive cards, light/dark themes, keyboard navigation, Ctrl+F filter.
 - **Change over time:** instant reopen, "what changed" (list and Change column), live updates while open, size alerts.
 - **Finding space:** largest files with search, file types, duplicate finder, hardlink names, Leftovers view, CSV export, Explorer right-click.
 - **Cleaning up:** "Mark all" for safe-to-clear places, Recycle Bin only, re-check by file identity with the folder chain locked until the move ends, spelling-proof locks, OneDrive/Git/large/USB/running-app warnings, multi-select, deletion history.
 - **Power tools (opt-in):** PowerShell cleanup plan, fast folder compression (own engine), similar-folder finder, guided WSL/Docker disk compaction, DISM / System Protection / Storage settings.
+- **Ways to save space:** what could be compressed (big, not changed or added for a while, measured estimates), and every other way to get space back with its size and how.
 - **Security:** admin helper that writes nothing to disk and drops its rights before parsing, DLL-planting defence, fuzzing, `cargo audit` + `cargo deny` in CI ([details](SECURITY-AND-PRIVACY.md)).
 - **Release:** installer, portable zip, checksums, CI with a real install/uninstall test, signing-ready pipeline.
 
@@ -55,6 +57,12 @@ A study of a faster, leaner engine. Results ship when they're measured to help:
 - A separate sandboxed reader for Fast scan, so a parser bug couldn't even read with admin rights.
 - Count hardlinks once in the folder walk too.
 - Store repeated names once; compress the remembered-scan cache.
+
+## Compression research (open to contributors)
+See the call in [CONTRIBUTING.md](../CONTRIBUTING.md#call-for-compression-research-) and the numbers in [BENCHMARKS.md](BENCHMARKS.md#compression).
+- Sampled estimates (a few 16 KB chunks per file) instead of per-extension guesses.
+- A "Smart" level choosing XPRESS16K or LZX per file.
+- Lossless transforms for float arrays and model weights; a verified archive-and-restore mode for cold data.
 
 ## Before 1.0
 - Wider testing: other PCs, an HDD, non-English names, exFAT/FAT32/ReFS drives.

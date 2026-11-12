@@ -1,0 +1,40 @@
+name: Compression research
+description: Propose a way to make Xylem's compression save more space or run faster
+title: "[Compression] "
+labels: ["compression-research"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! Please read the "Call for compression research" section of CONTRIBUTING.md first.
+        Measure on **copies** of data only, and check the data is identical after compressing and after undo.
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What would change (algorithm choice, a transform, an estimate, I/O, a new mode)?
+    validations:
+      required: true
+  - type: textarea
+    id: gain
+    attributes:
+      label: Expected gain
+      description: More space saved, less time, better estimates? On which kinds of files?
+    validations:
+      required: true
+  - type: textarea
+    id: numbers
+    attributes:
+      label: Measurements (if you have them)
+      description: File types and sizes, size on disk before/after, time, CPU and disk, and how you checked the data was identical.
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Xylem's rules
+      options:
+        - label: Works offline (no network), without kernel drivers
+          required: true
+        - label: Never deletes or replaces originals without a verified copy; can be undone
+          required: true
+        - label: Any new dependency has an OSI-approved licence
+          required: true

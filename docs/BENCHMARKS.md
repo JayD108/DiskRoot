@@ -42,6 +42,48 @@ No measurable slowdown; memory is up 2.5% for the dates.
 | Classifying 1.8M items (categories, notes, safety) | 0.12–0.15 s |
 | Reopening a remembered scan | 0.3–0.4 s |
 
+## Compression
+
+How much Xylem's **Compress** saves, by file type. Measured 12 Nov 2026 on copies of real files (the originals were only read) with the open probe [`tools/compress-probe`](../tools/compress-probe): each copy compressed with every Windows (WOF) algorithm on one thread, checked byte-for-byte identical afterwards, then uncompressed. zstd and lz4 (in memory, not usable transparently by Windows) are there for comparison. Percent = space saved; MB/s = input per second, one thread (the engine runs many files in parallel).
+
+| File type (size) | XPRESS4K | XPRESS8K | **XPRESS16K (Fast)** | **LZX (Maximum)** | zstd 1 | zstd 3 | zstd 9 | lz4 |
+|---|---|---|---|---|---|---|---|---|
+| `.jsonl` text (266 MB) | 48.5% | 52.6% | **54.7%** · 719 MB/s | **66.4%** · 48 MB/s | 65.8% | 70.8% | 75.4% | 50.2% |
+| `.csv` (660 MB) | 47.2% | 50.1% | **51.5%** · 724 MB/s | **54.2%** · 38 MB/s | 57.5% | 53.3% | 55.5% | 14.6% |
+| `.pkl` (48 MB) | 56.9% | 60.4% | **62.3%** · 956 MB/s | **69.2%** · 55 MB/s | 67.6% | 70.3% | 74.7% | 55.7% |
+| `.dll` (305 MB) | 49.7% | 56.0% | **60.3%** · 862 MB/s | **72.0%** · 58 MB/s | 72.0% | 76.2% | 78.6% | 60.1% |
+| `.edf` EEG (177 MB) | 26.7% | 30.8% | **32.9%** · 723 MB/s | **41.8%** · 67 MB/s | 36.9% | 42.8% | 45.7% | 10.4% |
+| `.edf` EEG (577 MB) | 29.5% | 31.8% | **32.6%** · 689 MB/s | **37.8%** · 64 MB/s | 33.5% | 38.2% | 40.9% | 14.8% |
+| `.bin` token ids (260 MB) | 20.3% | 23.8% | **25.7%** · 756 MB/s | **36.4%** · 66 MB/s | 24.7% | 35.6% | 46.4% | 14.8% |
+| `.npy` float32 (547 MB) | 10.8% | 13.5% | **14.8%** · 653 MB/s | **16.9%** · 91 MB/s | 18.8% | 18.1% | 18.4% | 5.0% |
+| `.parquet` (378 MB) | 3.4% | 6.2% | **7.6%** · 865 MB/s | **8.1%** · 125 MB/s | 8.8% | 9.0% | 9.9% | 0% |
+| `.pt` weights (441 MB) | 1.7% | 4.6% | **6.0%** · 909 MB/s | **6.7%** · 140 MB/s | 7.4% | 7.3% | 7.4% | 0% |
+| `.safetensors` (45 MB) | 1.7% | 4.6% | **6.0%** · 844 MB/s | **6.7%** · 102 MB/s | 7.3% | 7.2% | 7.3% | 0% |
+| `.h5` satellite (486 MB) | 0.7% | 1.5% | **2.4%** · 1049 MB/s | **6.7%** · 159 MB/s | 3.1% | 9.2% | 16.9% | 1.9% |
+
+- **Fast (XPRESS16K) is the right default:** 70–95% of Maximum's saving at 5–15× the speed (one thread).
+- **Maximum (LZX) pays off on text, code and programs** (+7–12 points), hardly on data files (+0.5–2 points). HDF5 is the exception (2.4% → 6.7%).
+- **zstd saves a few points more** on most types, and much more on `.h5` and token files at higher levels, but Windows can't read zstd-compressed files transparently. See [HELP-WANTED.md](HELP-WANTED.md#1-compression-engine-biggest-opportunity).
+
+### Predicting the saving before compressing
+
+Compressing a few 16 KB chunks spread over the file with Windows' XPRESS-Huffman (`RtlCompressBuffer`), and adding them up the way WOF stores chunks (back to back), predicts the real Fast saving closely:
+
+| File type | Real Fast saving | Predicted from 16 chunks (≈1–3 ms) | 64 chunks (≈4–12 ms) | 256 chunks (≈17–47 ms) |
+|---|---|---|---|---|
+| `.jsonl` | 54.7% | 54.9% | 55.1% | 54.7% |
+| `.csv` | 51.5% | 52.4% | 51.7% | 51.6% |
+| `.dll` | 60.3% | 64.4% | 61.9% | 59.9% |
+| `.pkl` | 62.3% | 65.5% | 64.9% | 64.1% |
+| `.edf` (577 MB) | 32.6% | 35.6% | 33.2% | 32.7% |
+| `.bin` tokens | 25.7% | 25.4% | 26.1% | 25.8% |
+| `.npy` | 14.8% | 14.9% | 14.8% | 14.8% |
+| `.parquet` | 7.6% | 8.8% | 7.8% | 7.6% |
+| `.pt` | 6.0% | 9.8% | 7.0% | 6.3% |
+| `.h5` | 2.4% | 5.8% | 3.1% | 2.5% |
+
+64 chunks (1 MB read per file) are within 2.6 points on every type here, in about 10 ms. Not used by the app yet: today's estimates come from a per-type table built from these measurements (item C1 in [HELP-WANTED.md](HELP-WANTED.md)).
+
 ## Method
 - **Machine:** one laptop: Intel Core Ultra 9 275HX (24 threads), NVMe SSD, Windows 11 Home. Drive C: is 1.86 TB with ~1.55 TB used, ~1.67M files and ~317k folders visible without admin (~2.0M items with admin).
 - **Same drive, warm cache, tools interleaved round-robin** so a busy moment on the disk doesn't hit just one tool.

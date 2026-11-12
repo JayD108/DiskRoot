@@ -10,6 +10,7 @@ Especially interesting:
 - Anything that makes Xylem write to or modify a disk while scanning.
 - Ways to make the elevated helper (`xylem.exe --helper-scan`) do anything other than scan and write its one result file.
 - Ways to make a delete hit a different item than the one confirmed (for example, via links or junctions).
+- Ways to make Compress change file contents, work outside the chosen folder, or leave data that doesn't read back identical.
 - Crashes or hangs caused by crafted file systems or index files.
 - Any network traffic from the app.
 

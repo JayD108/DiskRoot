@@ -1,0 +1,17 @@
+# Compression research probe (see CONTRIBUTING.md). Not part of the app:
+# its own workspace, so its dependencies never reach xylem.exe.
+[package]
+name = "compress-probe"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+zstd = "0.13"
+lz4_flex = "0.11"
+
+[profile.release]
+debug = "line-tables-only"

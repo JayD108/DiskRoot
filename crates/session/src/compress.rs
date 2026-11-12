@@ -24,7 +24,7 @@
 //! gained. Every file's real location is checked to be inside the chosen
 //! folder, so a folder swapped for a junction can't redirect the work.
 //!
-//! Levels: **Fast** = XPRESS16K (~450 MB/s on 16 threads, saves ~3/4 of
+//! Levels: **Fast** = XPRESS16K (~450 MB/s on 16 threads, saves 70-95% of
 //! what Maximum saves), **Maximum** = LZX (~125 MB/s, the most savings).
 
 use std::ffi::c_void;
@@ -84,7 +84,7 @@ unsafe extern "system" {
 /// How hard to compress.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
-    /// XPRESS16K: several times faster than Maximum, about 3/4 of its savings.
+    /// XPRESS16K: several times faster than Maximum, usually 70-95% of its savings.
     Fast,
     /// LZX: the most savings, slower. Best for things you rarely change.
     Max,
@@ -105,8 +105,10 @@ impl Level {
     }
 }
 
-/// Measured: XPRESS16K saved 29.6% where LZX saved 39.4% (R&D E9).
-const FAST_SHARE_OF_MAX: f64 = 0.75;
+/// What XPRESS16K saves compared with LZX. Measured on 12 real file types
+/// (R&D E10, 12 Nov 2026): 0.71-0.95, median 0.86 (HDF5 0.36 is the outlier,
+/// where both save little); earlier mixed set (E9): 0.75.
+const FAST_SHARE_OF_MAX: f64 = 0.85;
 
 /// One file the engine will work on.
 #[derive(Clone, Debug)]
@@ -130,7 +132,7 @@ pub struct Plan {
     pub files: Vec<PlanFile>,
     /// Size on disk of `files`.
     pub bytes: u64,
-    /// Rough saving with Maximum; Fast saves about 3/4 of it.
+    /// Rough saving with Maximum; Fast saves 70-95% of it.
     pub estimate_max: u64,
     /// Photos, videos, archives and other formats that are already compressed.
     pub skipped_formats: Count,
@@ -220,13 +222,13 @@ pub fn ratio(ext: &str) -> f64 {
     match ext.to_ascii_lowercase().as_str() {
         // Model weights: measured .pt 6.9% (31.6 GB).
         "pt" | "pth" | "ckpt" | "safetensors" | "onnx" | "h5" | "hdf5" | "keras" | "tflite" | "pb" | "bin" => 0.07,
-        // Float arrays: measured .npy 12.7% (118.5 GB), .npz 13.9% (np.savez stores them uncompressed).
-        "npy" | "npz" | "mat" | "tfrecord" | "arrow" | "feather" => 0.13,
+        // Float arrays: measured .npy 12.7% (118.5 GB) and 16.9% (E10), .npz 13.9% (np.savez stores them uncompressed).
+        "npy" | "npz" | "mat" | "tfrecord" | "arrow" | "feather" => 0.14,
         // EEG recordings (16-bit samples): measured .edf 37.8% (LZX), 32.6% (Fast).
         "edf" | "bdf" => 0.38,
-        // Columnar files are compressed inside: measured a 2 GB FineWeb .parquet
-        // 11.8% (LZX) / 11.0% (Fast); small ones saved more (40%), but big ones hold the bytes.
-        "parquet" | "orc" | "avro" => 0.12,
+        // Columnar files are compressed inside: measured .parquet 11.8% (2 GB) and
+        // 8.1% (E10, LZX); small ones saved more (40%), but big ones hold the bytes.
+        "parquet" | "orc" | "avro" => 0.1,
         "exe" | "dll" | "sys" | "node" | "pyd" | "so" => 0.4,
         _ => 0.5,
     }
@@ -695,7 +697,7 @@ mod tests {
         assert_eq!(ratio("zip"), 0.0);
         assert!((1..=16).contains(&default_threads()));
         let p = Plan { estimate_max: 1000, ..Plan::default() };
-        assert_eq!(p.estimate(Level::Fast), 750);
+        assert_eq!(p.estimate(Level::Fast), 850);
         assert!(check_volume(Path::new(r"\\server\share")).is_err());
     }
 }

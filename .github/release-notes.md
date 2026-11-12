@@ -2,12 +2,19 @@
 
 **Xylem {{VERSION}}**: a fast disk space analyzer for Windows 10/11. It shows what fills your drive, what each thing is, and whether it's safe to delete.
 
-## New in 0.3
-- **Fast compression, built in:** right-click any folder → **Compress…**. Xylem now runs Windows' own file compression itself, on many files at once, instead of through `compact.exe`: about 15× faster at the new **Fast** level and 5× faster at **Maximum** in our tests (763 MB of mixed data). Files stay where they are and open as usual. It skips files that won't shrink, shows real progress with speed and time left, can be stopped, and **Uncompress** undoes it.
-- **Similar folders** (View menu): finds folders that look like copies of each other, and projects with similar names (`project`, `project_v2`, `project - Copy`), with how much each group takes.
-- **Fixed: compressed files were counted as almost 0 bytes** by the normal (no-admin) scan. Folders compressed with Windows' file compression (compact /EXE, CompactOS, Xylem's Compress) now show their real size on disk. Fast scan was not affected.
-- **Fixed: "What changed" could compare a normal scan with a Fast scan** as if your files had changed. Xylem now remembers how each scan was made and says so when the two differ; it also shows how far apart the scans were.
-- Clearer text about what needs admin rights and what Xylem can change; percentages no longer round a part up to 100%.
+## New in 0.4
+- **Ways to save space** (the new **Save space** button): two lists from your scan, biggest first.
+  - **Compress:** folders and big files whose files haven't changed or arrived for 1, 3, 6 or 12 months, with the expected saving and a one-click **Compress…** (Maximum suggested for things untouched for a year).
+  - **Other ways:** caches and temp files, build folders in old projects, AI model stores, Recycle Bin, hibernation file, previous Windows, restore points, big files that won't compress, WSL/Docker disks, OneDrive copies, folder copies, old installers, duplicates and Compact OS, each with its size and exactly how.
+  Nothing is changed from this window.
+- **Arrival dates:** downloads and unpacked datasets keep their authors' old dates. Xylem now also reads when each file arrived on your PC, so a dataset downloaded last month no longer looks "2 years old".
+- **Honest compression estimates** from real measurements per file type (e.g. text ~55%, EEG `.edf` ~33%, `.npy` ~15%, `.parquet`/`.pt` ~6–8% with Fast) instead of a flat 50%.
+- **Safer cache labels:** a folder named `cache` inside your own projects is now "check first", not "safe to clear"; app caches in AppData stay safe.
+- **Fixed:** the drive strip and totals at the bottom now update after Compress/Uncompress.
+- **Help wanted:** a call for compression research and a list of open problems: see CONTRIBUTING.md and docs/HELP-WANTED.md.
+
+## In 0.3
+- Fast built-in compression (right-click → Compress…, ~15× faster than `compact.exe` in our tests, undoable), Similar folders, and fixes for compressed files in the normal scan and for "What changed" across scan methods.
 
 ## What it does
 - Scans a whole NTFS drive in about 1–2 seconds by reading its Master File Table, read-only, after the Windows admin prompt. Without admin it walks folders (no prompt).

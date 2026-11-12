@@ -532,11 +532,11 @@ mod tests {
 
     #[test]
     fn measured_ratios_for_data_files() {
-        assert_eq!(compress::ratio("npy"), 0.13);
+        assert_eq!(compress::ratio("npy"), 0.14);
         assert_eq!(compress::ratio("PT"), 0.07);
         assert_eq!(compress::ratio("gguf"), 0.0);
         assert_eq!(compress::ratio("log"), 0.5);
-        assert_eq!(compress::verdict("a.npz", 0, 100 * MB, 100 * MB), Verdict::Pack(0.13 * (100 * MB) as f64));
+        assert_eq!(compress::verdict("a.npz", 0, 100 * MB, 100 * MB), Verdict::Pack(0.14 * (100 * MB) as f64));
     }
 
     #[test]

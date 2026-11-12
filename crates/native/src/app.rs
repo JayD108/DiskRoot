@@ -1722,9 +1722,16 @@ impl XylemApp {
 
     /// After compressing: new sizes into the tree, and a plain summary.
     fn finish_compress(&mut self, r: compress::Report) {
-        if let Some(s) = &mut self.scanned {
+        if let Some(s) = &mut self.scanned
+            && !r.new_alloc.is_empty()
+        {
+            // The remembered copy of this scan no longer matches the disk.
+            remember::forget_index(&s.summary().root);
             s.apply_new_alloc(&r.new_alloc);
+            self.summary = Some(s.summary());
         }
+        // Free space changed: the drive strip and totals at the bottom too.
+        self.refresh_drive_bar();
         self.rows = None;
         self.map = None;
         let n = |c: compress::Count| fmt_files(c.0);
@@ -2832,8 +2839,8 @@ impl XylemApp {
                         ui.radio_value(&mut c.level, Level::Max, "Maximum");
                     });
                     let hint = match c.level {
-                        Level::Fast => "Several times faster; saves about 3/4 of what Maximum saves.",
-                        Level::Max => "The most savings, about 3-4 times slower. Best for things you rarely change.",
+                        Level::Fast => "3-15 times faster; usually saves 70-95% of what Maximum saves (most on data files).",
+                        Level::Max => "The most savings, 3-15 times slower. Worth it mainly for text, code and programs you rarely change.",
                     };
                     ui.add(egui::Label::new(RichText::new(format!("{hint} Rough estimate: about {} saved (the real result depends on the data).", fmt_bytes(p.estimate(c.level)))).color(t.muted)).wrap());
                     ui.add_space(6.0);
