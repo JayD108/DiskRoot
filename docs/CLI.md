@@ -41,6 +41,7 @@ To undo, remove the folder from Settings → System → About → Advanced syste
 
 ```
 xylem-cli scan [OPTIONS] <PATH>     scan a drive or folder and report
+xylem-cli history [OPTIONS] <PATH>  size history the app keeps of a drive or folder
 xylem-cli --version                 print the version
 xylem-cli --help                    list commands
 xylem-cli scan --help               list scan options
@@ -57,6 +58,33 @@ xylem-cli scan --help               list scan options
 | `--threads <N>` | Worker threads for the folder walk | one per CPU core (4–32) |
 | `--json` | Print JSON instead of tables | off |
 | `--export <FILE>` | Also write **every** file and folder to a CSV file | off |
+
+### `history` options
+
+Reads the size history the app saves with every remembered scan (and every scheduled scan). It scans nothing and changes nothing.
+
+| Option | Meaning | Default |
+|---|---|---|
+| `<PATH>` | A drive or folder the app has scanned: `C:`, `"C:\My Data"` | required |
+| `--days <N>` | "What changed" compares the latest scan with the newest one at least N days old (or the oldest there is) | `7` |
+| `--folder <REL>` | Also print one folder's size at each scan, as a path inside `<PATH>`, e.g. `Users\me\Downloads` | off |
+| `--json` | Print JSON (points, forecast, what grew, folder series) | off |
+
+Example (shortened; the numbers are made up):
+
+```
+> xylem-cli history C: --days 30
+Size history of C:\ · 31 scans since 2026-10-13 · history files use 2.68 MB
+  At the pace of the last 30 days (+1.00 GB a day), C: would be full in about 330 days.
+
+Latest scans
+  Date         When           Method          On disk  Drive free
+  2026-11-12   just now       folder walk     1.52 TB      333 GB
+  ...
+
+What changed since the scan from 30 days ago (asked: last 30 days)
+  +  4.77 GB     41.2 GB  Users\me\Downloads
+```
 
 ## 4. Examples
 
@@ -167,4 +195,4 @@ A whole C: drive is about 2 million rows (~300 MB; C:\Windows alone: 277,000 row
 
 ## 8. What the CLI doesn't do (yet)
 
-The CLI only reports. Categories, safety labels, **Save space**, **Compress**, delete, "what changed" and duplicates are in the app (`xylem.exe`). Ideas for CLI commands for those are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md).
+The CLI only reports. Categories, safety labels, **Save space**, **Compress**, delete, "what changed" between the last two scans and duplicates are in the app (`xylem.exe`); `history` reads what the app saved. Ideas for CLI commands for those are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md).

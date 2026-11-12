@@ -175,6 +175,28 @@ Start-Sleep 4; Stop-Process -Id $p.Id -ErrorAction SilentlyContinue
 $after = & $snap
 Rec "RO-01" "Scanning changes nothing in the scanned folder" ((Compare-Object $before $after).Count -eq 0) "51 items compared"
 
+# SC-01: a scheduled (headless) scan writes only Xylem's own files, keeps a
+# size history, exits, and the CLI reads that history. Folders are compared
+# by name only (Windows updates their own timestamps lazily, see RO-01).
+$hd = Iso "hist"
+$list = { Get-ChildItem "$hd\data" -Recurse -Force | ForEach-Object { if ($_.PSIsContainer) { "D|$($_.Name)" } else { "F|$($_.Name)|$($_.Length)|$($_.LastWriteTimeUtc.Ticks)" } } }
+New-Item -ItemType Directory -Force "$hd\data\sub" | Out-Null
+[IO.File]::WriteAllBytes("$hd\data\sub\a.bin", (New-Object byte[] 3000000))
+@{ every_min = 30; roots = @("$hd\data"); on_battery = $true; warn_free_gb = 0 } | ConvertTo-Json | Out-File -Encoding utf8 "$hd\r\Xylem\schedule.json"
+$p1 = Start-Process $exe -ArgumentList "--scheduled-scan" -PassThru -WindowStyle Hidden; $e1 = $p1.WaitForExit(60000) -and $p1.ExitCode -eq 0
+[IO.File]::WriteAllBytes("$hd\data\sub\b.bin", (New-Object byte[] 5000000))
+$beforeData = & $list
+$p2 = Start-Process $exe -ArgumentList "--scheduled-scan" -PassThru -WindowStyle Hidden; $e2 = $p2.WaitForExit(60000) -and $p2.ExitCode -eq 0
+$afterData = & $list
+$untouched = (Compare-Object $beforeData $afterData).Count -eq 0
+# Paths may come back in the long or the short (8.3) form of %TEMP%.
+$written = @(Get-ChildItem "$hd\l", "$hd\r" -Recurse -File | ForEach-Object { $_.FullName })
+$onlyOurs = @($written | Where-Object { $_ -notmatch '\\xylem-ft-hist\\(l|r)\\Xylem\\' }).Count -eq 0
+$hj = .\target\release\xylem-cli.exe history "$hd\data" --folder sub --days 1 --json 2>&1 | Out-String
+$h = $null; try { $h = $hj | ConvertFrom-Json } catch {}
+$histOk = $h -and @($h.points).Count -eq 2 -and @($h.folder).Count -eq 2 -and @($h.grew.items | Where-Object { $_.path -eq "sub" }).Count -eq 1
+Rec "SC-01" "Scheduled scan: exits, writes only Xylem's files, scanned folder untouched; CLI reads the size history" ($e1 -and $e2 -and $untouched -and $onlyOurs -and $histOk) "exit: $e1/$e2, untouched: $untouched, only ours: $onlyOurs, history: $histOk"
+
 # Clean up scratch folders.
 Get-ChildItem $env:TEMP -Directory -Filter "xylem-ft-*" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $marker -ErrorAction SilentlyContinue

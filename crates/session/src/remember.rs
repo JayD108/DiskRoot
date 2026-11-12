@@ -7,6 +7,7 @@
 //! - `<key>.snap`: folder sizes of the latest scan, and how it was made
 //!   (Fast scan or folder walk: they count some things differently).
 //! - `<key>.prev.snap`: folder sizes of the scan before it.
+//! - `<key>.hist`: size history (folders of 1 MB or more), see `history`.
 //!
 //! These files hold file and folder **names and sizes**, nothing else, and
 //! never leave the PC. The user can turn this off or forget everything.
@@ -394,6 +395,8 @@ pub fn remember(idx: &Arc<Index>, stats: &ScanStats, mode: &str) -> io::Result<O
     }
     write_atomic(&snap_path, |w| snap.save(w))?;
     write_atomic(&idx_path, |w| idx.save(stats, &mode, w))?;
+    // Size history is extra: a failure there never fails remembering.
+    let _ = crate::history::record(&snap);
     prune();
     Ok(prev.map(|p| diff(&p, &snap, 50)))
 }
@@ -488,7 +491,7 @@ pub fn forget_all() -> io::Result<usize> {
     let Ok(entries) = fs::read_dir(&dir) else { return Ok(0) };
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().to_lowercase();
-        let ours = [".idx", ".snap", ".tmp"].iter().any(|ext| name.ends_with(ext));
+        let ours = [".idx", ".snap", ".hist", ".tmp"].iter().any(|ext| name.ends_with(ext));
         if ours && e.file_type().is_ok_and(|t| t.is_file()) {
             fs::remove_file(e.path())?;
             n += 1;
@@ -511,7 +514,7 @@ fn prune() {
         .collect();
     idx.sort_by_key(|x| std::cmp::Reverse(x.0));
     for (_, k) in idx.into_iter().skip(MAX_ROOTS) {
-        for ext in ["idx", "snap", "prev.snap", "seen.snap"] {
+        for ext in ["idx", "snap", "prev.snap", "seen.snap", "hist"] {
             let _ = fs::remove_file(dir.join(format!("{k}.{ext}")));
         }
     }

@@ -17,6 +17,7 @@ use xylem_session::integrity::{Integrity, SignatureState};
 use xylem_session::similar;
 use xylem_session::savings::{self, TipAction};
 use xylem_session::schedule::{self, Schedule};
+use xylem_session::history::{self, Forecast, History};
 use xylem_session::remember::{self, Changes, PrevSizes};
 use xylem_session::safety::{DeleteWarnings, LogEntry, visible};
 use xylem_session::{Action, DeleteOut, FileRow, ItemInfo, Leftover, PendingDelete, RulesStatus, Safety, Scanned, Shape, Summary, TypeRow};
@@ -74,6 +75,7 @@ struct Reopened {
     time: u64,
     changes: Option<Changes>,
     prev: Option<PrevSizes>,
+    hist: Option<History>,
     took: Duration,
 }
 
@@ -125,6 +127,8 @@ enum Dialog {
     Memory,
     /// View > Scheduled scans.
     Schedule(Box<ScheduleView>),
+    /// View > Size history.
+    Growth(Box<GrowthView>),
     /// Explains a Windows tool before starting it.
     Tool(Action),
 }
@@ -147,6 +151,22 @@ struct ScheduleView {
     rec: (u32, String),
     runs: Vec<schedule::Run>,
     msg: Option<String>,
+}
+
+/// View > Size history: the root's size (or the drive's used space) over
+/// time, the forecast, and the top growers per period.
+struct GrowthView {
+    root: String,
+    /// Drive root: the chart shows the drive's used space.
+    drive: bool,
+    chart: Vec<(u64, u64)>,
+    forecast: Option<Forecast>,
+    /// Last day / week / month.
+    tab: usize,
+    growers: [Option<Changes>; 3],
+    points: usize,
+    first: u64,
+    disk: u64,
 }
 
 /// Smallest rough saving (Maximum) a compress suggestion must reach.
@@ -180,7 +200,7 @@ struct ConfirmMany {
 
 /// Result of the background "remember" step: what changed, and the previous
 /// scan's folder sizes for the tree's change column.
-type Remembered = (Result<Option<Changes>, String>, Option<PrevSizes>);
+type Remembered = (Result<Option<Changes>, String>, Option<PrevSizes>, Option<History>);
 
 /// The drive strip at the bottom of the window.
 struct DriveBar {
@@ -275,6 +295,10 @@ pub struct XylemApp {
     marked: BTreeSet<u32>,
     /// Hardlink names of the selected file: (node, all its names).
     links_cache: Option<(u32, Vec<String>)>,
+    /// Size history of the scanned root (folders of 1 MB or more).
+    hist: Option<Arc<History>>,
+    /// The selected folder's size at each history point: (node, series).
+    hist_cache: Option<(u32, Vec<(u64, u64)>)>,
     /// The Xylem logo (start screen, About), uploaded once.
     logo: egui::TextureHandle,
     scroll_to_selected: bool,
@@ -363,6 +387,8 @@ impl XylemApp {
             prev_sizes: None,
             marked: BTreeSet::new(),
             links_cache: None,
+            hist: None,
+            hist_cache: None,
             logo: cc.egui_ctx.load_texture(
                 "xylem-logo",
                 egui::ColorImage::from_rgba_unmultiplied([128, 128], include_bytes!("../assets/logo-128.rgba")),
@@ -430,6 +456,7 @@ impl XylemApp {
         self.selected = None;
         self.marked.clear();
         self.links_cache = None;
+        self.set_hist(None);
         self.freed = self.settings.remember_scans.then(|| root.clone());
         self.footprint.at = None; // show the new number right away
         self.say(if self.settings.remember_scans { format!("Memory freed. Your scan of {root} is saved: open it from the start screen.") } else { "Memory freed.".to_owned() });
@@ -492,6 +519,7 @@ impl XylemApp {
                 time,
                 changes: remember::last_changes(&p),
                 prev: remember::previous_sizes(&p),
+                hist: history::load(&p),
                 took: t.elapsed(),
             });
             let _ = tx.send(Done::Reopened(Box::new(r)));
@@ -511,7 +539,8 @@ impl XylemApp {
         std::thread::spawn(move || {
             let r = remember::remember(&idx, &stats, &mode).map_err(|e| e.to_string());
             let prev = remember::previous_sizes(idx.name(0));
-            let _ = tx.send((r, prev));
+            let hist = history::load(idx.name(0));
+            let _ = tx.send((r, prev, hist));
         });
         self.remember_rx = Some(rx);
     }
@@ -521,9 +550,10 @@ impl XylemApp {
         match rx.try_recv() {
             Err(TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(200)),
             Err(TryRecvError::Disconnected) => self.remember_rx = None,
-            Ok((r, prev)) => {
+            Ok((r, prev, hist)) => {
                 self.remember_rx = None;
                 self.prev_sizes = prev;
+                self.set_hist(hist);
                 self.rows = None;
                 match r {
                     Ok(Some(ch)) => {
@@ -611,6 +641,7 @@ impl XylemApp {
                 self.remembered_at = None;
                 self.changes = None;
                 self.prev_sizes = None;
+                self.set_hist(None);
                 self.start_remember();
             }
             Err(e) => self.dialog = Some(Dialog::Message("Scan didn't finish".into(), e)),
@@ -743,7 +774,13 @@ impl XylemApp {
         }
         // Background scans since the user last looked: say what changed.
         let mut changes = r.changes;
+        let mut warned: Vec<String> = Vec::new();
         if let Some(away) = remember::away_changes(&sum.root) {
+            for w in schedule::runs().iter().filter(|x| x.time > away.before_time).filter_map(|x| x.warning.clone()) {
+                if !warned.contains(&w) {
+                    warned.push(w);
+                }
+            }
             let n = schedule::runs().iter().filter(|x| x.error.is_none() && x.time > away.before_time && x.root.eq_ignore_ascii_case(&sum.root)).count();
             let d = i128::from(away.after_total) - i128::from(away.before_total);
             let top = away.items.first().map(|c| format!(" ({} {}{})", if c.path.is_empty() { visible(&sum.root) } else { visible(&c.path) }, if c.delta() >= 0 { "+" } else { "−" }, fmt_bytes(c.delta().unsigned_abs() as u64))).unwrap_or_default();
@@ -761,9 +798,19 @@ impl XylemApp {
         }
         self.say(msg);
         self.show_scan(r.scanned, sum);
+        if !warned.is_empty() && self.dialog.is_none() {
+            self.dialog = Some(Dialog::Message("While you were away".into(), warned.join("
+")));
+        }
         self.remembered_at = Some(r.time);
         self.changes = changes;
         self.prev_sizes = r.prev;
+        self.set_hist(r.hist);
+    }
+
+    fn set_hist(&mut self, h: Option<History>) {
+        self.hist = h.filter(|h| !h.points.is_empty()).map(Arc::new);
+        self.hist_cache = None;
     }
 
     fn finish_delete(&mut self, node: u32, r: Result<DeleteOut, String>) {
@@ -1124,6 +1171,14 @@ impl XylemApp {
                     .clicked()
                 {
                     self.open_savings();
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(self.summary.is_some(), egui::Button::new("Size history…"))
+                    .on_hover_text("How this drive or folder grew over time, what grew the most, and when the drive would be full")
+                    .clicked()
+                {
+                    self.open_growth();
                     ui.close();
                 }
                 if ui.button("Scheduled scans…").on_hover_text("Let Xylem scan by itself every few hours (no admin, no window), so it can show what changed").clicked() {
@@ -1837,6 +1892,38 @@ impl XylemApp {
         }
     }
 
+    /// View > Size history.
+    fn open_growth(&mut self) {
+        let Some(sum) = &self.summary else { return };
+        let root = sum.root.clone();
+        let h = self.hist.clone().or_else(|| history::load(&root).map(Arc::new));
+        let Some(h) = h.filter(|h| !h.points.is_empty()) else {
+            self.dialog = Some(Dialog::Message(
+                "No size history yet".into(),
+                format!(
+                    "Xylem keeps a small size history of every scan it remembers (folders of 1 MB or more, on this PC only). Scan {} again later, or turn on View → Scheduled scans, and the history starts filling.{}",
+                    visible(&root),
+                    if self.settings.remember_scans { "" } else { "\n\nRemembering scans is off (File menu), so no history is kept." }
+                ),
+            ));
+            return;
+        };
+        let drive = root.len() <= 3 && h.points.iter().any(|p| p.used().is_some());
+        let chart = if drive { h.points.iter().filter_map(|p| Some((p.time, p.used()?))).collect() } else { h.series("") };
+        let growers = [86_400, 7 * 86_400, 30 * 86_400].map(|secs| h.growers(secs, 30));
+        self.dialog = Some(Dialog::Growth(Box::new(GrowthView {
+            drive,
+            chart,
+            forecast: drive.then(|| history::forecast(&h.points)),
+            tab: 1,
+            growers,
+            points: h.points.len(),
+            first: h.points[0].time,
+            disk: history::disk_usage(),
+            root,
+        })));
+    }
+
     /// View > Scheduled scans: the saved schedule (or a default for the
     /// current drive), whether the task exists, and a recommendation.
     fn open_schedule(&mut self) {
@@ -2403,6 +2490,15 @@ impl XylemApp {
             };
             self.links_cache = Some((*n, names));
         }
+        if let (Some(Key_::Node(n)), Some(s), Some(h)) = (&self.selected, &self.scanned, &self.hist)
+            && self.hist_cache.as_ref().is_none_or(|c| c.0 != *n)
+        {
+            let series = match s.info(*n) {
+                Ok(i) if i.dir => rel_of(&s.summary().root, &i.path).map(|rel| h.series(&rel)).unwrap_or_default(),
+                _ => Vec::new(),
+            };
+            self.hist_cache = Some((*n, series));
+        }
         let t = self.tokens();
         Self::pane_frame(&t).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
             ui.set_min_size(ui.available_size());
@@ -2480,6 +2576,20 @@ impl XylemApp {
                                 if mt > 0 {
                                     key(ui, if info.dir { "Newest inside" } else { "Modified" });
                                     ui.label(format!("{} · {}", xylem_session::date_text(mt), xylem_session::age_text(xylem_session::today_days(), mt)));
+                                    ui.end_row();
+                                }
+                                if let Some((_, series)) = self.hist_cache.as_ref().filter(|c| c.0 == *n && c.1.len() >= 2) {
+                                    key(ui, "Size history");
+                                    ui.horizontal(|ui| {
+                                        size_chart(ui, &t, series, vec2(150.0, 22.0), false);
+                                        let last = series[series.len() - 1];
+                                        let week = series.iter().rev().find(|p| p.0.saturating_add(7 * 86_400) <= last.0).unwrap_or(&series[0]);
+                                        let d = i128::from(last.1) - i128::from(week.1);
+                                        let span = remember::gap_text(last.0.saturating_sub(week.0));
+                                        let text = if d == 0 { format!("no change in {span}") } else { format!("{} in {span}", fmt_delta(d)) };
+                                        ui.label(RichText::new(text).color(if d > 0 { theme::WARN } else { t.muted }))
+                                            .on_hover_text("From the scans Xylem remembered (folders of 1 MB or more). View → Size history for more.");
+                                    });
                                     ui.end_row();
                                 }
                                 key(ui, "Category");
@@ -2690,7 +2800,7 @@ impl XylemApp {
         let mut confirm: Option<u32> = None;
         let mut action: Option<&'static str> = None;
         let mut jump: Option<String> = None;
-        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_) | Dialog::Savings(_) | Dialog::Schedule(_));
+        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_) | Dialog::Savings(_) | Dialog::Schedule(_) | Dialog::Growth(_));
         let mut leftover_marks: Option<Vec<u32>> = None;
         let mut tool_start: Option<(Action, bool)> = None;
         let mut dupes_start = false;
@@ -2745,6 +2855,25 @@ impl XylemApp {
                         }
                         ui.checkbox(&mut v.s.on_battery, "Also when the laptop runs on battery");
                         ui.checkbox(&mut v.s.only_idle, "Only when the PC has been idle for 5 minutes");
+                        ui.add_space(4.0);
+                        ui.label("Warn me with a Windows notification (after a background scan, at most once a day):");
+                        let gb = |n: u32| if n == 0 { "never".to_owned() } else { format!("{n} GB") };
+                        ui.horizontal(|ui| {
+                            ui.label("when a drive has less free than");
+                            egui::ComboBox::from_id_salt("warn-free").selected_text(gb(v.s.warn_free_gb)).show_ui(ui, |ui| {
+                                for n in [0, 5, 10, 20, 50, 100] {
+                                    ui.selectable_value(&mut v.s.warn_free_gb, n, gb(n));
+                                }
+                            });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("when what's scanned grows in a day by more than");
+                            egui::ComboBox::from_id_salt("warn-grow").selected_text(gb(v.s.warn_grow_gb)).show_ui(ui, |ui| {
+                                for n in [0, 5, 10, 20, 50, 100] {
+                                    ui.selectable_value(&mut v.s.warn_grow_gb, n, gb(n));
+                                }
+                            });
+                        });
                     });
                     ui.add_space(6.0);
                     let state = if v.installed { "On: a Windows scheduled task runs it for your account." } else { "Off." };
@@ -2775,6 +2904,74 @@ impl XylemApp {
                                 ui.end_row();
                             }
                         });
+                    }
+                }
+                Dialog::Growth(v) => {
+                    ui.label(RichText::new("Size history").font(theme::semibold(16.0)));
+                    ui.add(egui::Label::new(RichText::new(format!(
+                        "{} · {} scans since {} · the history uses {} on this PC",
+                        visible(&v.root),
+                        v.points,
+                        xylem_session::date_text((v.first / 86_400) as u16),
+                        fmt_bytes(v.disk)
+                    )).color(t.muted)).wrap());
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(if v.drive { "Used space on the drive" } else { "Size of the folder" }).font(theme::semibold(13.0)));
+                    if v.chart.len() >= 2 {
+                        size_chart(ui, &t, &v.chart, vec2(ui.available_width(), 120.0), true);
+                    } else {
+                        ui.label(RichText::new("One scan so far: the chart starts with the next one.").color(t.faint));
+                    }
+                    if let Some(f) = &v.forecast {
+                        ui.add_space(4.0);
+                        let col = if matches!(f, Forecast::Full { low, .. } if *low < 60) { theme::WARN } else { t.text };
+                        ui.add(egui::Label::new(RichText::new(f.text(v.root.trim_end_matches('\\'))).color(col)).wrap())
+                            .on_hover_text("From the drive's free space at the last scan of each day, over up to 60 days. Sudden one-off jumps (one big download) aren't counted as the pace. A rough guide, not a promise.");
+                    }
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("What grew").font(theme::semibold(13.0)));
+                        for (i, name) in ["Last day", "Last week", "Last month"].into_iter().enumerate() {
+                            ui.selectable_value(&mut v.tab, i, name);
+                        }
+                    });
+                    match &v.growers[v.tab] {
+                        None => {
+                            ui.label(RichText::new("Needs at least two scans.").color(t.faint));
+                        }
+                        Some(ch) => {
+                            ui.label(RichText::new(format!(
+                                "Comparing the scan from {} with the latest ({}). {} → {} ({})",
+                                remember::age_text(ch.before_time),
+                                remember::age_text(ch.after_time),
+                                fmt_bytes(ch.before_total),
+                                fmt_bytes(ch.after_total),
+                                fmt_delta(i128::from(ch.after_total) - i128::from(ch.before_total))
+                            )).color(t.muted).size(12.0));
+                            if ch.mixed_methods() {
+                                ui.add(egui::Label::new(RichText::new("One of these scans was a Fast scan and the other a folder walk: they count some things differently, so part of the change comes from the method.").color(theme::WARN).size(12.0)).wrap());
+                            }
+                            if ch.items.is_empty() {
+                                ui.label(RichText::new("No folder changed by more than 1 MB (or 0.1% of the total).").color(t.faint));
+                            } else {
+                                egui::ScrollArea::vertical().id_salt("growers").max_height(220.0).show(ui, |ui| {
+                                    egui::Grid::new("growers").num_columns(3).striped(true).spacing([14.0, 4.0]).show(ui, |ui| {
+                                        for c in &ch.items {
+                                            let d = c.delta();
+                                            ui.label(RichText::new(fmt_delta(d)).color(if d > 0 { theme::WARN } else { t.accent }).strong());
+                                            ui.label(RichText::new(fmt_bytes(c.after)).color(t.muted));
+                                            let shown = if c.path.is_empty() { "(the scanned folder itself)".to_owned() } else { c.path.clone() };
+                                            let note = if c.before == 0 { "  new" } else if c.after == 0 { "  gone" } else { "" };
+                                            let r = ui.add(egui::Label::new(format!("{shown}{note}")).truncate().sense(Sense::click()));
+                                            if r.on_hover_text("Click to show it in the tree").clicked() {
+                                                jump = Some(c.path.clone());
+                                            }
+                                            ui.end_row();
+                                        }
+                                    });
+                                });
+                            }
+                        }
                     }
                 }
                 Dialog::Memory => {
@@ -3546,6 +3743,19 @@ impl XylemApp {
                         }
                         return;
                     }
+                    Dialog::Growth(_) => {
+                        let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
+                        if ui.add(ok).clicked() {
+                            close = true;
+                        }
+                        if ui.button("Scheduled scans…").on_hover_text("Background scans fill the history for you").clicked() {
+                            action = Some("open-schedule");
+                        }
+                        if ui.button("Clear history").on_hover_text("Deletes this drive's or folder's size history (Xylem's own file). Remembered scans stay.").clicked() {
+                            action = Some("history-clear");
+                        }
+                        return;
+                    }
                     Dialog::Memory => {
                         let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
                         if ui.add(ok).clicked() {
@@ -3710,6 +3920,13 @@ impl XylemApp {
                         (Ok(()), _) if v.on => format!("Saved. Next background scan within {}.", if v.s.every_min < 60 { format!("{} minutes", v.s.every_min) } else { format!("{} h", v.s.every_min / 60) }),
                         (Ok(()), _) => "Saved. Automatic scans are off.".into(),
                     });
+                }
+            }
+            Some("history-clear") => {
+                if let Some(Dialog::Growth(v)) = self.dialog.take() {
+                    history::clear(&v.root);
+                    self.set_hist(None);
+                    self.say(format!("Cleared the size history of {}.", visible(&v.root)));
                 }
             }
             Some("free-memory") => {
@@ -4028,6 +4245,53 @@ fn shield_button(ui: &mut Ui, t: &Tokens) -> egui::Response {
 /// "+1.2 GB" / "−300 MB" for a size change.
 /// `path` relative to the scan root `root` ("" for the root itself), if it's
 /// inside it. Case-insensitive, like Windows paths.
+/// A size-over-time line chart: (unix time, bytes). Hover shows the
+/// nearest scan's date and size. `axis` adds min/max and date labels.
+fn size_chart(ui: &mut Ui, t: &Tokens, pts: &[(u64, u64)], size: egui::Vec2, axis: bool) {
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
+    if pts.len() < 2 {
+        return;
+    }
+    let p = ui.painter_at(rect);
+    let pad = if axis { egui::vec2(64.0, 16.0) } else { egui::vec2(1.0, 2.0) };
+    let plot = Rect::from_min_max(rect.min + egui::vec2(pad.x, 2.0), rect.max - egui::vec2(2.0, pad.y));
+    if axis {
+        p.rect_filled(plot, CornerRadius::same(3), t.head);
+    }
+    let (t0, t1) = (pts[0].0 as f64, pts[pts.len() - 1].0.max(pts[0].0.saturating_add(1)) as f64);
+    let lo = pts.iter().map(|x| x.1).min().unwrap_or(0);
+    let hi = pts.iter().map(|x| x.1).max().unwrap_or(0);
+    // Pad a flat line so it sits in the middle instead of on an edge.
+    let (lo_f, hi_f) = if hi == lo { (lo as f64 * 0.95, hi as f64 * 1.05 + 1.0) } else { (lo as f64, hi as f64) };
+    let at = |x: &(u64, u64)| {
+        pos2(
+            plot.min.x + ((x.0 as f64 - t0) / (t1 - t0)) as f32 * plot.width(),
+            plot.max.y - (((x.1 as f64 - lo_f) / (hi_f - lo_f)) as f32 * plot.height()),
+        )
+    };
+    let line: Vec<egui::Pos2> = pts.iter().map(at).collect();
+    p.add(egui::Shape::line(line.clone(), egui::Stroke::new(if axis { 2.0 } else { 1.5 }, t.accent)));
+    if axis {
+        let font = egui::FontId::proportional(11.0);
+        p.text(pos2(rect.min.x, plot.min.y), egui::Align2::LEFT_TOP, fmt_bytes(hi), font.clone(), t.muted);
+        p.text(pos2(rect.min.x, plot.max.y), egui::Align2::LEFT_BOTTOM, fmt_bytes(lo), font.clone(), t.muted);
+        let day = |s: u64| xylem_session::date_text((s / 86_400) as u16);
+        p.text(pos2(plot.min.x, rect.max.y), egui::Align2::LEFT_BOTTOM, day(pts[0].0), font.clone(), t.faint);
+        p.text(pos2(plot.max.x, rect.max.y), egui::Align2::RIGHT_BOTTOM, day(pts[pts.len() - 1].0), font, t.faint);
+    }
+    if let Some(hover) = resp.hover_pos() {
+        let i = line.iter().enumerate().min_by(|a, b| (a.1.x - hover.x).abs().total_cmp(&(b.1.x - hover.x).abs())).map_or(0, |x| x.0);
+        p.circle_filled(line[i], 3.5, t.accent);
+        let (when, bytes) = pts[i];
+        resp.on_hover_text_at_pointer(format!(
+            "{} · {} ({})",
+            fmt_bytes(bytes),
+            xylem_session::date_text((when / 86_400) as u16),
+            remember::age_text(when)
+        ));
+    }
+}
+
 fn rel_of(root: &str, path: &str) -> Option<String> {
     let r = root.trim_end_matches('\\');
     let (head, tail) = (path.get(..r.len())?, path.get(r.len()..)?);

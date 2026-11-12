@@ -17,7 +17,7 @@
 
 ## What Xylem reads
 - **Scanning** reads names, sizes, attributes, last-modified dates and created dates (when a file arrived on this PC). Drives are opened read-only (`GENERIC_READ`); the scanning code contains no write calls. Last-opened dates aren't read.
-- **Scheduled scans** (off until you turn them on) are the same read-only folder walk, started by a Task Scheduler task that runs as you with least privilege. They never ask for admin, never run Fast scan, and write only Xylem's own files (the remembered scan and a small log in `%LOCALAPPDATA%\Xylem`). The task is removed when you turn them off or uninstall Xylem.
+- **Scheduled scans** (off until you turn them on) are the same read-only folder walk, started by a Task Scheduler task that runs as you with least privilege. They never ask for admin, never run Fast scan, and write only Xylem's own files (the remembered scan and a small log in `%LOCALAPPDATA%\Xylem`). The task is removed when you turn them off or uninstall Xylem. Their optional warnings are a local Windows notification (no network), at most once a day per reason.
 - **Ways to save space** works only from the scan in memory: it opens no file and changes nothing. Its buttons lead to the usual dialogs (Compress, the delete review, Windows' own tools).
 - **The duplicate finder** (View → Find duplicate files, only when you start it) compares files of the same size by their contents. It skips online-only cloud files (reading them would download them) and treats hardlinks as one file.
 - **Live updates** use Windows' change notifications for the scanned folder while the app is open. They read nothing else, and they stop when the app closes.
@@ -95,7 +95,8 @@ Still to do before 1.0: destructive tests on disposable machines, 24-hour fuzzin
 |---|---|---|
 | `%APPDATA%\Xylem\settings.json` | Theme, view choices, size alerts, last path | Delete the file |
 | `%APPDATA%\Xylem\rules.json` | Your custom rules, if you made any | Delete the file |
-| `%LOCALAPPDATA%\Xylem\cache\` | Names and sizes of your last scans (up to 8 drives or folders), for instant reopen and "what changed" | File → Forget remembered scans; File → Remember scans turns it off |
+| `%LOCALAPPDATA%\Xylem\cache\` | Names and sizes of your last scans (up to 8 drives or folders), for instant reopen and "what changed"; a size history of folders of 1 MB or more (`.hist`, at most 16 MB per drive or folder) | File → Forget remembered scans; View → Size history → Clear history; File → Remember scans turns both off |
+| `%LOCALAPPDATA%\Xylem\scheduled-scans.jsonl`, `warnings.json` | Scheduled scans only: one line per background scan (time, duration, memory, change, warning shown), and when each warning was last shown | Delete the files |
 | `%LOCALAPPDATA%\Xylem\deletions.log` | What you deleted with Xylem | Delete the file |
 | `Documents\Xylem\` | CSV exports and cleanup scripts you asked for | Delete the folder |
 

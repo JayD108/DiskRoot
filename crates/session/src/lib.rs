@@ -8,6 +8,7 @@
 
 pub mod compress;
 pub mod dupes;
+pub mod history;
 pub mod similar;
 pub mod savings;
 pub mod schedule;
@@ -21,6 +22,7 @@ pub mod safety;
 pub mod tools;
 pub mod orphans;
 pub mod power;
+pub mod warn;
 pub mod watch;
 
 use std::path::{Path, PathBuf};

@@ -49,11 +49,13 @@ mod tests {
         let (ws, peak, private) = super::memory().unwrap();
         assert!(ws > 0 && peak >= ws && private > 0);
         let t0 = super::cpu_seconds().unwrap();
+        // Busy for 100 ms of wall time: well over the ~16 ms tick of
+        // Windows' CPU-time clock (a fixed loop can finish within one tick).
+        let start = std::time::Instant::now();
         let mut x = 0u64;
-        for i in 0..50_000_000u64 {
-            x = x.wrapping_mul(31).wrapping_add(i);
+        while start.elapsed().as_millis() < 100 {
+            x = std::hint::black_box(x.wrapping_mul(31).wrapping_add(1));
         }
-        std::hint::black_box(x);
         assert!(super::cpu_seconds().unwrap() > t0);
     }
 }

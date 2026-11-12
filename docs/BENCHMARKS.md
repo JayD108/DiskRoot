@@ -84,6 +84,20 @@ Compressing a few 16 KB chunks spread over the file with Windows' XPRESS-Huffman
 
 64 chunks (1 MB read per file) are within 2.6 points on every type here, in about 10 ms. Not used by the app yet: today's estimates come from a per-type table built from these measurements (item C1 in [HELP-WANTED.md](HELP-WANTED.md)).
 
+## Size history
+
+Measured 12 Nov 2026 on the C: drive below (two real remembered scans 1.5 h apart, in memory and a temp file; `xylem-rnd` E13):
+
+| | |
+|---|---|
+| Folders in a full snapshot | 307,917 (39 MB file) |
+| Folders of 1 MB or more (kept in the history) | 25,942 |
+| First scan in the history | 2.67 MB |
+| Each scan after that (folders whose size changed) | 308 folders, ~3–4 KB |
+| Add a scan + thin | 13 ms |
+| Load the history | 20 ms |
+| Simulated month, a scan every 4 h (26k folders, 300 change each time) | 1.5 MB, 40 points after thinning |
+
 ## Method
 - **Machine:** one laptop: Intel Core Ultra 9 275HX (24 threads), NVMe SSD, Windows 11 Home. Drive C: is 1.86 TB with ~1.55 TB used, ~1.67M files and ~317k folders visible without admin (~2.0M items with admin).
 - **Same drive, warm cache, tools interleaved round-robin** so a busy moment on the disk doesn't hit just one tool.

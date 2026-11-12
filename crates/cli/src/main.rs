@@ -20,6 +20,25 @@ struct Cli {
 enum Cmd {
     /// Scan a drive or folder and list the biggest folders and files
     Scan(ScanArgs),
+    /// Size history the app keeps of a remembered drive or folder: how it
+    /// grew, what grew the most, and when the drive would be full
+    History(HistoryArgs),
+}
+
+#[derive(Args)]
+struct HistoryArgs {
+    /// Drive or folder the app scanned, e.g. C: or C:\Users
+    path: String,
+    /// Show one folder's size over time (path inside the scanned root,
+    /// e.g. Users\me\Downloads)
+    #[arg(long)]
+    folder: Option<String>,
+    /// What grew over this many days
+    #[arg(long, default_value_t = 7)]
+    days: u64,
+    /// Print JSON instead of text
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -70,7 +89,88 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Cmd::History(args) => match run_history(&args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        },
     }
+}
+
+fn day(secs: u64) -> String {
+    xylem_core::date_text(u16::try_from(secs / 86_400).unwrap_or(u16::MAX))
+}
+
+fn run_history(args: &HistoryArgs) -> Result<(), String> {
+    use xylem_session::history::{self, method_text};
+    use xylem_session::remember::age_text;
+    let mut root = args.path.trim().replace('/', "\\");
+    if root.len() == 2 && root.ends_with(':') {
+        root.push('\\');
+    }
+    let root = xylem_session::real_path(&root).unwrap_or(root);
+    let h = history::load(&root).ok_or_else(|| {
+        format!("no size history for {root} yet. The Xylem app keeps one for every scan it remembers (or turn on View > Scheduled scans).")
+    })?;
+    let label = root.trim_end_matches('\\').to_owned();
+    let fc = (root.len() <= 3).then(|| history::forecast(&h.points));
+    let growers = h.growers(args.days * 86_400, 20);
+    let series = args.folder.as_deref().map(|f| h.series(f.trim_matches('\\')));
+    if args.json {
+        let points: Vec<_> = h
+            .points
+            .iter()
+            .map(|p| serde_json::json!({"time": p.time, "method": method_text(p.method), "on_disk": p.total, "files": p.files, "volume_size": p.vol_total, "volume_free": p.vol_free}))
+            .collect();
+        let out = serde_json::json!({
+            "root": h.root,
+            "points": points,
+            "forecast": fc,
+            "forecast_text": fc.as_ref().map(|f| f.text(&label)),
+            "grew": growers.map(|g| serde_json::json!({"days": args.days, "from": g.before_time, "to": g.after_time, "items": g.items})),
+            "folder": series.map(|s| s.into_iter().map(|(t, b)| serde_json::json!({"time": t, "on_disk": b})).collect::<Vec<_>>()),
+        });
+        println!("{}", serde_json::to_string_pretty(&out).expect("valid JSON"));
+        return Ok(());
+    }
+    let first = h.points.first().map_or(0, |p| p.time);
+    println!("Size history of {} · {} scans since {} · history files use {}", h.root, h.points.len(), day(first), bytes(history::disk_usage()));
+    if let Some(f) = &fc {
+        println!("  {}", f.text(&label));
+    }
+    println!("\nLatest scans");
+    println!("  {:<12} {:<14} {:<12} {:>10}  {:>10}", "Date", "When", "Method", "On disk", "Drive free");
+    for p in h.points.iter().rev().take(10) {
+        let free = if p.vol_total > 0 { bytes(p.vol_free) } else { "-".into() };
+        println!("  {:<12} {:<14} {:<12} {:>10}  {:>10}", day(p.time), age_text(p.time), method_text(p.method), bytes(p.total), free);
+    }
+    if let Some(s) = series {
+        println!("\n{} over time (0 B = not there or under 1 MB)", args.folder.as_deref().unwrap_or_default());
+        if s.is_empty() {
+            println!("  never 1 MB or more in the history");
+        }
+        for (t, b) in s.iter().rev().take(20) {
+            println!("  {:<12} {:<14} {:>10}", day(*t), age_text(*t), bytes(*b));
+        }
+    }
+    match growers {
+        None => println!("\nWhat grew: needs at least two scans."),
+        Some(g) => {
+            println!("\nWhat changed since the scan from {} (asked: last {} days)", age_text(g.before_time), args.days);
+            if g.items.is_empty() {
+                println!("  no folder changed by more than 1 MB (or 0.1% of the total)");
+            }
+            for c in &g.items {
+                let d = c.delta();
+                let sign = if d >= 0 { "+" } else { "-" };
+                let path = if c.path.is_empty() { "(the scanned folder itself)" } else { &c.path };
+                println!("  {sign}{:>9}  {:>10}  {path}", bytes(d.unsigned_abs() as u64), bytes(c.after));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn run_scan(args: &ScanArgs) -> std::io::Result<()> {

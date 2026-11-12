@@ -55,11 +55,15 @@ pub struct Schedule {
     pub on_battery: bool,
     /// Only when the PC has been idle for a few minutes.
     pub only_idle: bool,
+    /// Warn when a scanned drive has less than this many GB free (0 = off).
+    pub warn_free_gb: u32,
+    /// Warn when a scanned root grew by more than this many GB in a day (0 = off).
+    pub warn_grow_gb: u32,
 }
 
 impl Default for Schedule {
     fn default() -> Self {
-        Self { every_min: 120, roots: vec!["C:\\".into()], on_battery: false, only_idle: false }
+        Self { every_min: 120, roots: vec!["C:\\".into()], on_battery: false, only_idle: false, warn_free_gb: 10, warn_grow_gb: 0 }
     }
 }
 
@@ -76,6 +80,9 @@ pub struct Run {
     /// Change in size on disk since the previous remembered scan.
     pub delta: Option<i128>,
     pub error: Option<String>,
+    /// A warning shown after this run (low space, fast growth).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 fn roaming() -> Option<PathBuf> {
@@ -271,11 +278,13 @@ fn run_scheduled() -> i32 {
         // Peak committed memory: background mode trims the working set, so its
         // peak would understate what the scan needed.
         let peak_ram = crate::process::peak_private().unwrap_or(0);
+        let secs = t.elapsed().as_secs_f64();
         let (files, delta, error) = match r {
             Ok((f, d)) => (f, d, None),
             Err(e) => (0, None, Some(e)),
         };
-        append_run(&Run { time: now_secs(), root: root.clone(), secs: t.elapsed().as_secs_f64(), peak_ram, files, delta, error });
+        let warning = if error.is_none() { crate::warn::after_scan(root, s.warn_free_gb, s.warn_grow_gb, now_secs()) } else { None };
+        append_run(&Run { time: now_secs(), root: root.clone(), secs, peak_ram, files, delta, error, warning });
     }
     unsafe { CloseHandle(mutex) };
     0
@@ -299,7 +308,7 @@ mod tests {
 
     #[test]
     fn task_definition_is_least_privilege_and_escaped() {
-        let s = Schedule { every_min: 10, roots: vec!["C:\\".into()], on_battery: false, only_idle: true };
+        let s = Schedule { every_min: 10, roots: vec!["C:\\".into()], on_battery: false, only_idle: true, ..Schedule::default() };
         let x = task_xml(&s, Path::new(r"C:\Program Files\X & Y\xylem.exe"));
         assert!(x.contains("<Interval>PT30M</Interval>"), "never more often than every 30 minutes");
         assert!(x.contains("<RunLevel>LeastPrivilege</RunLevel>"));
@@ -347,7 +356,7 @@ mod tests {
             std::env::set_var("LOCALAPPDATA", dir.join("l"));
         }
         let exe = std::env::current_exe().unwrap();
-        let s = Schedule { every_min: 240, roots: vec!["C:\\".into()], on_battery: false, only_idle: false };
+        let s = Schedule { every_min: 240, roots: vec!["C:\\".into()], on_battery: false, only_idle: false, ..Schedule::default() };
         install(&s, &exe).expect("created without admin");
         let was_installed = installed();
         let q = schtasks(&["/query", "/tn", &task_name(), "/xml"]).unwrap_or_default();

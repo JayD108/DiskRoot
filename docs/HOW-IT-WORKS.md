@@ -146,6 +146,7 @@ The folder where a classification was decided is the item's **anchor**. The Cate
 3. **Compares** the new snapshot with the previous one. Folders are matched by a fingerprint of their path, and Xylem reports the **deepest** folder where a change happened (at least 1 MB or 0.1% of the total), not every parent above it. These numbers also feed the tree's Change column.
 4. **Instant reopen:** at start, the last root's file is loaded, checked like any other file, and shown with its age. C: reopens in about 0.3–0.4 s.
 5. At most 8 roots are kept. After a delete, the saved scan of that root is dropped, because it's out of date.
+6. **Size history** (`history.rs`): the folders of 1 MB or more are added to `<fingerprint>.hist` as one point (time, scan method, root size, the volume's size and free space, and only the folders whose size changed since the previous point). Old points are thinned (every scan for 2 days, daily for 60 days, weekly after) by replaying the sizes and re-expressing the kept points, so their sizes stay exact. "Drive full in ~N days" fits a robust trend to the volume's daily used space (rare sudden jumps removed, Theil-Sen slope, range from quartiles) and needs a week of scans.
 
 ## 6. Live updates and alerts
 

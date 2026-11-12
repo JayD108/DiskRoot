@@ -3261,6 +3261,7 @@ dependencies = [
  "xylem-core",
  "xylem-scan-mft",
  "xylem-scan-walk",
+ "xylem-session",
 ]
 
 [[package]]
