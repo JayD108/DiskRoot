@@ -101,11 +101,19 @@ struct RawFile {
 /// folders such as Rust's `target`).
 #[derive(Deserialize)]
 struct RawMarker {
+    /// A file name ("Cargo.toml") or "*.ext" ("*.sln").
     file: String,
     cat: String,
     sub: String,
     safety: Option<Safety>,
     note: Option<String>,
+    /// Extension rules may re-classify files inside (a project's videos).
+    #[serde(default)]
+    weak: bool,
+    /// Child folders the project's tools rebuild ("bin", "obj").
+    #[serde(default)]
+    rebuild: Vec<String>,
+    rebuild_note: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -247,9 +255,11 @@ pub struct Rules {
     /// Rules whose last component contains '*'.
     wild_last: Vec<usize>,
     ext: HashMap<u64, ExtRule>,
-    /// Marker files (lowercase name, rule index): a folder holding one is
-    /// classified by that rule.
+    /// Marker files (lowercase name or "*.ext", rule index): a folder
+    /// holding one is classified by that rule. Earlier entries win.
     markers: Vec<(String, usize)>,
+    /// Marker rule -> (rebuildable child folder names, lowercase; their rule).
+    rebuild: HashMap<usize, (Vec<String>, usize)>,
     /// Rules from this index on are the user's. They never apply where a
     /// built-in rule matches, nor inside a place protected as a tree.
     user_start: usize,
@@ -332,13 +342,21 @@ impl Rules {
             info.push(RuleInfo { safety: r.safety, note: r.note, protect: r.protect, app: r.app, action: r.action, user: false, apps_only: r.apps_only });
         }
         let mut markers = Vec::new();
+        let mut rebuild = HashMap::new();
         for m in raw.markers {
             let sub = sub_id(&m.cat, &m.sub)?;
-            markers.push((m.file.to_ascii_lowercase(), rules.len()));
+            let at = rules.len();
+            markers.push((m.file.to_ascii_lowercase(), at));
             // Not in the name lookups: a marker rule applies only through
             // its marker file.
-            rules.push(Rule { comps: Vec::new(), anchored: false, kind: Kind::Dir, sub, weak: false });
+            rules.push(Rule { comps: Vec::new(), anchored: false, kind: Kind::Dir, sub, weak: m.weak });
             info.push(RuleInfo { safety: m.safety, note: m.note, protect: None, app: Vec::new(), action: None, user: false, apps_only: false });
+            if !m.rebuild.is_empty() {
+                let build = sub_id("dev", "Build output")?;
+                rebuild.insert(at, (m.rebuild.iter().map(|n| n.to_ascii_lowercase()).collect(), rules.len()));
+                rules.push(Rule { comps: Vec::new(), anchored: false, kind: Kind::Dir, sub: build, weak: false });
+                info.push(RuleInfo { safety: Some(Safety::Green), note: m.rebuild_note, protect: None, app: Vec::new(), action: None, user: false, apps_only: false });
+            }
         }
         if rules.len() >= NO_RULE as usize {
             return Err("rules: too many rules".into());
@@ -351,7 +369,7 @@ impl Rules {
             }
         }
         let user_start = rules.len();
-        let mut r = Self { rules, info, subs, by_last, wild_last, ext, markers, user_start };
+        let mut r = Self { rules, info, subs, by_last, wild_last, ext, markers, rebuild, user_start };
         r.sort_lookups();
         Ok(r)
     }
@@ -562,18 +580,41 @@ impl Classification {
             (best, best_user)
         };
 
-        // Folders holding a marker file (e.g. CACHEDIR.TAG). One cheap pass
-        // over file names; only a handful match.
+        // Folders holding a marker file (CACHEDIR.TAG, Cargo.toml, *.sln).
+        // One cheap pass over file names; only a handful match. When a
+        // folder holds several, the earliest marker in the list wins.
         let mut marked: HashMap<u32, usize> = HashMap::new();
         if !rules.markers.is_empty() {
-            let max_len = rules.markers.iter().map(|m| m.0.len()).max().unwrap_or(0);
+            // Cheap filters first: almost every file is rejected by its name
+            // length (bit set of marker-name lengths) or its last letter.
+            let mut len_mask = 0u64;
+            let mut last_bytes = [false; 256];
+            for m in &rules.markers {
+                match m.0.strip_prefix('*') {
+                    Some(ext) => last_bytes[ext.as_bytes()[ext.len() - 1].to_ascii_lowercase() as usize] = true,
+                    None if m.0.len() < 64 => len_mask |= 1 << m.0.len(),
+                    None => {}
+                }
+            }
             for id in 1..n as u32 {
+                if idx.is_dir(id) {
+                    continue;
+                }
                 let name = idx.name(id);
-                if !idx.is_dir(id)
-                    && name.len() <= max_len
-                    && let Some(m) = rules.markers.iter().find(|m| m.0.eq_ignore_ascii_case(name))
-                {
-                    marked.insert(idx.parent(id), m.1);
+                let b = name.as_bytes();
+                let by_len = b.len() < 64 && len_mask & (1 << b.len()) != 0;
+                let by_ext = b.last().is_some_and(|&c| last_bytes[c.to_ascii_lowercase() as usize]);
+                if !by_len && !by_ext {
+                    continue;
+                }
+                // The earliest marker that matches.
+                let hit = rules.markers.iter().find(|m| match m.0.strip_prefix('*') {
+                    Some(ext) => by_ext && b.len() > ext.len() && name.is_char_boundary(b.len() - ext.len()) && name[b.len() - ext.len()..].eq_ignore_ascii_case(ext),
+                    None => by_len && m.0.eq_ignore_ascii_case(name),
+                });
+                if let Some(&(_, r)) = hit {
+                    let e = marked.entry(idx.parent(id)).or_insert(r);
+                    *e = (*e).min(r);
                 }
             }
         }
@@ -603,8 +644,19 @@ impl Classification {
             depth[i] = depth[p].saturating_add(1);
             let prot = c.bits[p] & IN_PROT != 0;
             let (builtin, user) = find(id, name, is_dir, depth[i], &root_comps, !prot);
-            let marker = || if prot || !is_dir || marked.is_empty() { None } else { marked.get(&id).copied() };
-            if let Some(r) = builtin.or_else(marker).or(user) {
+            // Markers count only in the user's own (weak) places: a package
+            // inside node_modules has a package.json too, but stays node_modules.
+            let mine = !prot && is_dir && c.bits[p] & WEAK != 0;
+            let marker = || if !mine || marked.is_empty() { None } else { marked.get(&id).copied() };
+            // A project's rebuildable child folder ("bin" next to a .csproj).
+            let rebuilt = || {
+                if !is_dir || prot || c.bits[p] & MATCHED_HERE == 0 {
+                    return None;
+                }
+                let (names, r) = rules.rebuild.get(&(c.rule[p] as usize))?;
+                names.iter().any(|x| x.eq_ignore_ascii_case(name)).then_some(*r)
+            };
+            if let Some(r) = builtin.or_else(rebuilt).or_else(marker).or(user) {
                 c.apply_rule(id, r, rules, prot);
                 continue;
             }
@@ -1282,6 +1334,55 @@ mod tests {
         // Inside Program Files the marker changes nothing: still protected.
         assert!(sub_name(&rules, &c, inner).contains("Installed programs"));
         assert!(c.protection(&t.idx, &rules, inner).is_some());
+    }
+
+    /// Project markers: the project folder is "Code projects" (check first),
+    /// its known rebuildable children are "Build output" (safe), files with
+    /// known types inside keep their own category, and a package.json inside
+    /// node_modules doesn't turn the package into a project.
+    #[test]
+    fn projects_and_their_rebuildable_parts() {
+        let rules = Rules::builtin();
+        let mut t = T::new("C:\\");
+        let users = t.dir(0, "Users");
+        let me = t.dir(users, "me");
+        let app = t.dir(me, "WebApp");
+        t.file(app, "package.json", 1);
+        let nm = t.dir(app, "node_modules");
+        let pkg = t.dir(nm, "left-pad");
+        t.file(pkg, "package.json", 1);
+        let next = t.dir(app, ".next");
+        t.file(next, "chunk.js", 50);
+        let video = t.file(app, "demo.mp4", 500);
+        let src = t.file(app, "index.ts", 5);
+        let dotnet = t.dir(me, "Tool");
+        t.file(dotnet, "Tool.sln", 1);
+        t.file(dotnet, "Tool.csproj", 1);
+        let bin = t.dir(dotnet, "bin");
+        t.file(bin, "Tool.dll", 80);
+        let docs = t.dir(dotnet, "docs");
+        let model = t.dir(me, "llama");
+        t.file(model, "tokenizer_config.json", 1);
+        let weights = t.file(model, "pytorch_model.bin", 900);
+        let data = t.file(me, "readings.csv", 300);
+        let part = t.file(me, "movie.mkv.crdownload", 700);
+        t.idx.compute_totals();
+        let c = Classification::run(&t.idx, &rules);
+        assert_eq!(sub_name(&rules, &c, app), "Dev stuff > Code projects");
+        assert_eq!(rules.info[c.rule[app as usize] as usize].safety, Some(Safety::Yellow));
+        assert!(rules.info[c.rule[app as usize] as usize].note.as_deref().unwrap_or("").contains("JavaScript"));
+        assert_eq!(sub_name(&rules, &c, src), "Dev stuff > Code projects");
+        assert!(sub_name(&rules, &c, video).starts_with("Media"), "videos in a project are still media: {}", sub_name(&rules, &c, video));
+        assert_eq!(sub_name(&rules, &c, pkg), sub_name(&rules, &c, nm), "a package inside node_modules stays node_modules");
+        assert_eq!(sub_name(&rules, &c, next), "Dev stuff > Build output");
+        assert_eq!(rules.info[c.rule[next as usize] as usize].safety, Some(Safety::Green));
+        // .sln is earlier in the list than .csproj: the solution note wins; bin is build output.
+        assert!(rules.info[c.rule[dotnet as usize] as usize].note.as_deref().unwrap_or("").contains("solution"));
+        assert_eq!(sub_name(&rules, &c, bin), "Dev stuff > Build output");
+        assert_eq!(sub_name(&rules, &c, docs), "Dev stuff > Code projects", "not every child is rebuildable");
+        assert_eq!(sub_name(&rules, &c, weights), "AI & data > Model files");
+        assert_eq!(sub_name(&rules, &c, data), "AI & data > Datasets");
+        assert!(sub_name(&rules, &c, part).ends_with("Unfinished downloads"), "{}", sub_name(&rules, &c, part));
     }
 
     /// User rules classify ordinary places, but can never take over a node a
