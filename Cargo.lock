@@ -700,6 +700,63 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
+name = "diskroot"
+version = "0.5.1"
+dependencies = [
+ "diskroot-session",
+ "eframe",
+ "serde",
+ "serde_json",
+ "winresource",
+]
+
+[[package]]
+name = "diskroot-bench"
+version = "0.5.1"
+dependencies = [
+ "clap",
+ "diskroot-core",
+ "diskroot-scan-mft",
+ "diskroot-scan-walk",
+]
+
+[[package]]
+name = "diskroot-core"
+version = "0.5.1"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "diskroot-scan-mft"
+version = "0.5.1"
+dependencies = [
+ "diskroot-core",
+ "diskroot-scan-walk",
+]
+
+[[package]]
+name = "diskroot-scan-walk"
+version = "0.5.1"
+dependencies = [
+ "diskroot-core",
+]
+
+[[package]]
+name = "diskroot-session"
+version = "0.5.1"
+dependencies = [
+ "blake3",
+ "diskroot-core",
+ "diskroot-scan-mft",
+ "diskroot-scan-walk",
+ "lz4_flex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dispatch"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -744,6 +801,19 @@ name = "dpi"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
+
+[[package]]
+name = "droot"
+version = "0.5.1"
+dependencies = [
+ "clap",
+ "diskroot-core",
+ "diskroot-scan-mft",
+ "diskroot-scan-walk",
+ "diskroot-session",
+ "serde_json",
+ "winresource",
+]
 
 [[package]]
 name = "ecolor"
@@ -3244,76 +3314,6 @@ name = "xml-rs"
 version = "0.8.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
-
-[[package]]
-name = "xylem"
-version = "0.5.1"
-dependencies = [
- "eframe",
- "serde",
- "serde_json",
- "winresource",
- "xylem-session",
-]
-
-[[package]]
-name = "xylem-bench"
-version = "0.5.1"
-dependencies = [
- "clap",
- "xylem-core",
- "xylem-scan-mft",
- "xylem-scan-walk",
-]
-
-[[package]]
-name = "xylem-cli"
-version = "0.5.1"
-dependencies = [
- "clap",
- "serde_json",
- "winresource",
- "xylem-core",
- "xylem-scan-mft",
- "xylem-scan-walk",
- "xylem-session",
-]
-
-[[package]]
-name = "xylem-core"
-version = "0.5.1"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "xylem-scan-mft"
-version = "0.5.1"
-dependencies = [
- "xylem-core",
- "xylem-scan-walk",
-]
-
-[[package]]
-name = "xylem-scan-walk"
-version = "0.5.1"
-dependencies = [
- "xylem-core",
-]
-
-[[package]]
-name = "xylem-session"
-version = "0.5.1"
-dependencies = [
- "blake3",
- "lz4_flex",
- "serde",
- "serde_json",
- "xylem-core",
- "xylem-scan-mft",
- "xylem-scan-walk",
-]
 
 [[package]]
 name = "zbus"

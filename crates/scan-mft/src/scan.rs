@@ -17,8 +17,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Instant;
 
-use xylem_core::win::{FILE_ATTRIBUTE_DIRECTORY, node_flags};
-use xylem_core::{Columns, Index, NO_PARENT, Scan, ScanStats, flags};
+use diskroot_core::win::{FILE_ATTRIBUTE_DIRECTORY, node_flags};
+use diskroot_core::{Columns, Index, NO_PARENT, Scan, ScanStats, flags};
 
 use crate::record::{NO_REC, Parsed, parse_record};
 use crate::volume::{AlignedBuf, Extent, Volume, VolumeInfo, mft_extents};
@@ -48,7 +48,7 @@ pub fn scan_drive(letter: char, threads: usize) -> io::Result<Scan> {
 
 /// Like [`scan_drive`], on a volume opened earlier with [`Volume::open`].
 /// The elevated helper opens the volume first, then drops its rights
-/// (`xylem_session::lockdown`), and only then parses: the open handle keeps
+/// (`diskroot_session::lockdown`), and only then parses: the open handle keeps
 /// its read access, but a parser bug can no longer use admin rights.
 pub fn scan_volume(vol: &Volume, letter: char, threads: usize) -> io::Result<Scan> {
     scan_volume_from(vol, letter, threads, Instant::now())
@@ -109,7 +109,7 @@ fn scan_volume_from(vol: &Volume, letter: char, threads: usize, start: Instant) 
     let t_read = start.elapsed();
     let (index, mut stats) = build_tree(letter, chunks, total as usize);
     stats.elapsed = start.elapsed();
-    if std::env::var_os("XYLEM_TRACE").is_some() {
+    if std::env::var_os("DISKROOT_TRACE").is_some() {
         eprintln!(
             "[mft] {} records, {} MB MFT, {} extents, {} jobs, {threads} threads: open {:.3} s, boot {:.3} s, extents {:.3} s, read+parse {:.3} s, build {:.3} s",
             total,
@@ -166,7 +166,7 @@ fn get<'a>(chunks: &'a [ChunkOut], slot: &[u64], rec: u32) -> Option<&'a Parsed>
 }
 
 pub(crate) fn build_tree(letter: char, mut chunks: Vec<ChunkOut>, total: usize) -> (Index, ScanStats) {
-    let trace = std::env::var_os("XYLEM_TRACE").is_some();
+    let trace = std::env::var_os("DISKROOT_TRACE").is_some();
     let t0 = Instant::now();
     let lap = |what: &str| {
         if trace {
@@ -424,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "speed benchmark: cargo test --release -p xylem-scan-mft -- --ignored --nocapture"]
+    #[ignore = "speed benchmark: cargo test --release -p diskroot-scan-mft -- --ignored --nocapture"]
     fn build_speed() {
         let n = 1_770_000;
         let mut best = f64::MAX;

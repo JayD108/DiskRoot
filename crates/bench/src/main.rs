@@ -1,9 +1,9 @@
 //! Benchmark harness.
 //!
 //! - `gen`:    build a repeatable synthetic folder tree
-//! - `run`:    time xylem's scanner over several runs (warm cache)
+//! - `run`:    time diskroot's scanner over several runs (warm cache)
 //! - `time`:   time any external command the same way (e.g. another tool's CLI)
-//! - `verify`: compare xylem's totals with a simple std::fs reference walk
+//! - `verify`: compare diskroot's totals with a simple std::fs reference walk
 //!
 //! Cold-cache runs need a reboot, or emptying the standby list with
 //! Sysinternals RAMMap, before each run.
@@ -15,14 +15,14 @@ use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
-use xylem_core::flags;
-use xylem_core::format::{bytes, count};
-use xylem_core::Index;
-use xylem_scan_mft::{Mode, Used, scan_auto};
-use xylem_scan_walk::{ScanOptions, default_threads, scan, sys};
+use diskroot_core::flags;
+use diskroot_core::format::{bytes, count};
+use diskroot_core::Index;
+use diskroot_scan_mft::{Mode, Used, scan_auto};
+use diskroot_scan_walk::{ScanOptions, default_threads, scan, sys};
 
 #[derive(Parser)]
-#[command(name = "xylem-bench", about = "Benchmark and accuracy harness for xylem")]
+#[command(name = "diskroot-bench", about = "Benchmark and accuracy harness for diskroot")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -45,7 +45,7 @@ enum Cmd {
         #[arg(long, default_value_t = 1)]
         seed: u64,
     },
-    /// Time xylem scans of PATH
+    /// Time diskroot scans of PATH
     Run {
         path: PathBuf,
         #[arg(long, default_value_t = 5)]
@@ -62,14 +62,14 @@ enum Cmd {
         #[arg(long)]
         threads: Option<usize>,
     },
-    /// Time an external command: xylem-bench time --runs 3 -- prog args...
+    /// Time an external command: diskroot-bench time --runs 3 -- prog args...
     Time {
         #[arg(long, default_value_t = 3)]
         runs: usize,
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         cmd: Vec<String>,
     },
-    /// Check xylem's file count and total size against a std::fs walk
+    /// Check diskroot's file count and total size against a std::fs walk
     Verify {
         path: PathBuf,
         #[arg(long)]
@@ -244,7 +244,7 @@ fn link_id(p: &Path) -> Option<(u32, (u32, u64))> {
         .then(|| (info[10], (info[7], (u64::from(info[11]) << 32) | u64::from(info[12]))))
 }
 
-/// Plain single-threaded walk with std::fs. Like xylem, it does not follow
+/// Plain single-threaded walk with std::fs. Like diskroot, it does not follow
 /// symlinks or junctions (std treats both as symlinks on Windows).
 fn reference_walk(root: &Path) -> RefTotals {
     let mut t = RefTotals::default();
@@ -262,7 +262,7 @@ fn reference_walk(root: &Path) -> RefTotals {
             } else if ft.is_file() {
                 t.files += 1;
                 // A file with several names (hardlinks) counts its bytes once,
-                // like Xylem's walk (asked file by file here, independently).
+                // like DiskRoot's walk (asked file by file here, independently).
                 let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
                 match link_id(&entry.path()) {
                     Some((links, id)) if links > 1 && !seen.insert(id) => {}
@@ -288,7 +288,7 @@ fn verify(path: &Path, threads: Option<usize>) -> std::io::Result<bool> {
     let r = reference_walk(path);
 
     println!("             {:>15}  {:>20}  {:>10}", "files", "bytes", "unreadable");
-    println!("xylem      {:>15}  {:>20}  {:>10}", count(files), count(size), count(s.stats.unreadable));
+    println!("diskroot      {:>15}  {:>20}  {:>10}", count(files), count(size), count(s.stats.unreadable));
     println!("std::fs      {:>15}  {:>20}  {:>10}", count(r.files), count(r.size), count(r.unreadable));
     let ok = files == r.files && size == r.size;
     if ok {

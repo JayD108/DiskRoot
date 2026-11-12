@@ -9,7 +9,7 @@ use eframe::egui::{
     Align2, Color32, CornerRadius, Mesh, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, emath::Rot2, epaint::TextShape,
     pos2, vec2,
 };
-use xylem_session::Shape as Node;
+use diskroot_session::Shape as Node;
 
 use crate::theme::{self, Tokens};
 
@@ -177,7 +177,7 @@ pub fn hit(layout: &Layout, p: Pos2) -> Option<Hit> {
 
 fn color_of(n: &Node, depth: u8, t: &Tokens, today: Option<u16>) -> Color32 {
     let base = match today {
-        Some(d) => theme::age_color(xylem_session::age_bucket(d, n.mtime)),
+        Some(d) => theme::age_color(diskroot_session::age_bucket(d, n.mtime)),
         None if n.cat == u8::MAX => theme::cat_color(9),
         None => theme::cat_color(n.cat),
     };

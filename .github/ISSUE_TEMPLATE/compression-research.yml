@@ -1,5 +1,5 @@
 name: Compression research
-description: Propose a way to make Xylem's compression save more space or run faster
+description: Propose a way to make DiskRoot's compression save more space or run faster
 title: "[Compression] "
 labels: ["compression-research"]
 body:
@@ -30,7 +30,7 @@ body:
   - type: checkboxes
     id: rules
     attributes:
-      label: Xylem's rules
+      label: DiskRoot's rules
       options:
         - label: Works offline (no network), without kernel drivers
           required: true

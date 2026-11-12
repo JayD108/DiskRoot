@@ -4,7 +4,7 @@
 
 ## Rules every change keeps
 1. **Speed:** scans never get slower (C: ≈ 1.1 s with admin, ≈ 4.3 s without), near-zero idle CPU, memory not meaningfully higher. Every feature is benchmarked before it's merged.
-2. **Read-only scanning:** scanning never changes your files; Xylem's own cache is compressed and kept small (it's SSD writes too).
+2. **Read-only scanning:** scanning never changes your files; DiskRoot's own cache is compressed and kept small (it's SSD writes too).
 3. **Careful changes:** anything that changes files happens only after you confirm, is re-checked on disk first, and is undoable where possible (Recycle Bin).
 4. **Least privilege:** the window doesn't need admin (it warns if started elevated, and never reads the raw drive itself). Admin work goes through a minimal helper, or through Windows' own tools behind Windows' own UAC prompt.
 5. **Offline and private:** no network; nothing runs at startup unless you turn it on.
@@ -18,7 +18,7 @@
 | v0.3.0 | Own fast compression engine (right-click Compress), Similar folders, real size of compressed files in the normal scan, "what changed" knows the scan method | Released (unsigned) |
 | v0.4.0 | Ways to save space (what to compress, other ways to get space back), arrival dates ("changed or added"), measured compression estimates, cache rules safe only in app data, compression research call | Released (unsigned) |
 | v0.4.1 | One download with the CLI on PATH, always-latest download links | Released (unsigned) |
-| v0.5.0 | Home, Drive health and Who's writing (no admin), scheduled scans, size history and forecast, warnings, Where every GB is, hardlinks once in the folder walk, smarter categories (projects, owners, teach Xylem), Xylem's own RAM/CPU | Ready, waiting for the final test and the owner's go |
+| v0.5.0 | Home, Drive health and Who's writing (no admin), scheduled scans, size history and forecast, warnings, Where every GB is, hardlinks once in the folder walk, smarter categories (projects, owners, teach DiskRoot), DiskRoot's own RAM/CPU | Ready, waiting for the final test and the owner's go |
 | 1.0 | Signed, tested on more hardware | Planned |
 
 ## Done

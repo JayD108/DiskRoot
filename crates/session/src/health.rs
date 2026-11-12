@@ -8,7 +8,7 @@
 //!   `StorageDeviceProtocolSpecificProperty`: % of rated life used, data
 //!   written and read, temperature, spare, errors, power-on hours.
 //!
-//! Measured on Windows 11 (xylem-rnd E14): the disk is opened with no access
+//! Measured on Windows 11 (diskroot-rnd E14): the disk is opened with no access
 //! rights at all (opening it for reading needs admin). Everything here only
 //! asks the drive for reports; nothing is written. SATA drives' SMART needs
 //! admin (ATA pass-through) and comes later through the helper.
@@ -238,9 +238,9 @@ fn describe(number: u32, letters: Vec<String>) -> Option<Drive> {
             Err(e) => (None, Some(format!("The drive didn't give its health report (Windows error {e})."))),
         }
     } else if ssd == Some(false) {
-        (None, Some("A spinning hard disk: SSD wear doesn't apply. Its SMART report needs admin; Xylem will read it in a later version.".into()))
+        (None, Some("A spinning hard disk: SSD wear doesn't apply. Its SMART report needs admin; DiskRoot will read it in a later version.".into()))
     } else {
-        (None, Some(format!("A {bus} drive: its health report (SMART) needs admin. Xylem will read it in a later version.")))
+        (None, Some(format!("A {bus} drive: its health report (SMART) needs admin. DiskRoot will read it in a later version.")))
     };
     Some(Drive { number, letters, model: c_string(&desc, u32_at(&desc, 16).unwrap_or(0)), firmware: c_string(&desc, u32_at(&desc, 20).unwrap_or(0)), bus, ssd, trim, nvme, note })
 }
@@ -302,16 +302,16 @@ pub fn trim_enabled() -> Option<bool> {
 }
 
 fn tb(b: u128) -> String {
-    xylem_core::format::bytes(u64::try_from(b).unwrap_or(u64::MAX))
+    diskroot_core::format::bytes(u64::try_from(b).unwrap_or(u64::MAX))
 }
 
 fn hours_text(h: u128) -> String {
     let d = h / 24;
     match h {
         0..=47 => format!("{h} powered-on hours"),
-        _ if d < 60 => format!("{} powered-on hours (about {d} days)", xylem_core::format::count(h as u64)),
-        _ if d < 730 => format!("{} powered-on hours (about {} months)", xylem_core::format::count(h as u64), d / 30),
-        _ => format!("{} powered-on hours (about {:.1} years)", xylem_core::format::count(h as u64), d as f64 / 365.0),
+        _ if d < 60 => format!("{} powered-on hours (about {d} days)", diskroot_core::format::count(h as u64)),
+        _ if d < 730 => format!("{} powered-on hours (about {} months)", diskroot_core::format::count(h as u64), d / 30),
+        _ => format!("{} powered-on hours (about {:.1} years)", diskroot_core::format::count(h as u64), d as f64 / 365.0),
     }
 }
 
@@ -354,14 +354,14 @@ impl Drive {
             out.push(format!("{} written · {} read · {}", tb(h.written_bytes), tb(h.read_bytes), hours_text(h.power_on_hours)));
             let mut t = format!("{} °C now", h.temp_c);
             if h.warn_temp_minutes > 0 {
-                t += &format!(" · ran hot (above its warning temperature) for {} min in total", xylem_core::format::count(u64::from(h.warn_temp_minutes)));
+                t += &format!(" · ran hot (above its warning temperature) for {} min in total", diskroot_core::format::count(u64::from(h.warn_temp_minutes)));
             }
             out.push(t);
             out.push(format!("Spare blocks {}% (critical at {}%) · {} media errors", h.spare, h.spare_threshold, h.media_errors));
             out.push(format!(
                 "{} power cycles · {} unsafe shutdowns (power cut or held power button)",
-                xylem_core::format::count(u64::try_from(h.power_cycles).unwrap_or(u64::MAX)),
-                xylem_core::format::count(u64::try_from(h.unsafe_shutdowns).unwrap_or(u64::MAX))
+                diskroot_core::format::count(u64::try_from(h.power_cycles).unwrap_or(u64::MAX)),
+                diskroot_core::format::count(u64::try_from(h.unsafe_shutdowns).unwrap_or(u64::MAX))
             ));
             for w in h.warnings() {
                 out.push(w.to_owned());
@@ -394,7 +394,7 @@ const DAY: u64 = 86_400;
 /// Keep at most this many snapshot lines (a few drives for years).
 const KEEP: usize = 4000;
 
-/// One day's numbers for one drive, in `%LOCALAPPDATA%\Xylem\health.jsonl`.
+/// One day's numbers for one drive, in `%LOCALAPPDATA%\DiskRoot\health.jsonl`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Snap {
     pub time: u64,
@@ -413,7 +413,7 @@ fn drive_key(d: &Drive) -> String {
 }
 
 fn snaps_path() -> Option<std::path::PathBuf> {
-    Some(std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Xylem").join("health.jsonl"))
+    Some(std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("DiskRoot").join("health.jsonl"))
 }
 
 /// All saved snapshots, oldest first (damaged lines are skipped).
@@ -521,7 +521,7 @@ fn life_text(mine: &[&Snap], last: &Snap) -> String {
     let span = span_of(mine[0]);
     if span < 30.0 {
         let so_far = if span < 1.0 { "started today".to_owned() } else { format!("{span:.0} days so far") };
-        return format!("Too early to tell: the drive reports wear in whole percent. Xylem keeps a daily note ({so_far}); after a month, or when it moves, there's an estimate.");
+        return format!("Too early to tell: the drive reports wear in whole percent. DiskRoot keeps a daily note ({so_far}); after a month, or when it moves, there's an estimate.");
     }
     // Under 1% in `span` days -> more than left * span days.
     let more_than = years(f64::from(left) * span);

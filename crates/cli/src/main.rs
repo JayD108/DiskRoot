@@ -4,13 +4,13 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use xylem_core::format::{bytes, count};
-use xylem_core::report::{self, Entry, SortBy};
-use xylem_scan_mft::{Mode, Used, scan_auto};
-use xylem_scan_walk::{default_threads, sys};
+use diskroot_core::format::{bytes, count};
+use diskroot_core::report::{self, Entry, SortBy};
+use diskroot_scan_mft::{Mode, Used, scan_auto};
+use diskroot_scan_walk::{default_threads, sys};
 
 #[derive(Parser)]
-#[command(name = "xylem", version, about = "Fast disk space analyzer for Windows")]
+#[command(name = "diskroot", version, about = "Fast disk space analyzer for Windows")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -107,6 +107,8 @@ enum By {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    // DiskRoot used to be called Xylem: history and health notes move along.
+    let _ = diskroot_session::migrate_from_xylem();
     match cli.cmd {
         Cmd::Scan(args) => match run_scan(&args) {
             Ok(()) => ExitCode::SUCCESS,
@@ -140,12 +142,12 @@ fn main() -> ExitCode {
 }
 
 fn run_writes(args: &WritesArgs) -> Result<(), String> {
-    use xylem_session::{health, writes};
+    use diskroot_session::{health, writes};
     if args.secs == 0 || args.secs > 3600 {
         return Err("--secs must be 1 to 3600".into());
     }
     let mut disks: Vec<(u32, Vec<String>)> = Vec::new();
-    for d in xylem_session::drives() {
+    for d in diskroot_session::drives() {
         if let Some(n) = health::disk_of(&d) {
             let l = d.trim_end_matches('\\').to_owned();
             match disks.iter_mut().find(|x| x.0 == n) {
@@ -188,7 +190,7 @@ fn run_writes(args: &WritesArgs) -> Result<(), String> {
 }
 
 fn run_health(args: &HealthArgs) -> Result<(), String> {
-    use xylem_session::health;
+    use diskroot_session::health;
     let drives = health::drives();
     let trim = health::trim_enabled();
     health::record_daily(&drives);
@@ -256,19 +258,19 @@ fn run_health(args: &HealthArgs) -> Result<(), String> {
 }
 
 fn day(secs: u64) -> String {
-    xylem_core::date_text(u16::try_from(secs / 86_400).unwrap_or(u16::MAX))
+    diskroot_core::date_text(u16::try_from(secs / 86_400).unwrap_or(u16::MAX))
 }
 
 fn run_history(args: &HistoryArgs) -> Result<(), String> {
-    use xylem_session::history::{self, method_text};
-    use xylem_session::remember::age_text;
+    use diskroot_session::history::{self, method_text};
+    use diskroot_session::remember::age_text;
     let mut root = args.path.trim().replace('/', "\\");
     if root.len() == 2 && root.ends_with(':') {
         root.push('\\');
     }
-    let root = xylem_session::real_path(&root).unwrap_or(root);
+    let root = diskroot_session::real_path(&root).unwrap_or(root);
     let h = history::load(&root).ok_or_else(|| {
-        format!("no size history for {root} yet. The Xylem app keeps one for every scan it remembers (or turn on View > Scheduled scans).")
+        format!("no size history for {root} yet. The DiskRoot app keeps one for every scan it remembers (or turn on View > Scheduled scans).")
     })?;
     let label = root.trim_end_matches('\\').to_owned();
     let fc = (root.len() <= 3).then(|| history::forecast(&h.points));

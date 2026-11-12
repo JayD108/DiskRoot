@@ -1,4 +1,4 @@
-# Builds a Xylem release into .\dist: binaries -> (optional) signing ->
+# Builds a DiskRoot release into .\dist: binaries -> (optional) signing ->
 # installer -> portable zip -> SHA-256 checksums.
 #
 #   .\tools\release.ps1                   # everything (local test build)
@@ -11,10 +11,10 @@
 # (.github/workflows/release.yml) through SignPath, so signing there doesn't
 # use this script's signtool step. For a local build with your own
 # certificate, set ONE of:
-#   $env:XYLEM_SIGN_THUMBPRINT = "<sha1 thumbprint>"     # cert in the Windows store / token
-#   $env:XYLEM_SIGN_PFX = "C:\path\cert.pfx"; $env:XYLEM_SIGN_PFX_PASSWORD = "..."
-#   $env:XYLEM_SIGN_DLIB = "...\Azure.CodeSigning.Dlib.dll"; $env:XYLEM_SIGN_DLIB_METADATA = "...\metadata.json"
-# Optional: $env:XYLEM_TIMESTAMP_URL (default http://timestamp.digicert.com).
+#   $env:DISKROOT_SIGN_THUMBPRINT = "<sha1 thumbprint>"     # cert in the Windows store / token
+#   $env:DISKROOT_SIGN_PFX = "C:\path\cert.pfx"; $env:DISKROOT_SIGN_PFX_PASSWORD = "..."
+#   $env:DISKROOT_SIGN_DLIB = "...\Azure.CodeSigning.Dlib.dll"; $env:DISKROOT_SIGN_DLIB_METADATA = "...\metadata.json"
+# Optional: $env:DISKROOT_TIMESTAMP_URL (default http://timestamp.digicert.com).
 # Timestamping is the only step that goes online.
 param(
   [ValidateSet("all", "build", "package")][string]$Step = "all",
@@ -34,7 +34,7 @@ if (-not $Version) {
 }
 $dist = Join-Path $root "dist"
 New-Item -ItemType Directory -Force $dist | Out-Null
-$bins = "xylem.exe", "xylem-cli.exe"
+$bins = "diskroot.exe", "droot.exe"
 
 function Find-SignTool {
   $kits = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
@@ -44,11 +44,11 @@ function Find-SignTool {
   $st.FullName
 }
 function Sign-Files([string[]]$files) {
-  $ts = if ($env:XYLEM_TIMESTAMP_URL) { $env:XYLEM_TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
-  $common = @("sign", "/fd", "SHA256", "/tr", $ts, "/td", "SHA256", "/d", "Xylem")
-  if ($env:XYLEM_SIGN_THUMBPRINT) { $how = @("/sha1", $env:XYLEM_SIGN_THUMBPRINT) }
-  elseif ($env:XYLEM_SIGN_PFX) { $how = @("/f", $env:XYLEM_SIGN_PFX, "/p", $env:XYLEM_SIGN_PFX_PASSWORD) }
-  elseif ($env:XYLEM_SIGN_DLIB) { $how = @("/dlib", $env:XYLEM_SIGN_DLIB, "/dmdf", $env:XYLEM_SIGN_DLIB_METADATA) }
+  $ts = if ($env:DISKROOT_TIMESTAMP_URL) { $env:DISKROOT_TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
+  $common = @("sign", "/fd", "SHA256", "/tr", $ts, "/td", "SHA256", "/d", "DiskRoot")
+  if ($env:DISKROOT_SIGN_THUMBPRINT) { $how = @("/sha1", $env:DISKROOT_SIGN_THUMBPRINT) }
+  elseif ($env:DISKROOT_SIGN_PFX) { $how = @("/f", $env:DISKROOT_SIGN_PFX, "/p", $env:DISKROOT_SIGN_PFX_PASSWORD) }
+  elseif ($env:DISKROOT_SIGN_DLIB) { $how = @("/dlib", $env:DISKROOT_SIGN_DLIB, "/dmdf", $env:DISKROOT_SIGN_DLIB_METADATA) }
   else { return $false }
   $st = Find-SignTool
   & $st @common @how @files
@@ -62,7 +62,7 @@ function Sign-Files([string[]]$files) {
 if ($Step -in "all", "build") {
   if (-not $SkipBuild) {
     Write-Host "== Building release binaries"
-    cargo build --release -p xylem -p xylem-cli
+    cargo build --release -p diskroot -p droot
     if ($LASTEXITCODE) { throw "cargo build failed" }
   }
   $StageDir = Join-Path $dist "stage"
@@ -88,15 +88,15 @@ $makensis = @($env:MAKENSIS, "${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env
   Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 if (-not $makensis) { throw "NSIS not found (choco install nsis / winget install NSIS.NSIS, or set MAKENSIS)" }
 Write-Host "== Building installer"
-& $makensis /V2 "/DVERSION=$Version" "/DSRCDIR=$StageDir" "/DOUTDIR=$dist" installer\xylem.nsi
+& $makensis /V2 "/DVERSION=$Version" "/DSRCDIR=$StageDir" "/DOUTDIR=$dist" installer\diskroot.nsi
 if ($LASTEXITCODE) { throw "makensis failed" }
-$setup = Join-Path $dist "xylem-setup-$Version.exe"
+$setup = Join-Path $dist "diskroot-setup-$Version.exe"
 if ($signed) { Sign-Files @($setup) | Out-Null }
 
 # Portable zip (same binaries) for people who don't want an installer.
-$zip = Join-Path $dist "xylem-$Version-portable.zip"
+$zip = Join-Path $dist "diskroot-$Version-portable.zip"
 Remove-Item $zip -ErrorAction SilentlyContinue
-Compress-Archive -Path (Join-Path $StageDir "xylem.exe"), (Join-Path $StageDir "xylem-cli.exe"), README.md, LICENSE-MIT, LICENSE-APACHE -DestinationPath $zip
+Compress-Archive -Path (Join-Path $StageDir "diskroot.exe"), (Join-Path $StageDir "droot.exe"), README.md, LICENSE-MIT, LICENSE-APACHE -DestinationPath $zip
 
 # 3. Checksums ------------------------------------------------------------------
 $sums = Join-Path $dist "SHA256SUMS.txt"

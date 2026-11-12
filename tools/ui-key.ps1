@@ -1,6 +1,6 @@
 # Usage: .\tools\ui-key.ps1 -Pid0 <pid> -Key 0x28      (0x28 = Down, 0x26 = Up, 0x0D = Enter)
 #
-# Posts a key press to the Xylem window's own message queue, so the real
+# Posts a key press to the DiskRoot window's own message queue, so the real
 # keyboard focus and the mouse are never touched. For UI checks where a
 # tree row has to be selected (tree rows aren't reachable by ui-click).
 param([int]$Pid0, [int]$Key = 0x28, [int]$Times = 1)

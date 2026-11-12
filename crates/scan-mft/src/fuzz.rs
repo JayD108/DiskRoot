@@ -2,7 +2,7 @@
 //! corrupt or hostile volume must never crash it, hang it or make it read
 //! out of bounds. These feed it millions of random and mutated inputs.
 //! No extra tools needed: they run with `cargo test` (deterministic seeds).
-//! Set `XYLEM_FUZZ_ROUNDS` for a longer run.
+//! Set `DISKROOT_FUZZ_ROUNDS` for a longer run.
 
 use crate::record::tests::{file_name, non_resident, record, std_info};
 use crate::record::{data_extension_records, decode_runs, parse_record};
@@ -53,7 +53,7 @@ impl Rng {
 }
 
 fn rounds(default: usize) -> usize {
-    std::env::var("XYLEM_FUZZ_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    std::env::var("DISKROOT_FUZZ_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
 
 fn seed_records() -> Vec<Vec<u8>> {
@@ -175,7 +175,7 @@ fn tree_build_survives_random_parent_links() {
 }
 
 /// Writes seed inputs for the coverage-guided fuzzers in `fuzz/`:
-/// `cargo test -p xylem-scan-mft write_fuzz_seeds -- --ignored`
+/// `cargo test -p diskroot-scan-mft write_fuzz_seeds -- --ignored`
 #[test]
 #[ignore = "writes files into fuzz/corpus; run by hand"]
 fn write_fuzz_seeds() {
@@ -198,12 +198,12 @@ fn write_fuzz_seeds() {
     boot[0x30..0x38].copy_from_slice(&786_432u64.to_le_bytes());
     boot[0x40] = (-10i8) as u8;
     put("boot_sector", "ntfs", &boot);
-    let mut idx = xylem_core::Index::new("C:\\");
-    let d = idx.push(0, "dir", 0, 0, xylem_core::flags::DIR);
+    let mut idx = diskroot_core::Index::new("C:\\");
+    let d = idx.push(0, "dir", 0, 0, diskroot_core::flags::DIR);
     idx.push(d, "a.bin", 100, 4096, 0);
-    idx.push(0, "b.txt", 7, 0, xylem_core::flags::CLOUD);
+    idx.push(0, "b.txt", 7, 0, diskroot_core::flags::CLOUD);
     idx.compute_totals();
     let mut buf = Vec::new();
-    idx.save(&xylem_core::ScanStats::default(), "MFT", &mut buf).unwrap();
+    idx.save(&diskroot_core::ScanStats::default(), "MFT", &mut buf).unwrap();
     put("index_file", "small", &buf);
 }

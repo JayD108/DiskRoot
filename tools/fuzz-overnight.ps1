@@ -1,4 +1,4 @@
-# Long coverage-guided fuzzing of Xylem's untrusted-input parsers (cargo-fuzz
+# Long coverage-guided fuzzing of DiskRoot's untrusted-input parsers (cargo-fuzz
 # + libFuzzer + AddressSanitizer), all targets in parallel.
 #
 #   .\tools\fuzz-overnight.ps1 -Hours 10          # default 10 h per target
@@ -8,7 +8,7 @@
 # (clang_rt.asan_dynamic-x86_64.dll, part of the VS C++ build tools).
 # Output: fuzz\logs\<target>.log, crashes in fuzz\artifacts\<target>\,
 # the growing corpus in fuzz\corpus\<target>\ (seed it with
-# `cargo test -p xylem-scan-mft write_fuzz_seeds -- --ignored`).
+# `cargo test -p diskroot-scan-mft write_fuzz_seeds -- --ignored`).
 param([double]$Hours = 10, [string[]]$Targets = @("mft_record", "run_list", "boot_sector", "mft_tree", "index_file", "snapshot_file"))
 $ErrorActionPreference = "Continue"
 $root = Split-Path -Parent $PSScriptRoot

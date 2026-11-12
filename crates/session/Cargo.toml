@@ -1,16 +1,16 @@
 [package]
-name = "xylem-session"
-description = "UI-agnostic engine API used by the Xylem app"
+name = "diskroot-session"
+description = "UI-agnostic engine API used by the DiskRoot app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-xylem-core.workspace = true
-xylem-scan-walk.workspace = true
-xylem-scan-mft.workspace = true
+diskroot-core.workspace = true
+diskroot-scan-walk.workspace = true
+diskroot-scan-mft.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 blake3 = { version = "1", default-features = false, features = ["std"] }
-# Compresses Xylem's own cache files (pure Rust, MIT).
+# Compresses DiskRoot's own cache files (pure Rust, MIT).
 lz4_flex = "0.14"

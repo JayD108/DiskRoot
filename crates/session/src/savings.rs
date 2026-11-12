@@ -8,17 +8,17 @@
 //! and the day it arrived on this PC ([`Index::touched`]): downloads and
 //! unpacked datasets keep their author's modified date, often years older
 //! than the download. Windows keeps last-access dates only loosely (often
-//! switched off, updated by virus scanners and backups), so Xylem doesn't
+//! switched off, updated by virus scanners and backups), so DiskRoot doesn't
 //! use them and never calls something "unused".
 //!
-//! [`Index::touched`]: xylem_core::Index::touched
+//! [`Index::touched`]: diskroot_core::Index::touched
 
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::Instant;
 
-use xylem_core::classify::{Action, Safety};
-use xylem_core::flags;
+use diskroot_core::classify::{Action, Safety};
+use diskroot_core::flags;
 
 use crate::compress::{self, Level, Verdict};
 use crate::{Scanned, safety, today_days};
@@ -27,7 +27,7 @@ use crate::{Scanned, safety, today_days};
 const CAT_TEMP: u8 = 6;
 
 /// Something that could be compressed: the highest folder (or a big file)
-/// that hasn't changed for `min_days`, with what Xylem's engine would pack.
+/// that hasn't changed for `min_days`, with what DiskRoot's engine would pack.
 #[derive(Clone, Debug)]
 pub struct Candidate {
     pub node: u32,
@@ -66,7 +66,7 @@ pub struct Suggestions {
     pub min_saving: u64,
     /// Why nothing on this drive can be compressed (not NTFS), if so.
     pub not_possible: Option<String>,
-    /// False for scans saved by Xylem 0.3 or older (no created dates):
+    /// False for scans saved by DiskRoot 0.3 or older (no created dates):
     /// ages then come from last-modified alone and may look too old.
     pub has_arrival_dates: bool,
     pub secs: f64,
@@ -116,7 +116,7 @@ pub struct Tip {
 
 impl Scanned {
     /// View > Ways to save space > Compress: folders and big files whose
-    /// newest file is at least `min_days` old and where Xylem's engine would
+    /// newest file is at least `min_days` old and where DiskRoot's engine would
     /// save at least `min_saving` (rough estimate, Maximum). The highest
     /// such folder is listed, not everything inside it. Same rules as the
     /// Compress dialog: protected places, cloud folders, links and caches
@@ -206,7 +206,7 @@ impl Scanned {
         // cache, not an app's) is probably rebuildable, but maybe only by
         // hours of work: never offered as "safe".
         for p in &mut caches {
-            if xylem_core::classify::in_own_files(&p.path) {
+            if diskroot_core::classify::in_own_files(&p.path) {
                 p.markable = false;
                 p.note = Some("A cache folder inside your own files, not an app's. Check what made it before clearing it: rebuilding a project's cache can take long.".into());
             }
@@ -346,7 +346,7 @@ impl Scanned {
                 bytes: None,
                 how: format!(
                     "It looks like {}, but most of it is shared with C:\\Windows, so the real saving is much smaller. Windows' DISM cleanup removes old component versions.",
-                    xylem_core::format::bytes(win.bytes)
+                    diskroot_core::format::bytes(win.bytes)
                 ),
                 places: Vec::new(),
                 button: Some(("Clean up with DISM", TipAction::Tool(Action::DismCleanup))),
@@ -354,7 +354,7 @@ impl Scanned {
             tips.push(Tip {
                 title: "Let Windows compress itself (Compact OS)".into(),
                 bytes: None,
-                how: "Windows can keep its own files compressed; Microsoft quotes about 2.6 GB saved on 64-bit Windows. In a terminal opened as administrator: 'compact /compactos:query' shows whether it's on, 'compact /compactos:always' turns it on. Xylem doesn't compress C:\\Windows itself.".into(),
+                how: "Windows can keep its own files compressed; Microsoft quotes about 2.6 GB saved on 64-bit Windows. In a terminal opened as administrator: 'compact /compactos:query' shows whether it's on, 'compact /compactos:always' turns it on. DiskRoot doesn't compress C:\\Windows itself.".into(),
                 places: Vec::new(),
                 button: None,
             });
@@ -385,7 +385,7 @@ impl Scanned {
             .into_iter()
             .filter(|&n| {
                 let mut cur = idx.parent(n);
-                while cur != xylem_core::NO_PARENT {
+                while cur != diskroot_core::NO_PARENT {
                     if set.contains(&cur) {
                         return false;
                     }
@@ -411,7 +411,7 @@ impl Scanned {
             note: if with_note { info.and_then(|i| i.note.clone()) } else { None },
             markable: n != 0
                 && self.cls.matched_here(n)
-                && info.is_some_and(|i| xylem_core::classify::safety_at(i, &self.index.path(n)) == Some(Safety::Green) && !i.user)
+                && info.is_some_and(|i| diskroot_core::classify::safety_at(i, &self.index.path(n)) == Some(Safety::Green) && !i.user)
                 && self.cls.protection(&self.index, &self.rules, n).is_none(),
             vhdx,
         }
@@ -464,7 +464,7 @@ fn tip(title: &str, places: Vec<Place>, how: &str, button: Option<(&'static str,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xylem_core::{Index, ScanStats};
+    use diskroot_core::{Index, ScanStats};
 
     const MB: u64 = 1 << 20;
 
@@ -596,15 +596,15 @@ mod tests {
         assert!(tips[sized.len()..].iter().all(|t| t.bytes.is_none()));
     }
 
-    /// Real-data check (prints, changes nothing). Set XYLEM_SAVINGS_PATH
+    /// Real-data check (prints, changes nothing). Set DISKROOT_SAVINGS_PATH
     /// (default C:) and run with --release --ignored --nocapture.
     #[test]
     #[ignore = "scans a real drive"]
     fn real_drive() {
-        let path = std::env::var("XYLEM_SAVINGS_PATH").unwrap_or_else(|_| "C:\\".into());
+        let path = std::env::var("DISKROOT_SAVINGS_PATH").unwrap_or_else(|_| "C:\\".into());
         let s = crate::scan(&path).unwrap();
         let today = today_days();
-        let b = xylem_core::format::bytes;
+        let b = diskroot_core::format::bytes;
         for days in [30, 90, 180, 365] {
             let t = Instant::now();
             let got = s.compress_suggestions(days, 256 * MB, 100);
@@ -628,7 +628,7 @@ mod tests {
                 );
             }
         }
-        if let Ok(probe) = std::env::var("XYLEM_SAVINGS_PROBE") {
+        if let Ok(probe) = std::env::var("DISKROOT_SAVINGS_PROBE") {
             let idx = &s.index;
             let mut n = s.find_rel(&probe).expect("probe path in scan");
             loop {

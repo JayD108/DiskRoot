@@ -206,7 +206,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 
 [[package]]
-name = "xylem-core"
+name = "diskroot-core"
 version = "0.2.0"
 dependencies = [
  "serde",
@@ -214,40 +214,40 @@ dependencies = [
 ]
 
 [[package]]
-name = "xylem-fuzz"
+name = "diskroot-fuzz"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
- "xylem-core",
- "xylem-scan-mft",
- "xylem-session",
+ "diskroot-core",
+ "diskroot-scan-mft",
+ "diskroot-session",
 ]
 
 [[package]]
-name = "xylem-scan-mft"
+name = "diskroot-scan-mft"
 version = "0.2.0"
 dependencies = [
- "xylem-core",
- "xylem-scan-walk",
+ "diskroot-core",
+ "diskroot-scan-walk",
 ]
 
 [[package]]
-name = "xylem-scan-walk"
+name = "diskroot-scan-walk"
 version = "0.2.0"
 dependencies = [
- "xylem-core",
+ "diskroot-core",
 ]
 
 [[package]]
-name = "xylem-session"
+name = "diskroot-session"
 version = "0.2.0"
 dependencies = [
  "blake3",
  "serde",
  "serde_json",
- "xylem-core",
- "xylem-scan-mft",
- "xylem-scan-walk",
+ "diskroot-core",
+ "diskroot-scan-mft",
+ "diskroot-scan-walk",
 ]
 
 [[package]]

@@ -43,7 +43,7 @@ impl Children {
         Self { start, kids }
     }
 
-    /// All children, including ones deleted through Xylem.
+    /// All children, including ones deleted through DiskRoot.
     pub fn of(&self, id: u32) -> &[u32] {
         let i = id as usize;
         &self.kids[self.start[i] as usize..self.start[i + 1] as usize]

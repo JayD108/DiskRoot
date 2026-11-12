@@ -1,28 +1,28 @@
-# Xylem command line (`xylem-cli`)
+# DiskRoot command line (`droot`)
 
 [← Back to README](../README.md)
 
-`xylem-cli.exe` scans a drive or folder and lists what takes the space, as a table, as JSON, or as a full CSV. Like the app, it **only reads**: it never changes, moves or deletes anything, and it never goes online.
+`droot.exe` scans a drive or folder and lists what takes the space, as a table, as JSON, or as a full CSV. Like the app, it **only reads**: it never changes, moves or deletes anything, and it never goes online.
 
 ---
 
 ## 1. Get it
 
-| You have | Where `xylem-cli.exe` is |
+| You have | Where `droot.exe` is |
 |---|---|
-| The installer ([`xylem-setup.exe`](https://github.com/JayD108/Xylem/releases/latest/download/xylem-setup.exe)) | `C:\Program Files\Xylem\xylem-cli.exe`, **added to PATH by the installer** since 0.4.1 (component "Command-line tool (xylem-cli), on PATH", on by default). Open a new terminal and it works |
-| The portable zip (`xylem-<version>-portable.zip`) | Next to `xylem.exe` wherever you unzipped it |
+| The installer ([`diskroot-setup.exe`](https://github.com/JayD108/DiskRoot/releases/latest/download/diskroot-setup.exe)) | `C:\Program Files\DiskRoot\droot.exe`, **added to PATH by the installer** since 0.4.1 (component "Command-line tool (droot), on PATH", on by default). Open a new terminal and it works |
+| The portable zip (`diskroot-<version>-portable.zip`) | Next to `diskroot.exe` wherever you unzipped it |
 
-Downloads: [Releases](https://github.com/JayD108/Xylem/releases/latest).
+Downloads: [Releases](https://github.com/JayD108/DiskRoot/releases/latest).
 
-## 2. Make `xylem-cli` work from any folder
+## 2. Make `droot` work from any folder
 
-**Installed with 0.4.1 or newer:** nothing to do. Open a *new* terminal (PATH is read when a window starts) and type `xylem-cli --version`.
+**Installed with 0.4.1 or newer:** nothing to do. Open a *new* terminal (PATH is read when a window starts) and type `droot --version`.
 
 **Portable zip, or installed 0.4.0 or older:** Windows only finds a program by name if its folder is on your **PATH**. Add it once (your account only, no admin needed). In PowerShell:
 
 ```powershell
-$dir = "C:\Program Files\Xylem"   # or the folder you unzipped the portable version to
+$dir = "C:\Program Files\DiskRoot"   # or the folder you unzipped the portable version to
 $p = [Environment]::GetEnvironmentVariable("Path", "User")
 if (-not (($p -split ';') -contains $dir)) { [Environment]::SetEnvironmentVariable("Path", ($p.TrimEnd(';') + ";" + $dir).TrimStart(';'), "User") }
 ```
@@ -30,23 +30,23 @@ if (-not (($p -split ';') -contains $dir)) { [Environment]::SetEnvironmentVariab
 Then **close PowerShell and open a new window** (PATH is read when a window starts) and check:
 
 ```powershell
-xylem-cli --version
+droot --version
 ```
 
-Without PATH, use the full path. In PowerShell, quote it and put `&` in front: `& "C:\Program Files\Xylem\xylem-cli.exe" scan C:\`
+Without PATH, use the full path. In PowerShell, quote it and put `&` in front: `& "C:\Program Files\DiskRoot\droot.exe" scan C:\`
 
 To undo, remove the folder from Settings → System → About → Advanced system settings → Environment Variables → *Path* (your user).
 
 ## 3. Commands
 
 ```
-xylem-cli scan [OPTIONS] <PATH>     scan a drive or folder and report
-xylem-cli history [OPTIONS] <PATH>  size history the app keeps of a drive or folder
-xylem-cli health [--json]           drive health: SSD wear, data written, temperature, errors
-xylem-cli writes [--secs N] [--json] who's writing: top programs and each drive's write counter
-xylem-cli --version                 print the version
-xylem-cli --help                    list commands
-xylem-cli scan --help               list scan options
+droot scan [OPTIONS] <PATH>     scan a drive or folder and report
+droot history [OPTIONS] <PATH>  size history the app keeps of a drive or folder
+droot health [--json]           drive health: SSD wear, data written, temperature, errors
+droot writes [--secs N] [--json] who's writing: top programs and each drive's write counter
+droot --version                 print the version
+droot --help                    list commands
+droot scan --help               list scan options
 ```
 
 ### `scan` options
@@ -75,7 +75,7 @@ Reads the size history the app saves with every remembered scan (and every sched
 Example (shortened; the numbers are made up):
 
 ```
-> xylem-cli history C: --days 30
+> droot history C: --days 30
 Size history of C:\ · 31 scans since 2026-10-13 · history files use 2.68 MB
   At the pace of the last 30 days (+1.00 GB a day), C: would be full in about 330 days.
 
@@ -90,10 +90,10 @@ What changed since the scan from 30 days ago (asked: last 30 days)
 
 ### `health`
 
-Asks every disk for its own health report (NVMe drives; SATA/USB need admin and come later). Read-only on the disk, no admin; like the app, it adds today's small note to `%LOCALAPPDATA%\Xylem\health.jsonl`, from which it shows writes per day and the life estimate. `--json` gives every field; the 128-bit counters (bytes written, hours, errors) are strings so no digits are lost.
+Asks every disk for its own health report (NVMe drives; SATA/USB need admin and come later). Read-only on the disk, no admin; like the app, it adds today's small note to `%LOCALAPPDATA%\DiskRoot\health.jsonl`, from which it shows writes per day and the life estimate. `--json` gives every field; the 128-bit counters (bytes written, hours, errors) are strings so no digits are lost.
 
 ```
-> xylem-cli health
+> droot health
 Disk 0 · C: · WD PC SN8000S SDEQNRG-2T00-1002 · NVMe SSD · firmware 63100100
   Good: 1% of rated life used.
   33.3 TB written · 122 TB read · 1,071 powered-on hours (about 44 days)
@@ -110,7 +110,7 @@ Windows sends TRIM to SSDs (on).
 Measures for `--secs` seconds (default 10, at most 3600), then lists the programs that wrote the most (`--top`, default 15) and each drive's own counter. Read-only, no admin. "Written" counts everything a program writes (files, pipes, some network), so compare it with the drive line.
 
 ```
-> xylem-cli writes --secs 5 --top 3
+> droot writes --secs 5 --top 3
 Drive C: (disk 0): 4.16 MB written (853 KB/s)
 
    Written     Per sec  Program   (writes include pipes and some network, not only disk)
@@ -123,36 +123,36 @@ Drive C: (disk 0): 4.16 MB written (853 KB/s)
 
 ```powershell
 # The 20 biggest folders and files on C:
-xylem-cli scan C:\ --top 20
+droot scan C:\ --top 20
 
 # One folder (quotes because of the space)
-xylem-cli scan "C:\Users\me\Downloads" --top 10
+droot scan "C:\Users\me\Downloads" --top 10
 
 # Rank by real (logical) size instead of size on disk
-xylem-cli scan D:\ --by size
+droot scan D:\ --by size
 
 # Everything into a spreadsheet (opens in Excel)
-xylem-cli scan C:\ --export "$env:USERPROFILE\Desktop\c-drive.csv"
+droot scan C:\ --export "$env:USERPROFILE\Desktop\c-drive.csv"
 
 # JSON for scripts
-xylem-cli scan C:\ --json > c.json
+droot scan C:\ --json > c.json
 
 # Fast scan of a whole drive: open PowerShell as administrator first
-xylem-cli scan C:\ --mode mft
+droot scan C:\ --mode mft
 ```
 
 ### Use it from scripts
 
 PowerShell:
 ```powershell
-$r = xylem-cli scan C:\ --json --top 10 | ConvertFrom-Json
+$r = droot scan C:\ --json --top 10 | ConvertFrom-Json
 $r.top_folders | Select-Object path, @{n='GB';e={[math]::Round($_.on_disk/1GB,1)}}
 ```
 
 Python:
 ```python
 import json, subprocess
-r = json.loads(subprocess.run(["xylem-cli", "scan", "C:\\", "--json", "--top", "10"], capture_output=True, text=True, check=True).stdout)
+r = json.loads(subprocess.run(["droot", "scan", "C:\\", "--json", "--top", "10"], capture_output=True, text=True, check=True).stdout)
 for f in r["top_folders"]:
     print(f'{f["on_disk"] / 2**30:6.1f} GB  {f["path"]}')
 ```
@@ -228,4 +228,4 @@ A whole C: drive is about 2 million rows (~300 MB; C:\Windows alone: 277,000 row
 
 ## 8. What the CLI doesn't do (yet)
 
-The CLI only reports. Categories, safety labels, **Save space**, **Compress**, delete, "what changed" between the last two scans and duplicates are in the app (`xylem.exe`); `history` reads what the app saved. Ideas for CLI commands for those are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md).
+The CLI only reports. Categories, safety labels, **Save space**, **Compress**, delete, "what changed" between the last two scans and duplicates are in the app (`diskroot.exe`); `history` reads what the app saved. Ideas for CLI commands for those are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md).

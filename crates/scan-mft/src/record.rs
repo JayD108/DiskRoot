@@ -315,10 +315,10 @@ pub fn parse_record(rec_no: u32, rec: &mut [u8], names: &mut String) -> Option<P
                     }
                     // Offset 0: creation, 8: last data modification (FILETIMEs).
                     if let Some(t) = v.get(0..8) {
-                        p.added = xylem_core::filetime_days(u64::from_le_bytes(t.try_into().expect("8 bytes")));
+                        p.added = diskroot_core::filetime_days(u64::from_le_bytes(t.try_into().expect("8 bytes")));
                     }
                     if let Some(t) = v.get(8..16) {
-                        p.mtime = xylem_core::filetime_days(u64::from_le_bytes(t.try_into().expect("8 bytes")));
+                        p.mtime = diskroot_core::filetime_days(u64::from_le_bytes(t.try_into().expect("8 bytes")));
                     }
                 }
             }
@@ -573,9 +573,9 @@ pub(crate) mod tests {
         let p = parse_record(50, &mut r, &mut String::new()).unwrap();
         assert_eq!(p.attrs, 0x20);
         assert_eq!(p.mtime, 19_723, "last-modified day from $STANDARD_INFORMATION");
-        assert_eq!(xylem_core::win::node_flags(p.attrs, p.reparse_tag) & xylem_core::flags::CLOUD, 0);
+        assert_eq!(diskroot_core::win::node_flags(p.attrs, p.reparse_tag) & diskroot_core::flags::CLOUD, 0);
         // A real OneDrive placeholder is still cloud (reparse tag).
-        assert_ne!(xylem_core::win::node_flags(0x20 | 0x0040_0000, 0x9000_601A) & xylem_core::flags::CLOUD, 0);
+        assert_ne!(diskroot_core::win::node_flags(0x20 | 0x0040_0000, 0x9000_601A) & diskroot_core::flags::CLOUD, 0);
     }
 
     #[test]

@@ -1,10 +1,10 @@
-//! Xylem's own cache files (remembered scans, snapshots, history):
+//! DiskRoot's own cache files (remembered scans, snapshots, history):
 //! written lz4-compressed, atomically, under one cross-process lock.
 //!
 //! Why: a remembered scan of C: was ~150 MB of writes per scan (106 MB
 //! index + 39 MB snapshot + history); with scheduled scans that adds up on
 //! an SSD. lz4 (pure Rust) shrinks the index to ~35% and snapshots to ~16%
-//! in ~0.1 s, and reads back at GB/s. Files from older Xylem versions
+//! in ~0.1 s, and reads back at GB/s. Files from older DiskRoot versions
 //! (uncompressed) still load: the lz4 frame magic tells them apart.
 
 use std::ffi::c_void;
@@ -89,7 +89,7 @@ pub struct Lock(*mut c_void);
 impl Lock {
     /// Waits up to 2 minutes; `None` if the lock can't be had.
     pub fn take() -> Option<Self> {
-        let name: Vec<u16> = "Local\\XylemCacheWrite".encode_utf16().chain([0]).collect();
+        let name: Vec<u16> = "Local\\DiskRootCacheWrite".encode_utf16().chain([0]).collect();
         // SAFETY: NUL-terminated name; the handle is closed in Drop.
         let h = unsafe { CreateMutexW(std::ptr::null_mut(), 0, name.as_ptr()) };
         if h.is_null() {
@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn compressed_round_trip_and_old_files_still_open() {
-        let dir = std::env::temp_dir().join(format!("xylem-cachefile-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("diskroot-cachefile-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let p = dir.join("a.snap");
         let data: Vec<u8> = (0..200_000u32).flat_map(|i| (i % 1000).to_le_bytes()).collect();

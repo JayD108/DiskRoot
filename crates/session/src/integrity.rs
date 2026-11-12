@@ -1,4 +1,4 @@
-//! "Can this copy of Xylem be trusted to elevate?"
+//! "Can this copy of DiskRoot be trusted to elevate?"
 //!
 //! - **Install location:** the admin helper is an exe launched with admin
 //!   rights. If it lives in a folder normal users can write to, malware
@@ -73,9 +73,9 @@ pub fn windows_dir() -> PathBuf {
     PathBuf::from(String::from_utf16_lossy(&buf[..n]))
 }
 
-pub const FAST_SCAN_NEEDS_INSTALL: &str = "Fast scan runs Xylem with admin rights, so it only works from an installed copy \
+pub const FAST_SCAN_NEEDS_INSTALL: &str = "Fast scan runs DiskRoot with admin rights, so it only works from an installed copy \
 (in Program Files, which other programs can't change). This copy runs from a folder any program can modify. \
-Install Xylem to use Fast scan, or use Scan, which needs no admin rights.";
+Install DiskRoot to use Fast scan, or use Scan, which needs no admin rights.";
 
 /// Fast scan (elevation) is allowed only from a protected install location.
 pub fn fast_scan_allowed() -> bool {
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn windows_own_binaries_are_signed_and_ours_are_not_yet() {
         // Windows' own exes are mostly catalog-signed (this check only reads
-        // embedded signatures, which is what Xylem's release exe will carry),
+        // embedded signatures, which is what DiskRoot's release exe will carry),
         // so test against Edge, which has an embedded signature.
         if let Some(pf) = std::env::var_os("ProgramFiles(x86)") {
             let edge = PathBuf::from(pf).join("Microsoft\\Edge\\Application\\msedge.exe");

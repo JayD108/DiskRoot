@@ -50,7 +50,7 @@ jobs:
         id: upload-bin
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: xylem-${{ steps.ver.outputs.version }}-exes-unsigned
+          name: diskroot-${{ steps.ver.outputs.version }}-exes-unsigned
           path: dist/stage/*.exe
           if-no-files-found: error
 
@@ -60,7 +60,7 @@ jobs:
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'Xylem' }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'DiskRoot' }}
           signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
           artifact-configuration-slug: exes
           github-artifact-id: ${{ steps.upload-bin.outputs.artifact-id }}
@@ -81,50 +81,81 @@ jobs:
         shell: pwsh
         run: |
           $v = '${{ steps.ver.outputs.version }}'
-          $dir = "$env:ProgramFiles\Xylem"
+          $dir = "$env:ProgramFiles\DiskRoot"
           $envKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
           $pathBefore = (Get-Item $envKey).GetValue('Path', '', 'DoNotExpandEnvironmentNames')
           $kindBefore = (Get-Item $envKey).GetValueKind('Path')
-          $p = Start-Process "dist\xylem-setup-$v.exe" -ArgumentList '/S' -Wait -PassThru
+          $p = Start-Process "dist\diskroot-setup-$v.exe" -ArgumentList '/S' -Wait -PassThru
           if ($p.ExitCode) { throw "installer exit code $($p.ExitCode)" }
-          foreach ($f in 'xylem.exe', 'xylem-cli.exe', 'uninstall.exe', 'LICENSE-MIT') {
+          foreach ($f in 'diskroot.exe', 'droot.exe', 'uninstall.exe', 'LICENSE-MIT') {
             if (-not (Test-Path "$dir\$f")) { throw "missing $dir\$f" }
           }
-          if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Xylem.lnk")) { throw "no Start Menu shortcut" }
-          $key = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Xylem'
+          if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\DiskRoot.lnk")) { throw "no Start Menu shortcut" }
+          $key = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\DiskRoot'
           if ((Get-ItemProperty $key).DisplayVersion -ne $v) { throw "uninstall entry missing or wrong version" }
-          foreach ($k in "Directory","Directory\Background","Drive") { if (-not (Test-Path "HKLM:\Software\Classes\$k\shell\Xylem\command")) { throw "no right-click entry for $k" } }
-          & "$dir\xylem-cli.exe" --version
-          if ($LASTEXITCODE) { throw "installed xylem-cli failed" }
+          foreach ($k in "Directory","Directory\Background","Drive") { if (-not (Test-Path "HKLM:\Software\Classes\$k\shell\DiskRoot\command")) { throw "no right-click entry for $k" } }
+          & "$dir\droot.exe" --version
+          if ($LASTEXITCODE) { throw "installed droot failed" }
           $machinePath = (Get-Item $envKey).GetValue('Path', '', 'DoNotExpandEnvironmentNames')
           if (-not (($machinePath -split ';') -contains $dir)) { throw "install folder not on the system PATH: $machinePath" }
           if (-not $machinePath.StartsWith($pathBefore.TrimEnd(';'))) { throw "install changed other PATH entries" }
           if ((Get-Item $envKey).GetValueKind('Path') -ne $kindBefore) { throw "PATH value type changed" }
-          # With the new PATH, xylem-cli is found by name (as in a fresh terminal).
+          # With the new PATH, droot is found by name (as in a fresh terminal).
           $env:Path = [Environment]::ExpandEnvironmentVariables($machinePath)
-          $cmd = Get-Command xylem-cli -ErrorAction SilentlyContinue
-          if (-not $cmd -or $cmd.Source -ne "$dir\xylem-cli.exe") { throw "xylem-cli not found by name" }
+          $cmd = Get-Command droot -ErrorAction SilentlyContinue
+          if (-not $cmd -or $cmd.Source -ne "$dir\droot.exe") { throw "droot not found by name" }
           # A scheduled-scan task like the app creates; the uninstaller must remove it.
-          & "$env:SystemRoot\System32\schtasks.exe" /create /tn "Xylem scheduled scan (ci)" /tr "$dir\xylem.exe --scheduled-scan" /sc daily /f
+          & "$env:SystemRoot\System32\schtasks.exe" /create /tn "DiskRoot scheduled scan (ci)" /tr "$dir\diskroot.exe --scheduled-scan" /sc daily /f
           if ($LASTEXITCODE) { throw "couldn't create the test task" }
           Start-Process "$dir\uninstall.exe" -ArgumentList '/S' -Wait
           for ($i = 0; $i -lt 60 -and (Test-Path $dir); $i++) { Start-Sleep 1 }
           if (Test-Path $dir) { throw "install folder left behind" }
           if (Test-Path $key) { throw "uninstall entry left behind" }
-          if (Get-ScheduledTask -TaskName 'Xylem scheduled scan*' -ErrorAction SilentlyContinue) { throw "scheduled-scan task left behind" }
-          foreach ($k in "Directory","Directory\Background","Drive") { if (Test-Path "HKLM:\Software\Classes\$k\shell\Xylem") { throw "right-click entry left behind ($k)" } }
-          if (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Xylem.lnk") { throw "shortcut left behind" }
+          if (Get-ScheduledTask -TaskName 'DiskRoot scheduled scan*' -ErrorAction SilentlyContinue) { throw "scheduled-scan task left behind" }
+          foreach ($k in "Directory","Directory\Background","Drive") { if (Test-Path "HKLM:\Software\Classes\$k\shell\DiskRoot") { throw "right-click entry left behind ($k)" } }
+          if (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\DiskRoot.lnk") { throw "shortcut left behind" }
           $after = (Get-Item $envKey).GetValue('Path', '', 'DoNotExpandEnvironmentNames')
           if (($after -split ';') -contains $dir) { throw "install folder left on PATH" }
           if ($after -ne $pathBefore) { throw "PATH not restored exactly: '$after' vs '$pathBefore'" }
           "install/uninstall OK"
 
+      - name: Test upgrade from Xylem (the old name)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = '${{ steps.ver.outputs.version }}'
+          $envKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
+          $pathBefore = (Get-Item $envKey).GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+          # The last release under the old name.
+          gh release download v0.5.1 --repo $env:GITHUB_REPOSITORY --pattern 'xylem-setup-0.5.1.exe' --dir old
+          if ($LASTEXITCODE) { throw "couldn't download Xylem 0.5.1" }
+          $p = Start-Process "old\xylem-setup-0.5.1.exe" -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -or -not (Test-Path "$env:ProgramFiles\Xylem\xylem.exe")) { throw "Xylem 0.5.1 didn't install" }
+          & "$env:SystemRoot\System32\schtasks.exe" /create /tn "Xylem scheduled scan (ci)" /tr "$env:ProgramFiles\Xylem\xylem.exe --scheduled-scan" /sc daily /f
+          # Now DiskRoot over it: Xylem must be gone, DiskRoot installed.
+          $p = Start-Process "dist\diskroot-setup-$v.exe" -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode) { throw "DiskRoot installer exit code $($p.ExitCode)" }
+          for ($i = 0; $i -lt 60 -and (Test-Path "$env:ProgramFiles\Xylem"); $i++) { Start-Sleep 1 }
+          if (Test-Path "$env:ProgramFiles\Xylem") { throw "old Xylem folder left behind" }
+          if (Test-Path 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Xylem') { throw "old Xylem uninstall entry left behind" }
+          if (Get-ScheduledTask -TaskName 'Xylem scheduled scan*' -ErrorAction SilentlyContinue) { throw "old Xylem task left behind" }
+          foreach ($k in "Directory","Directory\Background","Drive") { if (Test-Path "HKLM:\Software\Classes\$k\shell\Xylem") { throw "old right-click entry left behind ($k)" } }
+          $mid = (Get-Item $envKey).GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+          if (($mid -split ';') -contains "$env:ProgramFiles\Xylem") { throw "old Xylem folder left on PATH" }
+          if (-not (Test-Path "$env:ProgramFiles\DiskRoot\diskroot.exe")) { throw "DiskRoot not installed after the upgrade" }
+          Start-Process "$env:ProgramFiles\DiskRoot\uninstall.exe" -ArgumentList '/S' -Wait
+          for ($i = 0; $i -lt 60 -and (Test-Path "$env:ProgramFiles\DiskRoot"); $i++) { Start-Sleep 1 }
+          $after = (Get-Item $envKey).GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+          if ($after -ne $pathBefore) { throw "PATH not restored exactly after the upgrade test" }
+          "upgrade from Xylem OK"
+
       - name: Upload installer (unsigned)
         id: upload-setup
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: xylem-${{ steps.ver.outputs.version }}-installer-unsigned
-          path: dist/xylem-setup-*.exe
+          name: diskroot-${{ steps.ver.outputs.version }}-installer-unsigned
+          path: dist/diskroot-setup-*.exe
           if-no-files-found: error
 
       - name: Sign installer with SignPath
@@ -133,7 +164,7 @@ jobs:
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'Xylem' }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'DiskRoot' }}
           signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
           artifact-configuration-slug: installer
           github-artifact-id: ${{ steps.upload-setup.outputs.artifact-id }}
@@ -145,12 +176,12 @@ jobs:
         run: |
           $v = '${{ steps.ver.outputs.version }}'
           New-Item -ItemType Directory -Force out | Out-Null
-          $setup = if ($env:SIGNPATH_ENABLED -eq 'true') { "signed-setup\xylem-setup-$v.exe" } else { "dist\xylem-setup-$v.exe" }
+          $setup = if ($env:SIGNPATH_ENABLED -eq 'true') { "signed-setup\diskroot-setup-$v.exe" } else { "dist\diskroot-setup-$v.exe" }
           $exes = if ($env:SIGNPATH_ENABLED -eq 'true') { 'signed-exes' } else { 'dist\stage' }
-          Copy-Item $setup, "dist\xylem-$v-portable.zip", "$exes\xylem.exe", "$exes\xylem-cli.exe" out
-          # Fixed names too, so README links like .../releases/latest/download/xylem-setup.exe always get the newest.
-          Copy-Item $setup out\xylem-setup.exe
-          Copy-Item "dist\xylem-$v-portable.zip" out\xylem-portable.zip
+          Copy-Item $setup, "dist\diskroot-$v-portable.zip", "$exes\diskroot.exe", "$exes\droot.exe" out
+          # Fixed names too, so README links like .../releases/latest/download/diskroot-setup.exe always get the newest.
+          Copy-Item $setup out\diskroot-setup.exe
+          Copy-Item "dist\diskroot-$v-portable.zip" out\diskroot-portable.zip
           Get-ChildItem out -File | ForEach-Object {
             "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
           } | Join-String -Separator "`n" -OutputSuffix "`n" | ForEach-Object { [IO.File]::WriteAllText("$PWD\out\SHA256SUMS.txt", $_) }
@@ -159,7 +190,7 @@ jobs:
       - name: Upload release files
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: xylem-${{ steps.ver.outputs.version }}-release
+          name: diskroot-${{ steps.ver.outputs.version }}-release
           path: out/*
 
       - name: Publish GitHub Release
@@ -173,4 +204,4 @@ jobs:
           $notes = (Get-Content .github\release-notes.md -Raw).Replace('{{VERSION}}', $v).Replace('{{SIGNED}}', $signed)
           $notes += "`n## SHA-256 checksums`n``````n" + (Get-Content out\SHA256SUMS.txt -Raw) + "``````n"
           Set-Content -Encoding utf8 notes.md $notes
-          gh release create $env:GITHUB_REF_NAME out\xylem-setup-$v.exe out\xylem-$v-portable.zip out\xylem-setup.exe out\xylem-portable.zip out\SHA256SUMS.txt --title "Xylem $v" --notes-file notes.md
+          gh release create $env:GITHUB_REF_NAME out\diskroot-setup-$v.exe out\diskroot-$v-portable.zip out\diskroot-setup.exe out\diskroot-portable.zip out\SHA256SUMS.txt --title "DiskRoot $v" --notes-file notes.md

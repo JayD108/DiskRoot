@@ -1,21 +1,21 @@
 [package]
-name = "xylem-cli"
+name = "droot"
 description = "Command-line disk analyzer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "xylem-cli"
+name = "droot"
 path = "src/main.rs"
 
 [dependencies]
-xylem-core.workspace = true
-xylem-scan-walk.workspace = true
+diskroot-core.workspace = true
+diskroot-scan-walk.workspace = true
 clap.workspace = true
 serde_json.workspace = true
-xylem-scan-mft.workspace = true
-xylem-session.workspace = true
+diskroot-scan-mft.workspace = true
+diskroot-session.workspace = true
 
 [build-dependencies]
 winresource = "0.1"

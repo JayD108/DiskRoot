@@ -1,10 +1,10 @@
-//! Xylem: native desktop app (the default UI).
+//! DiskRoot: native desktop app (the default UI).
 //!
 //! One small exe:
-//! - `xylem.exe [path]` opens the window (and scans `path` if given).
-//! - `xylem.exe --helper-scan C: --pipe <private pipe>` is the elevated fast-
+//! - `diskroot.exe [path]` opens the window (and scans `path` if given).
+//! - `diskroot.exe --helper-scan C: --pipe <private pipe>` is the elevated fast-
 //!   scan helper the app starts through the UAC prompt; it never opens a
-//!   window (see `xylem_session::helper`).
+//!   window (see `diskroot_session::helper`).
 //!
 //! The UI is egui (immediate mode, OpenGL): no browser engine, one process,
 //! and it only redraws on input, so an idle window costs ~nothing.
@@ -73,25 +73,25 @@ pub fn fmt_pct(part: u64, whole: u64) -> String {
 
 fn main() {
     // Before anything can load a DLL: System32 only (DLL planting defence).
-    xylem_session::integrity::harden_dll_search();
+    diskroot_session::integrity::harden_dll_search();
     let args: Vec<String> = std::env::args().collect();
     // Elevated helper mode: no window, just scan and exit.
-    if let Some(code) = xylem_session::helper::run_if_helper(&args) {
+    if let Some(code) = diskroot_session::helper::run_if_helper(&args) {
         std::process::exit(code);
     }
     // Elevated virtual-disk compaction (View > details of a .vhdx): no window.
-    if let Some(code) = xylem_session::power::run_if_compact_helper(&args) {
+    if let Some(code) = diskroot_session::power::run_if_compact_helper(&args) {
         std::process::exit(code);
     }
     // Scheduled scan (Task Scheduler, as the user, no admin): no window.
-    if let Some(code) = xylem_session::schedule::run_if_scheduled(&args) {
+    if let Some(code) = diskroot_session::schedule::run_if_scheduled(&args) {
         std::process::exit(code);
     }
 
     let icon = IconData { rgba: include_bytes!("../assets/icon-64.rgba").to_vec(), width: 64, height: 64 };
     let options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
-            .with_title("Xylem")
+            .with_title("DiskRoot")
             .with_inner_size([1360.0, 860.0])
             .with_min_inner_size([960.0, 600.0])
             .with_icon(Arc::new(icon)),
@@ -104,9 +104,9 @@ fn main() {
         .map(|a| a.trim().trim_end_matches('"'))
         .filter(|a| !a.is_empty() && !a.starts_with('-'))
         .map(str::to_owned);
-    let result = eframe::run_native("Xylem", options, Box::new(move |cc| Ok(Box::new(app::XylemApp::new(cc, start)))));
+    let result = eframe::run_native("DiskRoot", options, Box::new(move |cc| Ok(Box::new(app::DiskRootApp::new(cc, start)))));
     if let Err(e) = result {
-        eprintln!("Xylem could not start: {e}");
+        eprintln!("DiskRoot could not start: {e}");
         std::process::exit(1);
     }
 }

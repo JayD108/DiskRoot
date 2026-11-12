@@ -1,6 +1,6 @@
 # Usage: .\tools\ui-screenshot.ps1 -Launch -Arg "C:\some\folder" -Out shot.png   (or -Pid0 <pid>)
 #
-# Captures ONLY the Xylem window's own pixels with PrintWindow
+# Captures ONLY the DiskRoot window's own pixels with PrintWindow
 # (PW_RENDERFULLCONTENT), so it works even when the window is behind others,
 # never copies anything else on screen, and never steals keyboard focus from
 # whatever the user is doing. (An earlier version copied the screen region
@@ -18,7 +18,7 @@ public static class Win {
 }
 "@
 [Win]::SetProcessDPIAware() | Out-Null
-$exe = Join-Path (Split-Path -Parent $PSScriptRoot) "target\release\xylem.exe"
+$exe = Join-Path (Split-Path -Parent $PSScriptRoot) "target\release\diskroot.exe"
 if ($Launch) {
   # Start minimized-to-background is not possible for a fresh window, but we
   # never call SetForegroundWindow, so focus stays where Windows puts it.

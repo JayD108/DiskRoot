@@ -1,7 +1,7 @@
-//! The elevated scan helper, built into `xylem.exe`.
+//! The elevated scan helper, built into `diskroot.exe`.
 //!
 //! When the app needs a fast MFT scan it starts itself through the UAC
-//! prompt as `xylem.exe --helper-scan C: --pipe \\.\pipe\xylem-...`. In that
+//! prompt as `diskroot.exe --helper-scan C: --pipe \\.\pipe\diskroot-...`. In that
 //! mode no window is created: it scans and sends the index through the
 //! app's private pipe, then exits.
 //!
@@ -18,8 +18,8 @@
 
 use std::io::{BufWriter, Write};
 
-use xylem_core::{Index, ScanStats};
-use xylem_scan_mft::{Volume, scan_volume};
+use diskroot_core::{Index, ScanStats};
+use diskroot_scan_mft::{Volume, scan_volume};
 
 /// Exit codes of the helper process.
 pub const OK: i32 = 0;
@@ -52,14 +52,14 @@ fn run(drive: &str, pipe: &str) -> i32 {
     let Ok(out) = open_pipe(pipe) else { return WRITE_FAILED };
     // 2. Give up the power before touching drive data.
     let report = crate::lockdown::lockdown();
-    if std::env::var_os("XYLEM_TRACE").is_some() {
+    if std::env::var_os("DISKROOT_TRACE").is_some() {
         eprintln!("[helper] lockdown: {report:?}");
     }
     if !report.essential_ok() {
         return LOCKDOWN_FAILED;
     }
     // 3. Read + parse with the open handles only.
-    let scan = match scan_volume(&vol, letter, xylem_scan_walk::default_threads()) {
+    let scan = match scan_volume(&vol, letter, diskroot_scan_walk::default_threads()) {
         Ok(s) => s,
         Err(_) => return SCAN_FAILED,
     };
@@ -77,9 +77,9 @@ fn drive_letter(s: &str) -> Option<char> {
 }
 
 /// Only a local pipe named like the app makes them:
-/// `\\.\pipe\xylem-<digits/hex/dashes>`.
+/// `\\.\pipe\diskroot-<digits/hex/dashes>`.
 pub fn check_pipe_name(name: &str) -> Result<(), String> {
-    let rest = name.strip_prefix(r"\\.\pipe\xylem-").ok_or("not a Xylem pipe")?;
+    let rest = name.strip_prefix(r"\\.\pipe\diskroot-").ok_or("not a DiskRoot pipe")?;
     let ok = !rest.is_empty() && rest.len() <= 80 && rest.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
     if ok { Ok(()) } else { Err("bad pipe name".into()) }
 }
@@ -148,26 +148,26 @@ mod tests {
 
     #[test]
     fn pipe_names_are_restricted() {
-        assert!(check_pipe_name(r"\\.\pipe\xylem-123-abc-0f").is_ok());
+        assert!(check_pipe_name(r"\\.\pipe\diskroot-123-abc-0f").is_ok());
         assert!(check_pipe_name(r"\\.\pipe\other").is_err());
-        assert!(check_pipe_name(r"\\server\pipe\xylem-1").is_err(), "remote");
-        assert!(check_pipe_name(r"\\.\pipe\xylem-1\..\x").is_err());
-        assert!(check_pipe_name(r"C:\Windows\xylem-1.idx").is_err(), "files are no longer accepted");
-        assert!(check_pipe_name(r"\\.\pipe\xylem-").is_err());
+        assert!(check_pipe_name(r"\\server\pipe\diskroot-1").is_err(), "remote");
+        assert!(check_pipe_name(r"\\.\pipe\diskroot-1\..\x").is_err());
+        assert!(check_pipe_name(r"C:\Windows\diskroot-1.idx").is_err(), "files are no longer accepted");
+        assert!(check_pipe_name(r"\\.\pipe\diskroot-").is_err());
     }
 
     #[test]
     fn only_the_exact_helper_command_line_is_accepted() {
-        assert_eq!(run_if_helper(&args(&["xylem.exe"])), None, "normal start");
-        assert_eq!(run_if_helper(&args(&["xylem.exe", "C:\\Users"])), None, "open a folder");
+        assert_eq!(run_if_helper(&args(&["diskroot.exe"])), None, "normal start");
+        assert_eq!(run_if_helper(&args(&["diskroot.exe", "C:\\Users"])), None, "open a folder");
         assert_eq!(run_if_helper(&args(&["x", "--helper-scan"])), Some(BAD_ARGS));
         assert_eq!(run_if_helper(&args(&["x", "--helper-scan", "C:", "--out", "f"])), Some(BAD_ARGS));
         assert_eq!(run_if_helper(&args(&["x", "--helper-scan", "C:", "--pipe", "f", "extra"])), Some(BAD_ARGS));
-        assert_eq!(run_if_helper(&args(&["x", "--helper-scan", "C:", "--save-index", r"C:\x\xylem-1.idx"])), Some(BAD_ARGS), "old file mode is gone");
+        assert_eq!(run_if_helper(&args(&["x", "--helper-scan", "C:", "--save-index", r"C:\x\diskroot-1.idx"])), Some(BAD_ARGS), "old file mode is gone");
         // Wrong drive syntax or a path outside temp: refused before any scan.
-        assert_eq!(run_if_helper(&args(&["x", "--helper-scan", "C:\\Users", "--pipe", r"\\.\pipe\xylem-1"])), Some(BAD_ARGS));
+        assert_eq!(run_if_helper(&args(&["x", "--helper-scan", "C:\\Users", "--pipe", r"\\.\pipe\diskroot-1"])), Some(BAD_ARGS));
         assert_eq!(
-            run_if_helper(&args(&["x", "--helper-scan", "C:", "--pipe", r"\\evil\pipe\xylem-1"])),
+            run_if_helper(&args(&["x", "--helper-scan", "C:", "--pipe", r"\\evil\pipe\diskroot-1"])),
             Some(BAD_ARGS)
         );
         assert_eq!(drive_letter("d:\\"), Some('D'));

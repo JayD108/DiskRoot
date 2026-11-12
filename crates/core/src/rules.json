@@ -8,7 +8,7 @@
     "kind: dir | file | any (default any).",
     "cat: apps | media | docs | dev | ai | system | temp | downloads | cloud | other.",
     "safety: green (safe to clear) | yellow (check first) | red (don't touch). Omit if unsure.",
-    "protect: tree (this and everything inside can't be deleted from Xylem) | self (only this item).",
+    "protect: tree (this and everything inside can't be deleted from DiskRoot) | self (only this item).",
     "weak: true lets file-extension rules re-classify files inside (e.g. videos on the Desktop).",
     "Extensions: strong=true wins even inside strong folders (model files are always AI).",
     "app: programs using the place; the delete dialog warns while one runs.",

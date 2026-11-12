@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn finds_real_duplicates_only() {
-        let dir = std::env::temp_dir().join(format!("xylem-dupes-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("diskroot-dupes-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let big: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();

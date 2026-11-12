@@ -1,20 +1,20 @@
-# Contributing to Xylem
+# Contributing to DiskRoot
 
-Thanks for helping. Xylem is a small, careful tool: it reads your drive fast, explains what's on it, and changes files only when you confirm. Every contribution keeps it that way.
+Thanks for helping. DiskRoot is a small, careful tool: it reads your drive fast, explains what's on it, and changes files only when you confirm. Every contribution keeps it that way.
 
 ## The rules every change keeps
 
 1. **Offline.** No network code, no telemetry, no accounts, no update checks. CI fails if an HTTP/TLS crate appears in `Cargo.lock`.
-2. **Read-only scanning.** A scan never changes the scanned files (Xylem's own cache lives in `%LOCALAPPDATA%\Xylem`, compressed, and counts as SSD writes: keep it small).
+2. **Read-only scanning.** A scan never changes the scanned files (DiskRoot's own cache lives in `%LOCALAPPDATA%\DiskRoot`, compressed, and counts as SSD writes: keep it small).
 3. **Careful changes.** Anything that changes files happens only after the user confirms, is re-checked on disk first, and can be undone where possible. Data is verified, never assumed.
 4. **Least privilege.** The window doesn't need admin and warns if started elevated; raw drive reading only in the locked-down helper.
 5. **Fast.** Scans never get slower. Every feature is measured before it's merged.
-6. **Open source only.** MIT/Apache-2.0 for Xylem's code; dependencies must have an OSI-approved licence (`cargo deny check` enforces it).
+6. **Open source only.** MIT/Apache-2.0 for DiskRoot's code; dependencies must have an OSI-approved licence (`cargo deny check` enforces it).
 7. **Honest claims.** Numbers in the docs come from measurements, with the method. "Fastest in our tests", never "fastest in the world".
 
 ## Call for compression research 🔬
 
-Xylem compresses folders in place with **Windows' own file compression** (WOF: XPRESS4K/8K/16K and LZX), driven by its own parallel engine (`crates/session/src/compress.rs`). Files stay where they are and open as usual, and Uncompress undoes it. It's already much faster than `compact.exe`, but we want **more space saved, in less time, with the same safety**. If you know compression, we'd love your help.
+DiskRoot compresses folders in place with **Windows' own file compression** (WOF: XPRESS4K/8K/16K and LZX), driven by its own parallel engine (`crates/session/src/compress.rs`). Files stay where they are and open as usual, and Uncompress undoes it. It's already much faster than `compact.exe`, but we want **more space saved, in less time, with the same safety**. If you know compression, we'd love your help.
 
 What we've measured so far is in [docs/BENCHMARKS.md](docs/BENCHMARKS.md#compression) (per file type: savings and speed of every WOF algorithm, plus zstd and lz4 for comparison), and the full list of open problems is in [docs/HELP-WANTED.md](docs/HELP-WANTED.md). In short:
 
@@ -47,7 +47,7 @@ What we won't merge: anything that deletes or replaces originals without a verif
 ## Building and testing
 
 ```
-cargo build --release -p xylem          # the app: target\release\xylem.exe
+cargo build --release -p diskroot          # the app: target\release\diskroot.exe
 cargo test --workspace                  # unit, integration and built-in fuzz tests
 cargo clippy --workspace --all-targets -- -D warnings
 .\tools\full-test.ps1                   # everything, incl. security checks (15-25 min)
@@ -62,4 +62,4 @@ More in [docs/FEATURES-AND-DEVELOPMENT.md](docs/FEATURES-AND-DEVELOPMENT.md#9-bu
 - User-visible changes update the README feature list and `docs/FEATURES-AND-DEVELOPMENT.md`.
 - Security problems: please report privately ([SECURITY.md](SECURITY.md)), not in an issue.
 
-By contributing you agree your contribution is licensed under MIT OR Apache-2.0, like the rest of Xylem.
+By contributing you agree your contribution is licensed under MIT OR Apache-2.0, like the rest of DiskRoot.

@@ -10,7 +10,7 @@ use std::time::Duration;
 use crate::{Columns, Index, ScanStats, flags};
 
 /// Version 2 adds the last-modified column, version 3 the created-here
-/// column. Older files (remembered scans from Xylem 0.1 to 0.3) are still
+/// column. Older files (remembered scans from DiskRoot 0.1 to 0.3) are still
 /// read, with the missing dates "unknown".
 const MAGIC: &[u8; 8] = b"XYLMIDX3";
 const MAGIC_V2: &[u8; 8] = b"XYLMIDX2";
@@ -101,7 +101,7 @@ impl Index {
         let v1 = &magic == MAGIC_V1;
         let v2 = &magic == MAGIC_V2;
         if &magic != MAGIC && !v1 && !v2 {
-            return Err(bad("not a xylem index"));
+            return Err(bad("not a diskroot index"));
         }
         // Date columns in the file: v1 none, v2 last-modified, v3 both.
         let dates = if v1 { 0 } else if v2 { 1 } else { 2 };
@@ -205,11 +205,11 @@ mod tests {
         assert!(Index::load(&mut v9.as_slice()).is_err(), "unknown versions refused");
     }
 
-    /// `XYLEM_INDEX_FILE=<path> cargo test -p xylem-core loads_a_real_index_file -- --ignored --nocapture`
+    /// `DISKROOT_INDEX_FILE=<path> cargo test -p diskroot-core loads_a_real_index_file -- --ignored --nocapture`
     #[test]
-    #[ignore = "reads an index file named by XYLEM_INDEX_FILE"]
+    #[ignore = "reads an index file named by DISKROOT_INDEX_FILE"]
     fn loads_a_real_index_file() {
-        let p = std::env::var("XYLEM_INDEX_FILE").unwrap();
+        let p = std::env::var("DISKROOT_INDEX_FILE").unwrap();
         let bytes = std::fs::read(&p).unwrap();
         let (idx, stats, mode) = Index::load_checked(&mut bytes.as_slice(), bytes.len() as u64).unwrap();
         println!("{} ({}): {} items, {} files, {} on disk, mode {mode}", p, String::from_utf8_lossy(&bytes[..8]), idx.len(), stats.files, crate::format::bytes(idx.alloc(0)));
@@ -292,7 +292,7 @@ mod fuzz {
             rng ^= rng << 17;
             rng
         };
-        let rounds = std::env::var("XYLEM_FUZZ_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(50_000);
+        let rounds = std::env::var("DISKROOT_FUZZ_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(50_000);
         for round in 0..rounds {
             let mut b = good.clone();
             for _ in 0..1 + next() % 6 {

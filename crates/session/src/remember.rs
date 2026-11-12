@@ -1,6 +1,6 @@
 //! Remembered scans: instant reopen and "what changed since the last scan".
 //!
-//! Per scanned root (drive or folder), in `%LOCALAPPDATA%\Xylem\cache\`:
+//! Per scanned root (drive or folder), in `%LOCALAPPDATA%\DiskRoot\cache\`:
 //! - `<key>.idx`: the full index of the latest scan (instant reopen). Same
 //!   format as the admin helper's file, loaded with the same length-checked,
 //!   fuzz-tested loader.
@@ -22,10 +22,10 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use xylem_core::{Index, NO_PARENT, ScanStats, flags};
+use diskroot_core::{Index, NO_PARENT, ScanStats, flags};
 
 const SNAP_MAGIC: &[u8; 8] = b"XYLMSNP2";
-/// Snapshots saved by Xylem 0.2.0 and older (no scan method stored).
+/// Snapshots saved by DiskRoot 0.2.0 and older (no scan method stored).
 const SNAP_MAGIC_V1: &[u8; 8] = b"XYLMSNP1";
 /// Keep remembered scans for at most this many roots (oldest dropped).
 const MAX_ROOTS: usize = 8;
@@ -33,7 +33,7 @@ const MAX_ROOTS: usize = 8;
 const MAX_SNAP_DIRS: u32 = 20_000_000;
 
 pub fn cache_dir() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Xylem").join("cache"))
+    std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("DiskRoot").join("cache"))
 }
 
 /// Stable file-name key for a scan root (FNV-1a of the lowercased path).
@@ -89,7 +89,7 @@ pub struct Snapshot {
     pub time: u64,
     pub root: String,
     /// How the scan was made, e.g. "MFT (direct read)" or "folder walk".
-    /// Empty for snapshots saved by Xylem 0.2.0 and older.
+    /// Empty for snapshots saved by DiskRoot 0.2.0 and older.
     pub mode: String,
     pub dirs: Vec<SnapDir>,
 }
@@ -157,7 +157,7 @@ impl Snapshot {
         r.read_exact(&mut magic)?;
         let v2 = &magic == SNAP_MAGIC;
         if !v2 && &magic != SNAP_MAGIC_V1 {
-            return Err(bad("not a Xylem snapshot"));
+            return Err(bad("not a DiskRoot snapshot"));
         }
         let time = read_u64(r)?;
         let root = read_str(r)?;
@@ -231,12 +231,12 @@ pub struct Changes {
     pub after_total: u64,
     /// The folders where the change actually happened, biggest first.
     pub items: Vec<Change>,
-    /// How each scan was made (empty = unknown, from Xylem 0.2.0 or older).
+    /// How each scan was made (empty = unknown, from DiskRoot 0.2.0 or older).
     pub before_mode: String,
     pub after_mode: String,
 }
 
-/// Marks folder walks that count hardlinked files once (Xylem 0.5.0 and
+/// Marks folder walks that count hardlinked files once (DiskRoot 0.5.0 and
 /// later), so "what changed" against an older walk can explain the drop.
 pub const HARDLINKS_ONCE: &str = "hardlinks once";
 
@@ -386,7 +386,7 @@ pub fn remember(idx: &Arc<Index>, stats: &ScanStats, mode: &str) -> io::Result<O
     fs::create_dir_all(idx_path.parent().expect("cache dir"))?;
     let mode = with_hardlink_note(&mode.replace(" via admin helper", ""));
     // The app and a scheduled scan may finish together: one writer at a time.
-    let _lock = crate::cachefile::Lock::take().ok_or_else(|| io::Error::other("another Xylem is saving a scan; try again"))?;
+    let _lock = crate::cachefile::Lock::take().ok_or_else(|| io::Error::other("another DiskRoot is saving a scan; try again"))?;
     let mut snap = Snapshot::of(idx);
     snap.mode.clone_from(&mode);
     let prev = load_snap(&snap_path).filter(|p| p.root.eq_ignore_ascii_case(&root));
@@ -410,7 +410,7 @@ pub fn save_index(idx: &Index, stats: &ScanStats, mode: &str) -> io::Result<()> 
     let (idx_path, _, _) = paths(idx.name(0)).ok_or_else(|| io::Error::other("no LOCALAPPDATA"))?;
     fs::create_dir_all(idx_path.parent().expect("cache dir"))?;
     let mode = with_hardlink_note(&mode.replace(" via admin helper", ""));
-    let _lock = crate::cachefile::Lock::take().ok_or_else(|| io::Error::other("another Xylem is saving a scan; try again"))?;
+    let _lock = crate::cachefile::Lock::take().ok_or_else(|| io::Error::other("another DiskRoot is saving a scan; try again"))?;
     crate::cachefile::write(&idx_path, |mut w| idx.save(stats, &mode, &mut w))
 }
 
@@ -499,7 +499,7 @@ pub fn forget_index(root: &str) {
     }
 }
 
-/// Deletes every remembered scan. Only touches Xylem's own cache files.
+/// Deletes every remembered scan. Only touches DiskRoot's own cache files.
 pub fn forget_all() -> io::Result<usize> {
     let Some(dir) = cache_dir() else { return Ok(0) };
     let mut n = 0;
@@ -597,7 +597,7 @@ mod tests {
         assert_eq!(back.dirs.len(), s.dirs.len());
         assert_eq!(back.dirs[2].path, "a\\x");
         // The header-only read used by reopen agrees with the full load.
-        let p = std::env::temp_dir().join(format!("xylem-snap-time-{}.snap", std::process::id()));
+        let p = std::env::temp_dir().join(format!("diskroot-snap-time-{}.snap", std::process::id()));
         std::fs::write(&p, &buf).unwrap();
         assert_eq!(snap_time(&p), Some(back.time));
         std::fs::write(&p, b"XYLMIDX1........").unwrap();
@@ -659,7 +659,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshots_from_xylem_0_2_still_load() {
+    fn snapshots_from_diskroot_0_2_still_load() {
         // Version 1 layout: magic, time, root, count, then (bytes, files, path) per folder.
         let mut v1 = Vec::new();
         v1.extend_from_slice(b"XYLMSNP1");

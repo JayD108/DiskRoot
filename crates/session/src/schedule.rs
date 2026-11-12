@@ -2,15 +2,15 @@
 //! Scheduler starts every N minutes (at least 30) for the signed-in user.
 //!
 //! - **No admin, ever:** the task is created by the user for the user
-//!   (`LeastPrivilege`); it runs `xylem.exe --scheduled-scan` without a
+//!   (`LeastPrivilege`); it runs `diskroot.exe --scheduled-scan` without a
 //!   window. Fast scan (admin) stays something you start in the window.
 //! - **Nothing stays running:** each run scans, saves the result exactly
 //!   like the app does (instant reopen, "what changed"), records one line in
 //!   a small log (time, duration, peak RAM, change), and exits. Idle RAM: 0.
 //! - **Gentle:** the whole run is in Windows' background mode (low CPU, disk
 //!   and memory priority); not on battery unless allowed; one run at a time.
-//! - **Read-only** like every scan; it writes only Xylem's own files in
-//!   `%APPDATA%\Xylem` and `%LOCALAPPDATA%\Xylem`.
+//! - **Read-only** like every scan; it writes only DiskRoot's own files in
+//!   `%APPDATA%\DiskRoot` and `%LOCALAPPDATA%\DiskRoot`.
 
 use std::ffi::c_void;
 use std::fs;
@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use xylem_scan_mft::{Mode, scan_auto};
+use diskroot_scan_mft::{Mode, scan_auto};
 
 use crate::remember;
 
@@ -43,8 +43,8 @@ unsafe extern "system" {
     fn SetPriorityClass(p: *mut c_void, class: u32) -> i32;
 }
 
-/// What to scan and when. Saved in `%APPDATA%\Xylem\schedule.json`; the
-/// Windows task only says "run xylem.exe --scheduled-scan every N minutes".
+/// What to scan and when. Saved in `%APPDATA%\DiskRoot\schedule.json`; the
+/// Windows task only says "run diskroot.exe --scheduled-scan every N minutes".
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Schedule {
@@ -97,10 +97,10 @@ pub struct Run {
 }
 
 fn roaming() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("Xylem"))
+    std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("DiskRoot"))
 }
 fn local() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Xylem"))
+    std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("DiskRoot"))
 }
 fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
@@ -130,7 +130,7 @@ pub fn save(s: &Schedule) -> Result<(), String> {
 /// The Windows task's name, one per user (task names are machine-wide).
 pub fn task_name() -> String {
     let user: String = std::env::var("USERNAME").unwrap_or_default().chars().filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.')).collect();
-    if user.is_empty() { "Xylem scheduled scan".into() } else { format!("Xylem scheduled scan ({user})") }
+    if user.is_empty() { "DiskRoot scheduled scan".into() } else { format!("DiskRoot scheduled scan ({user})") }
 }
 
 fn xml_escape(s: &str) -> String {
@@ -150,7 +150,7 @@ pub fn task_xml(s: &Schedule, exe: &Path) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo><Description>Xylem: a normal, read-only scan every {every} minutes (no admin). Turn it off in Xylem: View &gt; Scheduled scans.</Description></RegistrationInfo>
+  <RegistrationInfo><Description>DiskRoot: a normal, read-only scan every {every} minutes (no admin). Turn it off in DiskRoot: View &gt; Scheduled scans.</Description></RegistrationInfo>
   <Triggers><TimeTrigger><StartBoundary>2026-01-01T00:00:00</StartBoundary><Enabled>true</Enabled><Repetition><Interval>PT{every}M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition></TimeTrigger></Triggers>
   <Principals><Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>{battery}</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>{battery}</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable>{idle}<ExecutionTimeLimit>PT1H</ExecutionTimeLimit><Priority>7</Priority></Settings>
@@ -186,6 +186,17 @@ pub fn install(s: &Schedule, exe: &Path) -> Result<(), String> {
     r.map(|_| ())
 }
 
+/// The task an older version made when this app was still called Xylem.
+fn old_task_name() -> String {
+    task_name().replacen("DiskRoot", "Xylem", 1)
+}
+
+/// Removes the old Xylem task (it runs the old xylem.exe). Returns whether
+/// there was one.
+pub fn remove_old_task() -> bool {
+    schtasks(&["/query", "/tn", &old_task_name()]).is_ok() && schtasks(&["/delete", "/tn", &old_task_name(), "/f"]).is_ok()
+}
+
 /// Whether the user's task exists.
 pub fn installed() -> bool {
     schtasks(&["/query", "/tn", &task_name()]).is_ok()
@@ -208,16 +219,16 @@ pub fn run_now(exe: &Path) -> Result<(), String> {
 /// background scanning under ~0.1% of the PC's time) and how fast the
 /// drive changes (no point scanning hourly if little changes in a day).
 /// `secs`: duration of a normal scan; `bytes_per_day`: average change.
-/// SSD writes Xylem allows itself for background scans: about 1 GB a day.
+/// SSD writes DiskRoot allows itself for background scans: about 1 GB a day.
 const WRITE_BUDGET_PER_DAY: f64 = 1024.0 * 1024.0 * 1024.0;
 
 /// `saved`: bytes one run writes to save its result (the compressed
-/// remembered scan, snapshot and history). Background scans keep Xylem's
+/// remembered scan, snapshot and history). Background scans keep DiskRoot's
 /// own SSD writes under ~1 GB a day.
 pub fn recommend(secs: Option<f64>, bytes_per_day: Option<f64>, saved: Option<u64>) -> (u32, String) {
     let snap = |m: f64| *CHOICES.iter().find(|&&c| f64::from(c) >= m).unwrap_or(&1440);
     let Some(secs) = secs.filter(|s| *s > 0.0) else {
-        return (120, "Every 2 hours is a good start; Xylem refines this after a few scans.".into());
+        return (120, "Every 2 hours is a good start; DiskRoot refines this after a few scans.".into());
     };
     // 0.1% duty cycle: a 7 s scan every ~2 h.
     let by_cost = snap((secs * 1000.0 / 60.0).max(f64::from(MIN_MINUTES)));
@@ -240,8 +251,8 @@ pub fn recommend(secs: Option<f64>, bytes_per_day: Option<f64>, saved: Option<u6
         let per_day = b as f64 * 1440.0 / f64::from(m);
         reason.push_str(&format!(
             " Each run saves about {} on this PC (about {} of SSD writes a day at this pace).",
-            xylem_core::format::bytes(b),
-            xylem_core::format::bytes(per_day as u64)
+            diskroot_core::format::bytes(b),
+            diskroot_core::format::bytes(per_day as u64)
         ));
     }
     (m, reason)
@@ -274,14 +285,15 @@ fn append_run(r: &Run) {
     }
 }
 
-/// `xylem.exe --scheduled-scan`: one background run, then exit.
+/// `diskroot.exe --scheduled-scan`: one background run, then exit.
 pub fn run_if_scheduled(args: &[String]) -> Option<i32> {
     (args.get(1).map(String::as_str) == Some("--scheduled-scan")).then(run_scheduled)
 }
 
 fn run_scheduled() -> i32 {
+    let _ = crate::migrate_from_xylem();
     // One run at a time per user (a slow scan must not pile up).
-    let name: Vec<u16> = "Local\\XylemScheduledScan".encode_utf16().chain([0]).collect();
+    let name: Vec<u16> = "Local\\DiskRootScheduledScan".encode_utf16().chain([0]).collect();
     // SAFETY: NUL-terminated name; the handle is closed at the end.
     let mutex = unsafe { CreateMutexW(std::ptr::null_mut(), 1, name.as_ptr()) };
     if mutex.is_null() || unsafe { GetLastError() } == 183 {
@@ -300,7 +312,7 @@ fn run_scheduled() -> i32 {
     };
     // Drive health: one small daily note (a few storage queries, no admin).
     crate::health::record_daily(&crate::health::drives());
-    // Who writes while nobody is looking: 30 s, before Xylem itself reads anything.
+    // Who writes while nobody is looking: 30 s, before DiskRoot itself reads anything.
     let (mut writers, idle) = crate::writes::sample_for(30, 5);
     let mut idle_warning = crate::warn::after_idle_sample(&runs(), &writers, idle, now_secs(), s.warn_idle_gb_day);
     for root in &s.roots {
@@ -333,7 +345,7 @@ fn run_scheduled() -> i32 {
 /// "last seen" baseline so the app can say what changed while you were away.
 fn scan_and_remember(root: &str) -> Result<(u64, Option<i128>), String> {
     let path = crate::real_path(root)?;
-    let (scan, _) = scan_auto(Path::new(&path), Mode::Walk, xylem_scan_walk::default_threads()).map_err(|e| format!("Scan failed: {e}"))?;
+    let (scan, _) = scan_auto(Path::new(&path), Mode::Walk, diskroot_scan_walk::default_threads()).map_err(|e| format!("Scan failed: {e}"))?;
     let files = scan.stats.files;
     let idx = Arc::new(scan.index);
     remember::keep_seen(idx.name(0));
@@ -348,13 +360,13 @@ mod tests {
     #[test]
     fn task_definition_is_least_privilege_and_escaped() {
         let s = Schedule { every_min: 10, roots: vec!["C:\\".into()], on_battery: false, only_idle: true, ..Schedule::default() };
-        let x = task_xml(&s, Path::new(r"C:\Program Files\X & Y\xylem.exe"));
+        let x = task_xml(&s, Path::new(r"C:\Program Files\X & Y\diskroot.exe"));
         assert!(x.contains("<Interval>PT30M</Interval>"), "never more often than every 30 minutes");
         assert!(x.contains("<RunLevel>LeastPrivilege</RunLevel>"));
         assert!(x.contains("<DisallowStartIfOnBatteries>true</DisallowStartIfOnBatteries>"));
         assert!(x.contains("<RunOnlyIfIdle>true</RunOnlyIfIdle>"));
         assert!(x.contains("<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>"));
-        assert!(x.contains(r"<Command>C:\Program Files\X &amp; Y\xylem.exe</Command>"));
+        assert!(x.contains(r"<Command>C:\Program Files\X &amp; Y\diskroot.exe</Command>"));
         assert!(x.contains("<Arguments>--scheduled-scan</Arguments>"));
         assert!(!x.contains("HighestAvailable"));
     }
@@ -388,11 +400,11 @@ mod tests {
 
     /// Creates the real per-user task (pointing at this test binary, never
     /// run), checks Windows has it with least privilege, and removes it.
-    /// `cargo test -p xylem-session real_task -- --ignored --test-threads=1`
+    /// `cargo test -p diskroot-session real_task -- --ignored --test-threads=1`
     #[test]
     #[ignore = "creates and deletes a real scheduled task for this user"]
     fn real_task_install_and_remove() {
-        let dir = std::env::temp_dir().join(format!("xylem-sched-real-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("diskroot-sched-real-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // SAFETY (test only, run with --test-threads=1): nothing else reads these meanwhile.
         unsafe {
@@ -405,7 +417,7 @@ mod tests {
         let was_installed = installed();
         let q = schtasks(&["/query", "/tn", &task_name(), "/xml"]).unwrap_or_default();
         let loaded = load();
-        let xml_left = dir.join("l").join("Xylem").join("scheduled-scan-task.xml").exists();
+        let xml_left = dir.join("l").join("DiskRoot").join("scheduled-scan-task.xml").exists();
         remove().unwrap(); // before the checks, so a failure never leaves a task behind
         assert!(was_installed);
         // Windows omits RunLevel when it's the default (least privilege).
@@ -420,7 +432,7 @@ mod tests {
     #[test]
     fn task_name_is_per_user_and_safe() {
         let n = task_name();
-        assert!(n.starts_with("Xylem scheduled scan"));
+        assert!(n.starts_with("DiskRoot scheduled scan"));
         assert!(!n.contains(['\\', '/', ':', '*', '?', '"', '<', '>', '|']));
     }
 }

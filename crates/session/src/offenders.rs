@@ -1,7 +1,7 @@
 //! Known offenders: programs and drive firmware known to wear SSDs out
 //! fast. Ships inside the app (no lookups online). Every entry was checked
 //! against public reports, listed in `sources`, with the date checked.
-//! Xylem only explains: it never stops a service or changes firmware.
+//! DiskRoot only explains: it never stops a service or changes firmware.
 
 use serde::Serialize;
 
@@ -26,7 +26,7 @@ pub const LIST: &[Offender] = &[
         firmware: "",
         title: "AMD External Events Utility (Radeon driver)",
         what: "A bug AMD confirmed in Nov 2026: on some Radeon PCs it keeps writing to the system drive even when the PC is idle (reports of about 0.3-5 MB/s), which wears the SSD.",
-        todo: "Update the AMD Radeon driver (AMD said the fix comes with Adrenalin 26.11.1). Stopping the \"AMD External Events Utility\" service also stops it, but can break Radeon hotkeys and some display features. Xylem doesn't change anything here.",
+        todo: "Update the AMD Radeon driver (AMD said the fix comes with Adrenalin 26.11.1). Stopping the \"AMD External Events Utility\" service also stops it, but can break Radeon hotkeys and some display features. DiskRoot doesn't change anything here.",
         sources: &[
             "https://www.techspot.com/news/114496-amd-confirms-gpu-driver-bug-writing-data-continuously.html",
             "https://hwbusters.com/news/amd-confirms-radeon-driver-bug-that-keeps-ssds-writing-at-idle-fix-due-in-adrenalin-26-11-1/",

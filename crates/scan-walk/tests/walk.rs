@@ -5,8 +5,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use xylem_core::{Index, flags};
-use xylem_scan_walk::{ScanOptions, scan};
+use diskroot_core::{Index, flags};
+use diskroot_scan_walk::{ScanOptions, scan};
 
 struct TempTree(PathBuf);
 
@@ -29,7 +29,7 @@ fn find(idx: &Index, name: &str) -> u32 {
 }
 
 fn build_tree(tag: &str) -> TempTree {
-    let root = std::env::temp_dir().join(format!("xylem-test-{tag}-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("diskroot-test-{tag}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("a").join("b")).unwrap();
     fs::create_dir_all(root.join("empty")).unwrap();
@@ -88,12 +88,12 @@ fn rejects_a_file_as_root() {
 }
 
 /// Files compressed by Windows' file compression (compact /EXE, CompactOS,
-/// Xylem's Compress) list only an emptied main stream, often 0 bytes on
+/// DiskRoot's Compress) list only an emptied main stream, often 0 bytes on
 /// disk. The walk must ask for their real size (bug found 11 Nov 2026: a
 /// 188 GB folder showed 47 GB on disk instead of 171 GB).
 #[test]
 fn windows_compressed_files_count_their_real_size() {
-    let root = std::env::temp_dir().join(format!("xylem-test-wof-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("diskroot-test-wof-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
     let tree = TempTree(root.clone());

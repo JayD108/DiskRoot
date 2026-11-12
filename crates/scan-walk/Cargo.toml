@@ -1,9 +1,9 @@
 ﻿[package]
-name = "xylem-scan-walk"
+name = "diskroot-scan-walk"
 description = "Parallel user-mode folder scanner for Windows (no admin needed)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-xylem-core.workspace = true
+diskroot-core.workspace = true

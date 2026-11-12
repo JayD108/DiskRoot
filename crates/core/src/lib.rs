@@ -47,7 +47,7 @@ pub mod flags {
     pub const UNREADABLE: u8 = 1 << 3;
     pub const COMPRESSED: u8 = 1 << 4;
     pub const SPARSE: u8 = 1 << 5;
-    /// Deleted from disk through Xylem; excluded from totals and views.
+    /// Deleted from disk through DiskRoot; excluded from totals and views.
     pub const DELETED: u8 = 1 << 6;
     /// Another name (hardlink) of a file counted under a different name:
     /// 0 bytes here, so the data counts once (folder walk; Fast scan lists

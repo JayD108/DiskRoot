@@ -1,15 +1,15 @@
-; Xylem installer (NSIS 3, zlib license; LZMA under CPL: all OSI-approved).
+; DiskRoot installer (NSIS 3, zlib license; LZMA under CPL: all OSI-approved).
 ; Built by tools\release.ps1 (locally or in GitHub Actions):
-;   makensis /DVERSION=0.1.0 /DSRCDIR=<folder with the exes> /DOUTDIR=<dist> installer\xylem.nsi
+;   makensis /DVERSION=0.1.0 /DSRCDIR=<folder with the exes> /DOUTDIR=<dist> installer\diskroot.nsi
 ;
-; Why an installer matters for security: Fast scan starts xylem.exe with
+; Why an installer matters for security: Fast scan starts diskroot.exe with
 ; admin rights. Installed in Program Files, only administrators can replace
 ; that exe, so malware running as the user can't swap it before the UAC
 ; prompt.
 ;
 ; The uninstaller removes exactly the files it installed (never a
-; recursive delete). It leaves the user's settings (%APPDATA%\Xylem) and
-; deletion log (%LOCALAPPDATA%\Xylem) in place; README explains how to
+; recursive delete). It leaves the user's settings (%APPDATA%\DiskRoot) and
+; deletion log (%LOCALAPPDATA%\DiskRoot) in place; README explains how to
 ; remove them.
 
 Unicode true
@@ -22,24 +22,24 @@ Unicode true
 !ifndef OUTDIR
   !define OUTDIR "..\dist"
 !endif
-!define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Xylem"
+!define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\DiskRoot"
 
-Name "Xylem"
-OutFile "${OUTDIR}\xylem-setup-${VERSION}.exe"
-InstallDir "$PROGRAMFILES64\Xylem"
+Name "DiskRoot"
+OutFile "${OUTDIR}\diskroot-setup-${VERSION}.exe"
+InstallDir "$PROGRAMFILES64\DiskRoot"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 ManifestDPIAware true
 ShowInstDetails show
 ShowUninstDetails show
-BrandingText "Xylem ${VERSION}"
+BrandingText "DiskRoot ${VERSION}"
 
 VIProductVersion "${VERSION}.0"
-VIAddVersionKey "ProductName" "Xylem"
+VIAddVersionKey "ProductName" "DiskRoot"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "FileVersion" "${VERSION}"
-VIAddVersionKey "FileDescription" "Xylem installer"
-VIAddVersionKey "CompanyName" "Xylem contributors"
+VIAddVersionKey "FileDescription" "DiskRoot installer"
+VIAddVersionKey "CompanyName" "DiskRoot contributors"
 VIAddVersionKey "LegalCopyright" "MIT OR Apache-2.0"
 
 !include "MUI2.nsh"
@@ -53,17 +53,17 @@ VIAddVersionKey "LegalCopyright" "MIT OR Apache-2.0"
 !define MUI_WELCOMEFINISHPAGE_BITMAP "welcome.bmp"
 !define MUI_UNWELCOMEFINISHPAGE_BITMAP "welcome.bmp"
 !define MUI_ABORTWARNING
-; "Start Xylem" must not inherit the installer's admin rights: launch it
+; "Start DiskRoot" must not inherit the installer's admin rights: launch it
 ; through Explorer, which runs it as the signed-in user (not elevated).
 !define MUI_FINISHPAGE_RUN
-!define MUI_FINISHPAGE_RUN_TEXT "Start Xylem"
+!define MUI_FINISHPAGE_RUN_TEXT "Start DiskRoot"
 !define MUI_FINISHPAGE_RUN_FUNCTION StartUnelevated
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "..\LICENSE-MIT"
 !insertmacro MUI_PAGE_COMPONENTS
-; No directory page: Xylem always goes to Program Files, which normal users
-; can't modify. A user-writable folder would let malware replace xylem.exe,
+; No directory page: DiskRoot always goes to Program Files, which normal users
+; can't modify. A user-writable folder would let malware replace diskroot.exe,
 ; which Fast scan runs as admin.
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -72,18 +72,18 @@ VIAddVersionKey "LegalCopyright" "MIT OR Apache-2.0"
 !insertmacro MUI_LANGUAGE "English"
 
 Function StartUnelevated
-  Exec '"$WINDIR\explorer.exe" "$INSTDIR\xylem.exe"'
+  Exec '"$WINDIR\explorer.exe" "$INSTDIR\diskroot.exe"'
 FunctionEnd
 
 Function .onInit
   ${IfNot} ${RunningX64}
-    MessageBox MB_ICONSTOP "Xylem needs 64-bit Windows 10 or 11." /SD IDOK
+    MessageBox MB_ICONSTOP "DiskRoot needs 64-bit Windows 10 or 11." /SD IDOK
     Abort
   ${EndIf}
   SetRegView 64
   SetShellVarContext all
   ; Ignore /D=... too: always the protected Program Files folder.
-  StrCpy $INSTDIR "$PROGRAMFILES64\Xylem"
+  StrCpy $INSTDIR "$PROGRAMFILES64\DiskRoot"
 FunctionEnd
 
 Function un.onInit
@@ -91,21 +91,33 @@ Function un.onInit
   SetShellVarContext all
 FunctionEnd
 
-Section "Xylem (required)" SecApp
+Section "DiskRoot (required)" SecApp
   SectionIn RO
+  ; Upgrading from Xylem (this app's old name): run the old install's own
+  ; uninstaller first (silently). It removes Xylem's files, shortcuts,
+  ; right-click entry, PATH entry and scheduled task; the user's settings and
+  ; saved scans stay, and DiskRoot moves them to its folders when it starts.
+  ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Xylem" "InstallLocation"
+  ${If} $0 != ""
+  ${AndIf} ${FileExists} "$0\uninstall.exe"
+    DetailPrint "Removing Xylem (DiskRoot's old name) from $0"
+    ExecWait '"$0\uninstall.exe" /S _?=$0'
+    Delete "$0\uninstall.exe"
+    RMDir "$0"
+  ${EndIf}
   SetOutPath "$INSTDIR"
-  File "${SRCDIR}\xylem.exe"
+  File "${SRCDIR}\diskroot.exe"
   File "..\README.md"
   File "..\LICENSE-MIT"
   File "..\LICENSE-APACHE"
   WriteUninstaller "$INSTDIR\uninstall.exe"
-  CreateShortcut "$SMPROGRAMS\Xylem.lnk" "$INSTDIR\xylem.exe" "" "$INSTDIR\xylem.exe" 0 SW_SHOWNORMAL "" "See what's filling your drive"
+  CreateShortcut "$SMPROGRAMS\DiskRoot.lnk" "$INSTDIR\diskroot.exe" "" "$INSTDIR\diskroot.exe" 0 SW_SHOWNORMAL "" "See what's filling your drive"
 
-  WriteRegStr HKLM "${UNINST_KEY}" "DisplayName" "Xylem"
+  WriteRegStr HKLM "${UNINST_KEY}" "DisplayName" "DiskRoot"
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayVersion" "${VERSION}"
-  WriteRegStr HKLM "${UNINST_KEY}" "Publisher" "Xylem contributors"
-  WriteRegStr HKLM "${UNINST_KEY}" "URLInfoAbout" "https://github.com/JayD108/Xylem"
-  WriteRegStr HKLM "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\xylem.exe"
+  WriteRegStr HKLM "${UNINST_KEY}" "Publisher" "DiskRoot contributors"
+  WriteRegStr HKLM "${UNINST_KEY}" "URLInfoAbout" "https://github.com/JayD108/DiskRoot"
+  WriteRegStr HKLM "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\diskroot.exe"
   WriteRegStr HKLM "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKLM "${UNINST_KEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
   WriteRegStr HKLM "${UNINST_KEY}" "QuietUninstallString" '"$INSTDIR\uninstall.exe" /S'
@@ -114,22 +126,22 @@ Section "Xylem (required)" SecApp
   WriteRegDWORD HKLM "${UNINST_KEY}" "EstimatedSize" 7500
 SectionEnd
 
-Section "Explorer right-click: Analyze with Xylem" SecExplorer
+Section "Explorer right-click: Analyze with DiskRoot" SecExplorer
   ; Runs as the signed-in user (Explorer launches it), never elevated.
-  !macro XylemVerb ROOT ARG
-    WriteRegStr HKLM "Software\Classes\${ROOT}\shell\Xylem" "" "Analyze with Xylem"
-    WriteRegStr HKLM "Software\Classes\${ROOT}\shell\Xylem" "Icon" '"$INSTDIR\xylem.exe"'
-    WriteRegStr HKLM "Software\Classes\${ROOT}\shell\Xylem\command" "" '"$INSTDIR\xylem.exe" "${ARG}"'
+  !macro DiskRootVerb ROOT ARG
+    WriteRegStr HKLM "Software\Classes\${ROOT}\shell\DiskRoot" "" "Analyze with DiskRoot"
+    WriteRegStr HKLM "Software\Classes\${ROOT}\shell\DiskRoot" "Icon" '"$INSTDIR\diskroot.exe"'
+    WriteRegStr HKLM "Software\Classes\${ROOT}\shell\DiskRoot\command" "" '"$INSTDIR\diskroot.exe" "${ARG}"'
   !macroend
-  !insertmacro XylemVerb "Directory" "%V"
-  !insertmacro XylemVerb "Directory\Background" "%V"
-  !insertmacro XylemVerb "Drive" "%V"
+  !insertmacro DiskRootVerb "Directory" "%V"
+  !insertmacro DiskRootVerb "Directory\Background" "%V"
+  !insertmacro DiskRootVerb "Drive" "%V"
 SectionEnd
 
-Section "Command-line tool (xylem-cli), on PATH" SecCli
+Section "Command-line tool (droot), on PATH" SecCli
   SetOutPath "$INSTDIR"
-  File "${SRCDIR}\xylem-cli.exe"
-  ; Put the install folder on the system PATH so `xylem-cli` works in any
+  File "${SRCDIR}\droot.exe"
+  ; Put the install folder on the system PATH so `droot` works in any
   ; new terminal. Done with PowerShell on the registry value itself (NSIS
   ; strings are limited to 1024 characters; a long PATH must never be cut):
   ; keeps %variables%, the value type and every other entry, adds nothing if
@@ -141,36 +153,36 @@ Section "Command-line tool (xylem-cli), on PATH" SecCli
 SectionEnd
 
 Section /o "Desktop shortcut" SecDesktop
-  CreateShortcut "$DESKTOP\Xylem.lnk" "$INSTDIR\xylem.exe"
+  CreateShortcut "$DESKTOP\DiskRoot.lnk" "$INSTDIR\diskroot.exe"
 SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecApp} "The Xylem app, including the Fast scan helper."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecCli} "xylem-cli.exe: scan from the command line, export CSV/JSON. Added to PATH so $\"xylem-cli$\" works in any new terminal."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "A Xylem shortcut on the desktop."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecExplorer} "Adds $\"Analyze with Xylem$\" when you right-click a folder or drive."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecApp} "The DiskRoot app, including the Fast scan helper."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecCli} "droot.exe: scan from the command line, export CSV/JSON. Added to PATH so $\"droot$\" works in any new terminal."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "A DiskRoot shortcut on the desktop."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecExplorer} "Adds $\"Analyze with DiskRoot$\" when you right-click a folder or drive."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
-  ; Scheduled scans: remove the per-user tasks Xylem created (names start with
-  ; "Xylem scheduled scan"); nothing else in Task Scheduler is touched.
-  nsExec::ExecToLog `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-ScheduledTask -TaskPath '\' -ErrorAction SilentlyContinue | Where-Object { $$_.TaskName -like 'Xylem scheduled scan*' } | Unregister-ScheduledTask -Confirm:$$false"`
+  ; Scheduled scans: remove the per-user tasks DiskRoot created (names start with
+  ; "DiskRoot scheduled scan"); nothing else in Task Scheduler is touched.
+  nsExec::ExecToLog `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-ScheduledTask -TaskPath '\' -ErrorAction SilentlyContinue | Where-Object { $$_.TaskName -like 'DiskRoot scheduled scan*' } | Unregister-ScheduledTask -Confirm:$$false"`
   Pop $0
-  ; Remove only Xylem's folder from the system PATH (everything else kept as it was).
+  ; Remove only DiskRoot's folder from the system PATH (everything else kept as it was).
   nsExec::ExecToLog `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$d='$INSTDIR';$$k=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\CurrentControlSet\Control\Session Manager\Environment',$$true);$$p=[string]$$k.GetValue('Path','','DoNotExpandEnvironmentNames');if($$p -ne ''){$$t=$$k.GetValueKind('Path');$$a=@($$p -split ';');$$b=@($$a|?{$$_.TrimEnd('\') -ine $$d});if($$b.Count -ne $$a.Count){$$k.SetValue('Path',($$b -join ';'),$$t)}};$$k.Close()"`
   Pop $0
   SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
-  Delete "$INSTDIR\xylem.exe"
-  Delete "$INSTDIR\xylem-cli.exe"
+  Delete "$INSTDIR\diskroot.exe"
+  Delete "$INSTDIR\droot.exe"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\LICENSE-MIT"
   Delete "$INSTDIR\LICENSE-APACHE"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
-  Delete "$SMPROGRAMS\Xylem.lnk"
-  Delete "$DESKTOP\Xylem.lnk"
+  Delete "$SMPROGRAMS\DiskRoot.lnk"
+  Delete "$DESKTOP\DiskRoot.lnk"
   DeleteRegKey HKLM "${UNINST_KEY}"
-  DeleteRegKey HKLM "Software\Classes\Directory\shell\Xylem"
-  DeleteRegKey HKLM "Software\Classes\Directory\Background\shell\Xylem"
-  DeleteRegKey HKLM "Software\Classes\Drive\shell\Xylem"
+  DeleteRegKey HKLM "Software\Classes\Directory\shell\DiskRoot"
+  DeleteRegKey HKLM "Software\Classes\Directory\Background\shell\DiskRoot"
+  DeleteRegKey HKLM "Software\Classes\Drive\shell\DiskRoot"
 SectionEnd

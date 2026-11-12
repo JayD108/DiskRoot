@@ -20,8 +20,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use serde::Serialize;
-use xylem_core::view::Children;
-use xylem_core::{Index, NO_PARENT, flags};
+use diskroot_core::view::Children;
+use diskroot_core::{Index, NO_PARENT, flags};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Member {

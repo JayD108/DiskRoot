@@ -1,4 +1,4 @@
-//! UI-agnostic engine API used by the Xylem app (`xylem.exe`) and kept
+//! UI-agnostic engine API used by the DiskRoot app (`diskroot.exe`) and kept
 //! separate from the UI so it can be tested on its own.
 //!
 //! A [`Scanned`] holds one scan: the tree, its classification and category
@@ -36,27 +36,27 @@ use std::sync::{Arc, LazyLock, RwLock};
 use std::time::Instant;
 
 use serde::Serialize;
-use xylem_core::classify::{CATEGORIES, CatCrumb, CatKey, CatModel, CatStats, Classification, NCAT, Rules};
-use xylem_core::view::{Children, ViewLimits, ViewNode, ancestors, build_view};
-use xylem_core::{Index, NO_PARENT, ScanStats, flags};
-use xylem_scan_mft::{Mode, Used, scan_auto};
+use diskroot_core::classify::{CATEGORIES, CatCrumb, CatKey, CatModel, CatStats, Classification, NCAT, Rules};
+use diskroot_core::view::{Children, ViewLimits, ViewNode, ancestors, build_view};
+use diskroot_core::{Index, NO_PARENT, ScanStats, flags};
+use diskroot_scan_mft::{Mode, Used, scan_auto};
 
-pub use xylem_core::classify::{Action, Category, RuleInfo, Safety, SubType};
-pub use xylem_core::view::ViewNode as Shape;
-pub use xylem_core::{AGE_BUCKETS, AGE_UNKNOWN, age_bucket, age_text, date_text, today_days};
+pub use diskroot_core::classify::{Action, Category, RuleInfo, Safety, SubType};
+pub use diskroot_core::view::ViewNode as Shape;
+pub use diskroot_core::{AGE_BUCKETS, AGE_UNKNOWN, age_bucket, age_text, date_text, today_days};
 /// This process's RAM and CPU (for the app's own footprint display).
-pub use xylem_scan_walk::sys as process;
+pub use diskroot_scan_walk::sys as process;
 
 /// Gentle scanning for the folder walk: Windows' background mode (low CPU,
 /// disk and memory priority). Measured on C: (E11): another program's 2 GB
 /// read took 3.0 s alone, 5.7 s during a normal scan, 3.0 s during a gentle
 /// one; the scan took ~8% longer.
 pub fn set_gentle(on: bool) {
-    xylem_scan_walk::GENTLE.store(on, std::sync::atomic::Ordering::Relaxed);
+    diskroot_scan_walk::GENTLE.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// The rules in effect: the built-in ones plus the user's own
-/// (`%APPDATA%\Xylem\rules.json`). Reloadable while the app runs; each
+/// (`%APPDATA%\DiskRoot\rules.json`). Reloadable while the app runs; each
 /// scan keeps the rules it was classified with.
 static CURRENT_RULES: LazyLock<RwLock<Arc<Rules>>> = LazyLock::new(|| RwLock::new(Arc::new(load_rules().0)));
 
@@ -67,7 +67,7 @@ pub fn rules() -> Arc<Rules> {
 
 /// Where the user's own rules live.
 pub fn user_rules_path() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("Xylem").join("rules.json"))
+    std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("DiskRoot").join("rules.json"))
 }
 
 /// What loading the user's rules gave.
@@ -118,7 +118,7 @@ pub fn create_example_rules() -> Result<PathBuf, String> {
     Ok(p)
 }
 
-/// "This is…" choices for teaching Xylem a folder: (menu label, category, sub-type).
+/// "This is…" choices for teaching DiskRoot a folder: (menu label, category, sub-type).
 pub const TEACH: [(&str, &str, &str); 5] = [
     ("My project", "dev", "My projects"),
     ("A dataset", "ai", "My datasets"),
@@ -127,7 +127,7 @@ pub const TEACH: [(&str, &str, &str); 5] = [
     ("Backups", "docs", "Backups"),
 ];
 
-const TAUGHT: &str = "Taught in Xylem";
+const TAUGHT: &str = "Taught in DiskRoot";
 
 /// The rule pattern for a folder: its path below the drive, anchored
 /// ("C:\Users\me\proj" -> "/Users/me/proj"; such a rule matches that path on
@@ -192,14 +192,14 @@ fn forget_taught_at(file: &Path, path: &str) -> Result<bool, String> {
 
 const EXAMPLE_RULES: &str = r#"{
   "_doc": [
-    "Your own Xylem categories. Edit this file, then use File > Custom rules > Reload.",
+    "Your own DiskRoot categories. Edit this file, then use File > Custom rules > Reload.",
     "match: a folder or file path pattern, '/' separated, case-insensitive.",
     "  '/Data/Projects' is anchored at the drive root; 'Projects/*/out' matches the end of any path.",
     "  '*' inside a part matches any text.",
     "kind: dir | file | any (default any).",
     "cat: apps | media | docs | dev | ai | system | temp | downloads | cloud | other.",
     "sub: your own sub-type name, shown in the Category view.",
-    "Your rules can't change what Xylem protects: they don't apply where a built-in rule",
+    "Your rules can't change what DiskRoot protects: they don't apply where a built-in rule",
     "matches, nor inside protected places like C:\\Windows. Safety labels stay 'Unknown'."
   ],
   "rules": [
@@ -217,7 +217,7 @@ pub fn categories() -> &'static [Category] {
 
 /// Items found so far by a running folder-walk scan (0 when idle).
 pub fn scan_progress() -> u64 {
-    xylem_scan_walk::PROGRESS.load(std::sync::atomic::Ordering::Relaxed)
+    diskroot_scan_walk::PROGRESS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// (total, free) bytes of the volume holding `path` (free = free for this user).
@@ -274,11 +274,52 @@ fn mode_text(used: &Used) -> String {
 /// Blocking: call it from a worker thread.
 pub fn scan(path: &str) -> Result<Scanned, String> {
     let path = real_path(path)?;
-    let threads = xylem_scan_walk::default_threads();
+    let threads = diskroot_scan_walk::default_threads();
     // Always a folder walk in this process, even if it was started as admin:
     // reading the raw drive (MFT) happens only in the locked-down helper.
     let (s, used) = scan_auto(Path::new(&path), Mode::Walk, threads).map_err(|e| format!("Scan failed: {e}"))?;
     Ok(Scanned::new(s.index, s.stats, mode_text(&used)))
+}
+
+/// What moving from the old name (Xylem) did.
+#[derive(Debug, Default)]
+pub struct Migrated {
+    /// Settings and saved scans were moved to the DiskRoot folders.
+    pub moved: bool,
+    /// The old scheduled-scan task was removed (it ran the old program).
+    pub old_task_removed: bool,
+    /// There's a saved schedule but no DiskRoot task yet: ask the user.
+    pub schedule_to_restore: bool,
+}
+
+/// DiskRoot used to be called Xylem. Once: moves `%APPDATA%\Xylem` and
+/// `%LOCALAPPDATA%\Xylem` to the DiskRoot folders (a rename, nothing is
+/// copied; skipped if a DiskRoot folder already exists or the old one is
+/// in use), and removes the old Xylem scheduled task.
+pub fn migrate_from_xylem() -> Migrated {
+    let mut m = Migrated::default();
+    // Done once per user: a marker in DiskRoot's own folder.
+    let marker = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("DiskRoot").join("migrated-from-xylem"));
+    if marker.as_ref().is_some_and(|p| p.exists()) {
+        return m;
+    }
+    for var in ["APPDATA", "LOCALAPPDATA"] {
+        let Some(base) = std::env::var_os(var).map(PathBuf::from) else { continue };
+        let (old, new) = (base.join("Xylem"), base.join("DiskRoot"));
+        if old.is_dir() && !new.exists() && std::fs::rename(&old, &new).is_ok() {
+            m.moved = true;
+        }
+    }
+    m.old_task_removed = schedule::remove_old_task();
+    m.schedule_to_restore = (m.moved || m.old_task_removed) && schedule::load().is_some() && !schedule::installed();
+    // Only when nothing is left behind (an old folder in use moves next time).
+    let left = ["APPDATA", "LOCALAPPDATA"].iter().any(|v| std::env::var_os(v).is_some_and(|d| PathBuf::from(d).join("Xylem").is_dir()));
+    if let Some(p) = marker.filter(|_| !left) {
+        let _ = std::fs::create_dir_all(p.parent().expect("has a parent"));
+        let _ = std::fs::write(p, b"DiskRoot was called Xylem; its folders were moved here.
+");
+    }
+    m
 }
 
 /// Whether this process runs with admin rights (an elevated token). The
@@ -507,9 +548,9 @@ pub struct Leftover {
     /// "Installer", "Archive", "Disk image" or the sub-type name.
     pub kind: String,
     pub note: String,
-    /// The Windows tool that removes it (when Xylem shouldn't).
-    pub action: Option<xylem_core::classify::Action>,
-    /// Xylem may move it to the Recycle Bin (not protected).
+    /// The Windows tool that removes it (when DiskRoot shouldn't).
+    pub action: Option<diskroot_core::classify::Action>,
+    /// DiskRoot may move it to the Recycle Bin (not protected).
     pub deletable: bool,
     /// Last-modified day (0 = unknown).
     pub mtime: u16,
@@ -541,7 +582,7 @@ pub struct Scanned {
     stats: ScanStats,
     mode: String,
     classify_ms: f64,
-    /// Folders deleted through Xylem (files come from the live totals).
+    /// Folders deleted through DiskRoot (files come from the live totals).
     removed_dirs: u64,
     /// The rules this scan was classified with.
     rules: Arc<Rules>,
@@ -576,8 +617,8 @@ impl Scanned {
 
     /// Bytes on disk under `node` per age bucket (index = bucket, last =
     /// unknown date). One pass over the subtree's files.
-    pub fn age_breakdown(&self, node: u32, today: u16) -> [u64; xylem_core::AGE_UNKNOWN + 1] {
-        let mut out = [0u64; xylem_core::AGE_UNKNOWN + 1];
+    pub fn age_breakdown(&self, node: u32, today: u16) -> [u64; diskroot_core::AGE_UNKNOWN + 1] {
+        let mut out = [0u64; diskroot_core::AGE_UNKNOWN + 1];
         if self.check(node).is_err() {
             return out;
         }
@@ -587,7 +628,7 @@ impl Scanned {
             if idx.is_dir(x) {
                 stack.extend(self.children.live(idx, x));
             } else {
-                out[xylem_core::age_bucket(today, idx.mtime(x))] += idx.alloc(x);
+                out[diskroot_core::age_bucket(today, idx.mtime(x))] += idx.alloc(x);
             }
         }
         out
@@ -598,7 +639,7 @@ impl Scanned {
     pub fn safety(&self, node: u32) -> Option<Safety> {
         let r = *self.cls.rule.get(node as usize)?;
         let info = self.rules.info.get(r as usize)?;
-        xylem_core::classify::safety_at(info, &self.index.path(self.cls.anchor[node as usize]))
+        diskroot_core::classify::safety_at(info, &self.index.path(self.cls.anchor[node as usize]))
     }
 
     /// The rules this scan was classified with (for notes and labels).
@@ -627,7 +668,7 @@ impl Scanned {
                 n != 0
                     && self.index.flags(n) & flags::DELETED == 0
                     && self.cls.matched_here(n)
-                    && self.rules.info.get(r as usize).is_some_and(|i| xylem_core::classify::safety_at(i, &self.index.path(n)) == Some(Safety::Green) && !i.user)
+                    && self.rules.info.get(r as usize).is_some_and(|i| diskroot_core::classify::safety_at(i, &self.index.path(n)) == Some(Safety::Green) && !i.user)
                     && self.cls.protection(&self.index, &self.rules, n).is_none()
             })
             .collect()
@@ -652,7 +693,7 @@ impl Scanned {
                 let r = self.cls.rule[id as usize];
                 if self.cls.matched_here(id)
                     && let Some(info) = self.rules.info.get(r as usize)
-                    && info.action == Some(xylem_core::classify::Action::StorageSettings)
+                    && info.action == Some(diskroot_core::classify::Action::StorageSettings)
                 {
                     out.push(self.leftover(id, self.rules.subs[self.cls.sub[id as usize] as usize].name.clone(), info.note.clone().unwrap_or_default()));
                 }
@@ -695,7 +736,7 @@ impl Scanned {
     /// never labelled safe, never marked.
     pub fn orphan_hints(&self, programs: &orphans::Programs, min_bytes: u64, min_days: u16) -> Vec<Leftover> {
         let idx = &self.index;
-        let today = xylem_core::today_days();
+        let today = diskroot_core::today_days();
         let root_is_drive = idx.name(0).len() <= 3 && idx.name(0).ends_with(":\\");
         let mut out = Vec::new();
         for id in 1..idx.len() as u32 {
@@ -728,7 +769,7 @@ impl Scanned {
                 "No installed or running program's name, publisher or folder matches \"{name}\" ({} programs checked), and nothing in it changed for {}. \
 It may be left over from an uninstalled program, or belong to one that's installed under another name. It can hold settings or saved games: check before deleting.",
                 programs.count,
-                xylem_core::age_text(today, mt).trim_end_matches(" ago"),
+                diskroot_core::age_text(today, mt).trim_end_matches(" ago"),
             );
             let mut l = self.leftover(id, "Possibly left over (app data)".into(), note);
             l.hint = true;
@@ -749,10 +790,10 @@ It may be left over from an uninstalled program, or belong to one that's install
         }
         let root = PathBuf::from(&info.path);
         if info.path.trim_end_matches('\\').len() <= 2 {
-            return Err("Xylem won't compress a whole drive.".into());
+            return Err("DiskRoot won't compress a whole drive.".into());
         }
         if self.index.flags(node) & flags::CLOUD != 0 || safety::in_cloud_folder(&root) {
-            return Err("This is in a OneDrive folder. Compressing would make OneDrive download and upload it again, so Xylem leaves cloud folders alone.".into());
+            return Err("This is in a OneDrive folder. Compressing would make OneDrive download and upload it again, so DiskRoot leaves cloud folders alone.".into());
         }
         compress::check_volume(&root)?;
         let idx = &self.index;
@@ -893,7 +934,7 @@ It may be left over from an uninstalled program, or belong to one that's install
     /// A hardlinked file's extra name whose bytes are counted under its
     /// other name (folder walk).
     pub fn counted_elsewhere(&self, node: u32) -> bool {
-        (node as usize) < self.index.len() && self.index.flags(node) & xylem_core::flags::HARDLINK != 0
+        (node as usize) < self.index.len() && self.index.flags(node) & diskroot_core::flags::HARDLINK != 0
     }
 
     /// "What you'd lose if this drive failed": the kinds of data that can't
@@ -901,7 +942,7 @@ It may be left over from an uninstalled program, or belong to one that's install
     /// code projects, your datasets), with bytes and files. Cloud-synced
     /// folders (OneDrive) are a separate category, so they're not in here.
     pub fn at_risk(&self) -> Vec<(&'static str, u64, u64)> {
-        let cat = |key: &str| xylem_core::classify::CATEGORIES.iter().position(|c| c.key == key).map_or((0, 0), |i| (self.cats.cat_total[i], self.cats.cat_files[i]));
+        let cat = |key: &str| diskroot_core::classify::CATEGORIES.iter().position(|c| c.key == key).map_or((0, 0), |i| (self.cats.cat_total[i], self.cats.cat_files[i]));
         let subs = |names: &[&str]| {
             self.rules.subs.iter().enumerate().filter(|(_, s)| names.contains(&s.name.as_str())).fold((0u64, 0u64), |a, (i, _)| (a.0 + self.cats.sub_total[i], a.1 + self.cats.sub_files[i]))
         };
@@ -920,7 +961,7 @@ It may be left over from an uninstalled program, or belong to one that's install
     pub fn unreadable_folders(&self, limit: usize) -> Vec<String> {
         let idx = &self.index;
         let mut v: Vec<String> = (0..idx.len() as u32)
-            .filter(|&n| idx.flags(n) & xylem_core::flags::UNREADABLE != 0 && idx.flags(n) & xylem_core::flags::DELETED == 0)
+            .filter(|&n| idx.flags(n) & diskroot_core::flags::UNREADABLE != 0 && idx.flags(n) & diskroot_core::flags::DELETED == 0)
             .filter_map(|n| self.path(n).ok())
             .collect();
         v.sort_by_key(|p| p.to_lowercase());
@@ -944,16 +985,16 @@ It may be left over from an uninstalled program, or belong to one that's install
         let (mut ntfs, mut svi) = (0u64, None);
         for &c in self.children.of(0) {
             let name = idx.name(c);
-            if idx.flags(c) & xylem_core::flags::DELETED != 0 {
+            if idx.flags(c) & diskroot_core::flags::DELETED != 0 {
                 continue;
             }
             if name.starts_with('$') && !name.eq_ignore_ascii_case("$Recycle.Bin") && !name.eq_ignore_ascii_case("$WinREAgent") {
                 ntfs += idx.alloc(c);
-            } else if name.eq_ignore_ascii_case("System Volume Information") && idx.flags(c) & xylem_core::flags::UNREADABLE == 0 {
+            } else if name.eq_ignore_ascii_case("System Volume Information") && idx.flags(c) & diskroot_core::flags::UNREADABLE == 0 {
                 svi = Some(idx.alloc(c));
             }
         }
-        let hardlinks = (0..idx.len() as u32).filter(|&n| idx.flags(n) & xylem_core::flags::HARDLINK != 0).count() as u64;
+        let hardlinks = (0..idx.len() as u32).filter(|&n| idx.flags(n) & diskroot_core::flags::HARDLINK != 0).count() as u64;
         Some(SpaceReport {
             root,
             total,
@@ -969,7 +1010,7 @@ It may be left over from an uninstalled program, or belong to one that's install
 
     pub fn summary(&self) -> Summary {
         let total: u64 = self.cats.cat_total.iter().sum();
-        let other = self.cats.cat_total[xylem_core::classify::CAT_OTHER as usize];
+        let other = self.cats.cat_total[diskroot_core::classify::CAT_OTHER as usize];
         Summary {
             root: self.index.name(0).to_owned(),
             mode: self.mode.clone(),
@@ -1158,12 +1199,12 @@ It may be left over from an uninstalled program, or belong to one that's install
             return Err(why);
         }
         if node == 0 {
-            return Err("Xylem won't delete the whole scanned folder or drive.".into());
+            return Err("DiskRoot won't delete the whole scanned folder or drive.".into());
         }
         let idx = &self.index;
         let path = PathBuf::from(&info.path);
         if let Some(why) = safety::unusual_name(&path) {
-            return Err(format!("Xylem won't delete this: {why} Use File Explorer instead."));
+            return Err(format!("DiskRoot won't delete this: {why} Use File Explorer instead."));
         }
         let mut warnings = safety::DeleteWarnings {
             cloud: idx.flags(node) & flags::CLOUD != 0 || safety::in_cloud_folder(&path),
@@ -1188,7 +1229,7 @@ It may be left over from an uninstalled program, or belong to one that's install
             if x != node
                 && let Some(what) = self.cls.protected_here(&self.rules, x)
             {
-                return Err(format!("It contains {}, which Xylem protects ({what}).", idx.path(x)));
+                return Err(format!("It contains {}, which DiskRoot protects ({what}).", idx.path(x)));
             }
             if x != node && idx.name(x).eq_ignore_ascii_case(".git") {
                 warnings.git_repos += 1;
@@ -1327,7 +1368,7 @@ It may be left over from an uninstalled program, or belong to one that's install
     pub fn export_csv(index: &Index, path: &Path) -> std::io::Result<()> {
         use std::io::Write;
         let mut w = std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(path)?);
-        xylem_core::report::write_csv(index, &mut w)?;
+        diskroot_core::report::write_csv(index, &mut w)?;
         w.flush()
     }
 
@@ -1530,7 +1571,7 @@ mod tests {
 
     #[test]
     fn teaching_writes_a_category_only_rule_and_can_be_undone() {
-        let file = std::env::temp_dir().join(format!("xylem-teach-{}.json", std::process::id()));
+        let file = std::env::temp_dir().join(format!("diskroot-teach-{}.json", std::process::id()));
         let _ = std::fs::remove_file(&file);
         assert_eq!(teach_pattern(r"C:\Users\me\proj\"), Some("/Users/me/proj".into()));
         assert_eq!(teach_pattern(r"C:\"), None);
@@ -1542,9 +1583,9 @@ mod tests {
         assert!(text.contains("My datasets") && !text.contains("My projects"));
         assert!(!text.contains("safety"), "never a safety label");
         let mut idx = Index::new("C:\\");
-        let u = idx.push(0, "Users", 0, 0, xylem_core::flags::DIR);
-        let me = idx.push(u, "me", 0, 0, xylem_core::flags::DIR);
-        let proj = idx.push(me, "proj", 0, 0, xylem_core::flags::DIR);
+        let u = idx.push(0, "Users", 0, 0, diskroot_core::flags::DIR);
+        let me = idx.push(u, "me", 0, 0, diskroot_core::flags::DIR);
+        let proj = idx.push(me, "proj", 0, 0, diskroot_core::flags::DIR);
         idx.push(proj, "x.dat", 10, 10, 0);
         idx.compute_totals();
         let c = Classification::run(&idx, &rules);
@@ -1647,12 +1688,12 @@ mod tests {
         }
         assert_eq!(real_path(&windir.to_string_lossy().to_uppercase()).unwrap().to_lowercase(), windir.to_string_lossy().to_lowercase());
         assert!(real_path("C:").unwrap().ends_with('\\'), "drive letter means the drive root");
-        assert!(real_path("Z:\\no\\such\\folder\\xylem").is_err());
+        assert!(real_path("Z:\\no\\such\\folder\\diskroot").is_err());
     }
 
     #[test]
     fn delete_refuses_swapped_items_and_odd_names() {
-        let root = std::env::temp_dir().join(format!("xylem-arm-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("diskroot-arm-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("a")).unwrap();
         std::fs::write(root.join("a").join("f.txt"), b"x").unwrap();
@@ -1676,7 +1717,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// `cargo test --release -p xylem-session memory_of_a_real_scan -- --ignored --nocapture`
+    /// `cargo test --release -p diskroot-session memory_of_a_real_scan -- --ignored --nocapture`
     #[test]
     #[ignore = "scans all of C: (slow); run by hand for memory work"]
     fn memory_of_a_real_scan() {
@@ -1695,8 +1736,8 @@ mod tests {
     /// helper opens C:, locks itself down (exit code 5 if it can't) and
     /// streams the index back. Also checks the cloud-flag fix on a real
     /// drive: only a small share of items may look online-only.
-    /// `cargo build --bin xylem` first, then
-    /// `XYLEM_HELPER=<repo>\target\debug\xylem.exe cargo test -p xylem-session real_fast_scan -- --ignored --nocapture`
+    /// `cargo build --bin diskroot` first, then
+    /// `DISKROOT_HELPER=<repo>\target\debug\diskroot.exe cargo test -p diskroot-session real_fast_scan -- --ignored --nocapture`
     #[test]
     #[ignore = "starts the elevated helper (UAC prompt) and scans all of C:"]
     fn real_fast_scan_through_locked_down_helper() {
@@ -1704,7 +1745,7 @@ mod tests {
         let t = Instant::now();
         let s = scan_admin("C:", &cancel).unwrap();
         let n = s.index.len();
-        let cloud = (0..n as u32).filter(|&i| s.index.flags(i) & xylem_core::flags::CLOUD != 0).count();
+        let cloud = (0..n as u32).filter(|&i| s.index.flags(i) & diskroot_core::flags::CLOUD != 0).count();
         println!("fast scan: {n} items, {cloud} cloud, mode {:?}, {:.2} s", s.mode, t.elapsed().as_secs_f64());
         assert!(n > 100_000, "a whole system drive has far more items");
         assert!(s.mode.contains("MFT"), "{}", s.mode);
@@ -1715,7 +1756,7 @@ mod tests {
     /// ("report." → "report") must be refused, never hitting the real file.
     #[test]
     fn decoy_names_are_refused_on_real_files() {
-        let dir = std::env::temp_dir().join(format!("xylem-decoys-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("diskroot-decoys-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let verbatim = |name: &str| PathBuf::from(format!(r"\\?\{}\{name}", dir.display()));
@@ -1789,7 +1830,7 @@ mod tests {
     /// tree, a new one is reported but not inserted.
     #[test]
     fn live_updates_patch_the_tree() {
-        let dir = std::env::temp_dir().join(format!("xylem-live-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("diskroot-live-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::write(dir.join("sub").join("grow.bin"), vec![0u8; 1000]).unwrap();
@@ -1813,12 +1854,12 @@ mod tests {
     /// is from today, and its folders show it as their newest.
     #[test]
     fn walk_records_real_dates() {
-        let dir = std::env::temp_dir().join(format!("xylem-dates-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("diskroot-dates-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::write(dir.join("sub").join("new.txt"), b"x").unwrap();
         let s = scan(&dir.display().to_string()).unwrap();
-        let today = xylem_core::today_days();
+        let today = diskroot_core::today_days();
         let f = s.find_rel("sub\\new.txt").unwrap();
         for id in [f, s.find_rel("sub").unwrap(), 0] {
             assert!(today.abs_diff(s.index.mtime(id)) <= 1, "node {id}: {} vs today {today}", s.index.mtime(id));
@@ -1826,7 +1867,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// `cargo test -p xylem-session orphan_hints_on_this_pc -- --ignored --nocapture`
+    /// `cargo test -p diskroot-session orphan_hints_on_this_pc -- --ignored --nocapture`
     #[test]
     #[ignore = "reads this PC's AppData and installed programs; prints the hints"]
     fn orphan_hints_on_this_pc() {
@@ -1836,12 +1877,12 @@ mod tests {
         let loose = s.orphan_hints(&p, 1 << 20, 0);
         println!("loose (>= 1 MB, any age): {}", loose.len());
         for h in loose.iter().take(15) {
-            println!("   {:>10}  {}", xylem_core::format::bytes(h.on_disk), h.name);
+            println!("   {:>10}  {}", diskroot_core::format::bytes(h.on_disk), h.name);
         }
         let hints = s.orphan_hints(&p, 50 << 20, 180);
         println!("{} programs known; {} hints", p.count, hints.len());
         for h in &hints {
-            println!("{:>10}  {}  ({})", xylem_core::format::bytes(h.on_disk), h.path, xylem_core::age_text(xylem_core::today_days(), h.mtime));
+            println!("{:>10}  {}  ({})", diskroot_core::format::bytes(h.on_disk), h.path, diskroot_core::age_text(diskroot_core::today_days(), h.mtime));
         }
     }
 
@@ -1854,7 +1895,7 @@ mod tests {
         let me = idx.push(users, "me", 0, 0, flags::DIR);
         let ad = idx.push(me, "AppData", 0, 0, flags::DIR);
         let local = idx.push(ad, "Local", 0, 0, flags::DIR);
-        let old = xylem_core::today_days() - 400;
+        let old = diskroot_core::today_days() - 400;
         let mut folder = |name: &str, days: u16, bytes: u64| {
             let d = idx.push(local, name, 0, 0, flags::DIR);
             let f = idx.push(d, "data.bin", bytes, bytes, 0);
@@ -1864,7 +1905,7 @@ mod tests {
         let gone = folder("OldGameStudio", old, 200 << 20);
         folder("Adobe", old, 200 << 20);
         folder("Microsoft", old, 200 << 20);
-        folder("FreshApp", xylem_core::today_days(), 200 << 20);
+        folder("FreshApp", diskroot_core::today_days(), 200 << 20);
         folder("TinyOld", old, 1 << 20);
         let pd = idx.push(0, "ProgramData", 0, 0, flags::DIR);
         let pd_old = idx.push(pd, "RetiredVendor", 0, 0, flags::DIR);
@@ -1900,7 +1941,7 @@ mod tests {
         let l = s.leftovers(100);
         let ids: Vec<u32> = l.iter().map(|x| x.id).collect();
         assert_eq!(ids, vec![bt, iso, setup], "biggest first; nothing outside Downloads");
-        assert!(!l[0].deletable && l[0].action == Some(Action::StorageSettings), "Windows removes it, not Xylem");
+        assert!(!l[0].deletable && l[0].action == Some(Action::StorageSettings), "Windows removes it, not DiskRoot");
         assert!(l[1].deletable && l[1].kind == "Disk image" && l[2].kind == "Installer");
     }
 

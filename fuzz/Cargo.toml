@@ -1,5 +1,5 @@
 [package]
-name = "xylem-fuzz"
+name = "diskroot-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
@@ -9,9 +9,9 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-xylem-core = { path = "../crates/core" }
-xylem-scan-mft = { path = "../crates/scan-mft" }
-xylem-session = { path = "../crates/session" }
+diskroot-core = { path = "../crates/core" }
+diskroot-scan-mft = { path = "../crates/scan-mft" }
+diskroot-session = { path = "../crates/session" }
 
 # Not part of the main workspace (needs nightly + libFuzzer).
 [workspace]

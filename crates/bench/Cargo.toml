@@ -1,16 +1,16 @@
 [package]
-name = "xylem-bench"
+name = "diskroot-bench"
 description = "Benchmark harness: synthetic trees, timing, accuracy checks"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "xylem-bench"
+name = "diskroot-bench"
 path = "src/main.rs"
 
 [dependencies]
-xylem-core.workspace = true
-xylem-scan-walk.workspace = true
+diskroot-core.workspace = true
+diskroot-scan-walk.workspace = true
 clap.workspace = true
-xylem-scan-mft.workspace = true
+diskroot-scan-mft.workspace = true

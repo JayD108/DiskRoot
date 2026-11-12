@@ -1,7 +1,7 @@
 //! Early warnings after a scheduled scan: low free space, or a drive or
 //! folder that grew fast. Quiet on purpose:
 //! - only after background scans (in the window you see it anyway);
-//! - at most one per reason per day (`%LOCALAPPDATA%\Xylem\warnings.json`);
+//! - at most one per reason per day (`%LOCALAPPDATA%\DiskRoot\warnings.json`);
 //! - shown as one Windows notification from the exiting scan. Its icon
 //!   goes away with it: nothing stays in the tray, nothing keeps running.
 
@@ -36,7 +36,7 @@ pub fn check(root: &str, vol: Option<(u64, u64)>, hist: Option<&History>, free_g
     {
         out.push(Warning {
             key: format!("free:{drive}"),
-            text: format!("{drive} has only {} free. Open Xylem to see what takes the space.", xylem_core::format::bytes(free)),
+            text: format!("{drive} has only {} free. Open DiskRoot to see what takes the space.", diskroot_core::format::bytes(free)),
         });
     }
     if grow_gb > 0
@@ -53,7 +53,7 @@ pub fn check(root: &str, vol: Option<(u64, u64)>, hist: Option<&History>, free_g
                 .unwrap_or_default();
             out.push(Warning {
                 key: format!("grow:{}", crate::remember::key(root)),
-                text: format!("{} grew by {} in the last day{top}.", root.trim_end_matches('\\'), xylem_core::format::bytes(grew)),
+                text: format!("{} grew by {} in the last day{top}.", root.trim_end_matches('\\'), diskroot_core::format::bytes(grew)),
             });
         }
     }
@@ -61,7 +61,7 @@ pub fn check(root: &str, vol: Option<(u64, u64)>, hist: Option<&History>, free_g
 }
 
 fn state_path() -> Option<PathBuf> {
-    Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Xylem").join("warnings.json"))
+    Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("DiskRoot").join("warnings.json"))
 }
 
 /// Keeps only the warnings not shown in the last day, and remembers them
@@ -117,7 +117,7 @@ pub fn idle_writes(runs: &[crate::schedule::Run], now_writers: &[crate::writes::
         let note = crate::offenders::for_process(&w.name).map(|o| format!(" Known issue: {} {}", o.what, o.todo)).unwrap_or_default();
         out.push(Warning {
             key: format!("idlewrite:{}", w.name.to_lowercase()),
-            text: format!("{} keeps writing while the PC is idle: about {} a day at its current pace (two background checks in a row).{note}", w.name, xylem_core::format::bytes(per_day(w.rate) as u64)),
+            text: format!("{} keeps writing while the PC is idle: about {} a day at its current pace (two background checks in a row).{note}", w.name, diskroot_core::format::bytes(per_day(w.rate) as u64)),
         });
     }
     out
@@ -134,10 +134,10 @@ pub fn weekly_text(growth: &[(String, i128)], drives: &[(String, Option<f64>, St
     let mut parts: Vec<String> = Vec::new();
     for (root, d) in growth {
         let sign = if *d >= 0 { "+" } else { "−" };
-        parts.push(format!("{} {sign}{} this week", root.trim_end_matches('\\'), xylem_core::format::bytes(d.unsigned_abs().min(u128::from(u64::MAX)) as u64)));
+        parts.push(format!("{} {sign}{} this week", root.trim_end_matches('\\'), diskroot_core::format::bytes(d.unsigned_abs().min(u128::from(u64::MAX)) as u64)));
     }
     for (letters, per_day, verdict) in drives {
-        let w = per_day.map(|b| format!(", about {} written a day", xylem_core::format::bytes(b as u64))).unwrap_or_default();
+        let w = per_day.map(|b| format!(", about {} written a day", diskroot_core::format::bytes(b as u64))).unwrap_or_default();
         parts.push(format!("drive {letters} ({}){w}", verdict.trim_end_matches('.')));
     }
     (!parts.is_empty()).then(|| format!("Weekly report: {}.", parts.join(" · ")))
@@ -180,7 +180,7 @@ fn show_due(found: Vec<Warning>, now: u64) -> Option<String> {
         return None;
     }
     let text = shown.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join("\n");
-    let _ = notify("Xylem", &text);
+    let _ = notify("DiskRoot", &text);
     Some(text)
 }
 
@@ -240,7 +240,7 @@ pub fn notify(title: &str, text: &str) -> Result<(), String> {
     const NIIF_WARNING: u32 = 0x2;
     const NIIF_LARGE_ICON: u32 = 0x20;
     let class: Vec<u16> = "STATIC".encode_utf16().chain([0]).collect();
-    let name: Vec<u16> = "Xylem".encode_utf16().chain([0]).collect();
+    let name: Vec<u16> = "DiskRoot".encode_utf16().chain([0]).collect();
     // SAFETY: a plain hidden STATIC window (never shown), destroyed below.
     let wnd = unsafe { CreateWindowExW(0, class.as_ptr(), name.as_ptr(), 0, 0, 0, 0, 0, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) };
     if wnd.is_null() {
@@ -271,7 +271,7 @@ pub fn notify(title: &str, text: &str) -> Result<(), String> {
         guid: [0; 16],
         balloon_icon: std::ptr::null_mut(),
     };
-    fill(&mut d.tip, "Xylem");
+    fill(&mut d.tip, "DiskRoot");
     fill(&mut d.info, text);
     fill(&mut d.info_title, title);
     // SAFETY: `d` is a fully initialised NOTIFYICONDATAW with its size set.
@@ -394,6 +394,6 @@ mod tests {
     #[test]
     #[ignore = "shows a real Windows notification"]
     fn real_notification() {
-        notify("Xylem", "Test notification from Xylem's tests. Nothing is wrong.").unwrap();
+        notify("DiskRoot", "Test notification from DiskRoot's tests. Nothing is wrong.").unwrap();
     }
 }

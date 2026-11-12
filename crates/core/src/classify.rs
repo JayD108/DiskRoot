@@ -75,7 +75,7 @@ enum Kind {
     Any,
 }
 
-/// A Windows tool Xylem can start for a place. Rules only pick from this
+/// A Windows tool DiskRoot can start for a place. Rules only pick from this
 /// list; there are no free-form commands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -149,7 +149,7 @@ struct RawExt {
     strong: bool,
 }
 
-/// The user's own rules (`%APPDATA%\Xylem\rules.json`). Deliberately
+/// The user's own rules (`%APPDATA%\DiskRoot\rules.json`). Deliberately
 /// narrower than the built-in format: a user rule names a category, a
 /// sub-type and a note, never protection, safety labels or actions. Unknown
 /// fields are errors, so "protect" is refused rather than silently ignored.
@@ -300,7 +300,7 @@ fn glob_ci(pattern: &str, text: &str) -> bool {
 }
 
 impl Rules {
-    /// The rules shipped with Xylem.
+    /// The rules shipped with DiskRoot.
     pub fn builtin() -> Self {
         Self::from_json(include_str!("rules.json")).expect("built-in rules.json is valid")
     }
@@ -717,7 +717,7 @@ impl Classification {
         ]
     }
 
-    /// Why `id` must not be deleted from Xylem, if it mustn't.
+    /// Why `id` must not be deleted from DiskRoot, if it mustn't.
     /// The protected place that starts exactly at `id` (its sub-type name),
     /// if a protecting rule matched this very node. Used to refuse deleting
     /// a folder that *contains* something protected.
@@ -1468,7 +1468,7 @@ mod tests {
         for (n, sub) in [(bt, "Windows upgrade files"), (old, "Previous Windows")] {
             assert!(sub_name(&rules, &c, n).ends_with(sub), "{}", sub_name(&rules, &c, n));
             assert_eq!(rules.info[c.rule[n as usize] as usize].action, Some(Action::StorageSettings));
-            assert!(c.protection(&t.idx, &rules, n).is_some(), "deleted through Windows, not Xylem");
+            assert!(c.protection(&t.idx, &rules, n).is_some(), "deleted through Windows, not DiskRoot");
         }
         assert_eq!(rules.info[c.rule[sxs as usize] as usize].action, Some(Action::DismCleanup));
     }
@@ -1481,7 +1481,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "speed benchmark: cargo test --release -p xylem-core -- --ignored --nocapture"]
+    #[ignore = "speed benchmark: cargo test --release -p diskroot-core -- --ignored --nocapture"]
     fn classify_speed() {
         let rules = Rules::builtin();
         let mut idx = Index::new("C:\\");

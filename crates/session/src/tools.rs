@@ -1,4 +1,4 @@
-//! Starting Windows' own tools for the cleanups Xylem doesn't do itself
+//! Starting Windows' own tools for the cleanups DiskRoot doesn't do itself
 //! (DISM, System Protection, Storage settings, compact.exe), and checking
 //! which programs are running.
 //!
@@ -129,7 +129,7 @@ pub fn dism_component_cleanup() -> Result<String, String> {
     let dism = system32("Dism.exe");
     match shell_execute(&dism.to_string_lossy(), "/Online /Cleanup-Image /StartComponentCleanup", true, SW_SHOWNORMAL, true)? {
         Some(0) => Ok("Windows finished cleaning up the component store. Scan again to see the new size.".into()),
-        Some(code) => Err(format!("DISM stopped with code {code} (0x{code:08X}). Nothing was removed by Xylem.")),
+        Some(code) => Err(format!("DISM stopped with code {code} (0x{code:08X}). Nothing was removed by DiskRoot.")),
         None => Ok("DISM started.".into()),
     }
 }

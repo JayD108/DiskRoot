@@ -1,10 +1,10 @@
-"""Builds every Xylem icon/logo file from the master logo image.
+"""Builds every DiskRoot icon/logo file from the master logo image.
 
     python tools/make-icons.py <master.png>
 
 Writes:
-  docs/logo/xylem-logo-master.png   cropped square master (1024 px, no watermark)
-  docs/logo/xylem-logo-512.png      README / social size, rounded tile
+  docs/logo/diskroot-logo-master.png   cropped square master (1024 px, no watermark)
+  docs/logo/diskroot-logo-512.png      README / social size, rounded tile
   crates/native/assets/icon.ico     exe, taskbar, Start menu, installer (16-256 px)
   crates/native/assets/icon-256.png
   crates/native/assets/icon-64.rgba window icon (raw RGBA, 64x64)
@@ -46,8 +46,8 @@ def tile(size: int, radius_frac: float = 0.22) -> Image.Image:
 
 
 os.makedirs(os.path.join(ROOT, "docs", "logo"), exist_ok=True)
-master.save(os.path.join(ROOT, "docs", "logo", "xylem-logo-master.png"))
-tile(512).save(os.path.join(ROOT, "docs", "logo", "xylem-logo-512.png"))
+master.save(os.path.join(ROOT, "docs", "logo", "diskroot-logo-master.png"))
+tile(512).save(os.path.join(ROOT, "docs", "logo", "diskroot-logo-512.png"))
 
 assets = os.path.join(ROOT, "crates", "native", "assets")
 tile(256).save(os.path.join(assets, "icon-256.png"))
@@ -63,7 +63,7 @@ x = 10
 for s in [16, 24, 32, 48, 64, 128]:
     sheet.paste(tile(s), (x, 70 - s // 2), tile(s))
     x += s + 14
-sheet.save(os.path.join(os.environ.get("TEMP", "."), "xylem-icon-preview.png"))
+sheet.save(os.path.join(os.environ.get("TEMP", "."), "diskroot-icon-preview.png"))
 print("background", bg, "done")
 
 # In-app logo (start screen, About): raw RGBA, 128x128, drawn by egui.

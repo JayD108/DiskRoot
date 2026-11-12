@@ -1,22 +1,22 @@
 # Records a real Fast scan, frame by frame, for the README demo.
 #
-#   .\tools\ui-record.ps1 -OutDir $env:TEMP\xylem-rec
-#   python tools\make-demo-gif.py $env:TEMP\xylem-rec docs\screenshots\fast-scan.gif
+#   .\tools\ui-record.ps1 -OutDir $env:TEMP\diskroot-rec
+#   python tools\make-demo-gif.py $env:TEMP\diskroot-rec docs\screenshots\fast-scan.gif
 #
-# - Starts the INSTALLED Xylem (Fast scan only runs from Program Files) with
+# - Starts the INSTALLED DiskRoot (Fast scan only runs from Program Files) with
 #   settings in a temp folder: your own settings, remembered scans and
 #   deletion log are never touched.
 # - Presses "Fast scan" through UI Automation (the mouse isn't moved). You
 #   click Yes on the Windows prompt; the secure desktop can't be captured.
-# - Captures ONLY Xylem's own window with PrintWindow (never the screen) and
+# - Captures ONLY DiskRoot's own window with PrintWindow (never the screen) and
 #   logs when the admin helper runs, so the GIF maker can cut the time spent
 #   on the Windows prompt and show real scan time.
 # - Frames are kept IN MEMORY (shrunk to GIF size) and written only after the
 #   scan: writing them during the scan competed with Fast scan for the disk
 #   and made it ~4x slower. Run it on an idle PC (no fuzzing, no downloads).
 param(
-  [string]$OutDir = (Join-Path $env:TEMP "xylem-rec"),
-  [string]$Exe = "C:\Program Files\Xylem\xylem.exe",
+  [string]$OutDir = (Join-Path $env:TEMP "diskroot-rec"),
+  [string]$Exe = "C:\Program Files\DiskRoot\diskroot.exe",
   [int]$Seconds = 40
 )
 Add-Type -AssemblyName System.Drawing, UIAutomationClient, UIAutomationTypes
@@ -36,12 +36,12 @@ if (-not (Test-Path $Exe)) { "Not installed: $Exe"; exit 1 }
 Remove-Item -Recurse -Force $OutDir -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $prof = Join-Path $OutDir "profile"
-New-Item -ItemType Directory -Force (Join-Path $prof "roaming\Xylem"), (Join-Path $prof "local") | Out-Null
+New-Item -ItemType Directory -Force (Join-Path $prof "roaming\DiskRoot"), (Join-Path $prof "local") | Out-Null
 # Category grouping: the tree shows categories, not folder names.
-[IO.File]::WriteAllText((Join-Path $prof "roaming\Xylem\settings.json"),
+[IO.File]::WriteAllText((Join-Path $prof "roaming\DiskRoot\settings.json"),
   '{"seen_notice":true,"remember_scans":false,"live_updates":false,"by_category":true,"last_path":"C:\\"}')
 
-$before = @(Get-Process xylem -ErrorAction SilentlyContinue | ForEach-Object Id)
+$before = @(Get-Process diskroot -ErrorAction SilentlyContinue | ForEach-Object Id)
 $env:APPDATA = Join-Path $prof "roaming"
 $env:LOCALAPPDATA = Join-Path $prof "local"
 $p = Start-Process -FilePath $Exe -PassThru
@@ -91,7 +91,7 @@ $pat.Invoke()
 
 $seenHelper = $false; $helperGoneAt = $null
 while ($sw.Elapsed.TotalSeconds -lt $Seconds) {
-  $others = @(Get-Process xylem -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $p.Id -and $before -notcontains $_.Id })
+  $others = @(Get-Process diskroot -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $p.Id -and $before -notcontains $_.Id })
   $helper = [int]($others.Count -gt 0)
   if ($helper) { $seenHelper = $true }
   if ($seenHelper -and -not $helper -and -not $helperGoneAt) { $helperGoneAt = $sw.ElapsedMilliseconds }

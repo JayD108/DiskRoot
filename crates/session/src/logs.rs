@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use xylem_core::{Index, flags};
+use diskroot_core::{Index, flags};
 
 const MIN: u64 = 10 << 20;
 const MAX_FILES: usize = 300;
@@ -41,7 +41,7 @@ fn rel_path(idx: &Index, mut id: u32) -> String {
     while id != 0 && parts.len() < 512 {
         parts.push(idx.name(id));
         let p = idx.parent(id);
-        if p == xylem_core::NO_PARENT {
+        if p == diskroot_core::NO_PARENT {
             break;
         }
         id = p;

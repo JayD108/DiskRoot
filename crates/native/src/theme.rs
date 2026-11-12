@@ -1,4 +1,4 @@
-//! Xylem's look: "classic utility, modern finish".
+//! DiskRoot's look: "classic utility, modern finish".
 //!
 //! Warm paper surfaces, hairline borders, a moss-green accent
 //! (the sap), and one botanical colour per category. Segoe UI is loaded
@@ -80,7 +80,7 @@ pub fn tokens(t: Theme) -> Tokens {
     }
 }
 
-/// Category colours in the order of `xylem_core::classify::CATEGORIES`:
+/// Category colours in the order of `diskroot_core::classify::CATEGORIES`:
 /// apps, media, docs, dev, ai, system, temp, downloads, cloud, other.
 const CAT: [Color32; 10] = [
     hex(0x4a6fa5), // river blue   Apps & Games
@@ -103,7 +103,7 @@ pub fn cat_color(cat: u8) -> Color32 {
 }
 
 /// Age view, newest to oldest (warm to cool), then "date unknown" (grey).
-/// Matches `xylem_session::AGE_BUCKETS`.
+/// Matches `diskroot_session::AGE_BUCKETS`.
 const AGE: [Color32; 7] = [
     hex(0xc8452c),
     hex(0xe08a2c),
@@ -140,7 +140,7 @@ pub fn ink(depth: u8, t: &Tokens) -> Color32 {
 /// Loads Segoe UI (+ Semibold) from the Windows fonts folder. Falls back to
 /// egui's built-in fonts if they can't be read.
 /// Uses only fonts that ship with Windows (nothing is bundled in the exe,
-/// so every component of Xylem stays under an OSI-approved license).
+/// so every component of DiskRoot stays under an OSI-approved license).
 /// Each family tries a short fallback list.
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::empty();
@@ -217,7 +217,7 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
         s.corner_radius = r;
         s.expansion = 0.0;
     }
-    // Xylem's own Light/Dark choice wins over the Windows theme (egui would
+    // DiskRoot's own Light/Dark choice wins over the Windows theme (egui would
     // otherwise switch to its default dark style when Windows goes dark).
     let egui_theme = if t.dark { egui::Theme::Dark } else { egui::Theme::Light };
     ctx.set_theme(egui_theme);

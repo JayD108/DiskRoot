@@ -1,9 +1,9 @@
-//! Starts `xylem.exe --helper-scan` elevated (UAC prompt) to do a fast MFT
+//! Starts `diskroot.exe --helper-scan` elevated (UAC prompt) to do a fast MFT
 //! scan, and receives the result through a private named pipe. The UI never
 //! runs as admin. The helper side is in `helper.rs`.
 //!
 //! Why a pipe and not a file: the elevated helper then writes nothing to
-//! disk at all. An earlier version wrote `%TEMP%\xylem-*.idx`, and the
+//! disk at all. An earlier version wrote `%TEMP%\diskroot-*.idx`, and the
 //! user's TEMP is under the user's control (it can be redirected or swapped
 //! for a junction), which is a poor place for an admin process to create
 //! files.
@@ -23,7 +23,7 @@ use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use xylem_core::{Index, ScanStats};
+use diskroot_core::{Index, ScanStats};
 
 const SEE_MASK_NOCLOSEPROCESS: u32 = 0x0000_0040;
 const SW_HIDE: i32 = 0;
@@ -109,19 +109,19 @@ impl Drop for Handle {
     }
 }
 
-/// `xylem.exe` next to the app.
+/// `diskroot.exe` next to the app.
 ///
 /// Security: this exe is launched with admin rights, so its location must
-/// not be redirectable. The `XYLEM_HELPER` override exists only in debug
+/// not be redirectable. The `DISKROOT_HELPER` override exists only in debug
 /// builds, and release builds refuse to elevate outside Program Files
 /// (see `integrity::fast_scan_allowed`).
 fn helper_path() -> Result<std::path::PathBuf, String> {
     #[cfg(debug_assertions)]
-    if let Some(p) = std::env::var_os("XYLEM_HELPER") {
+    if let Some(p) = std::env::var_os("DISKROOT_HELPER") {
         return Ok(p.into());
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let p = exe.with_file_name("xylem.exe");
+    let p = exe.with_file_name("diskroot.exe");
     if p.exists() { Ok(p) } else { Err(format!("Helper not found: {}", p.display())) }
 }
 
@@ -135,7 +135,7 @@ fn normalize_drive(drive: &str) -> Result<String, String> {
     }
 }
 
-/// A fresh, unguessable pipe name: `\\.\pipe\xylem-<pid>-<nanos>-<random>`.
+/// A fresh, unguessable pipe name: `\\.\pipe\diskroot-<pid>-<nanos>-<random>`.
 pub fn new_pipe_name() -> String {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     // RandomState is seeded from the OS random generator.
@@ -145,7 +145,7 @@ pub fn new_pipe_name() -> String {
         h.write_u128(nanos);
         h.finish()
     };
-    format!(r"\\.\pipe\xylem-{}-{nanos:x}-{rnd:016x}", std::process::id())
+    format!(r"\\.\pipe\diskroot-{}-{nanos:x}-{rnd:016x}", std::process::id())
 }
 
 /// Creates the pipe (first and only instance) and returns its handle.

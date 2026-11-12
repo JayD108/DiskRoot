@@ -1,8 +1,8 @@
-# How Xylem works
+# How DiskRoot works
 
 [← Back to README](../README.md) · What each feature does: [FEATURES-AND-DEVELOPMENT.md](FEATURES-AND-DEVELOPMENT.md)
 
-This page follows your data from the disk to the screen: how a scan reads the drive, how millions of files fit in a small amount of memory, how Xylem decides what a folder is, and what happens, step by step, when you delete something.
+This page follows your data from the disk to the screen: how a scan reads the drive, how millions of files fit in a small amount of memory, how DiskRoot decides what a folder is, and what happens, step by step, when you delete something.
 
 **Contents**
 - [The big picture](#the-big-picture)
@@ -23,28 +23,28 @@ This page follows your data from the disk to the screen: how a scan reads the dr
 ## The big picture
 
 ```
-                 ┌──────────────────── xylem.exe  (your normal user, never admin) ─────────────────────┐
-  You ─ click ─► │  UI (egui): tree · map · details        ◄── asks ──   engine (xylem-session)        │
+                 ┌──────────────────── diskroot.exe  (your normal user, never admin) ─────────────────────┐
+  You ─ click ─► │  UI (egui): tree · map · details        ◄── asks ──   engine (diskroot-session)        │
                  │  redraws only when something changes                 Scanned = index + rules +     │
                  │                                                       categories + totals          │
                  │  worker threads: scan · delete · export · duplicate finder · live-update watcher    │
                  └─────────▲───────────────────────────────────────────────────────┬──────────────────┘
                            │ private pipe: the finished scan (checked before use)  │ Fast scan → Windows
                            │                                                       ▼ UAC prompt
-                 ┌─────────┴──── xylem.exe --helper-scan C: --pipe <name>  (admin, ~1-2 s) ────────────┐
+                 ┌─────────┴──── diskroot.exe --helper-scan C: --pipe <name>  (admin, ~1-2 s) ────────────┐
                  │ 1. open drive C: read-only  2. connect to the pipe  3. DROP admin power             │
                  │ 4. read the Master File Table  5. build the tree  6. send it  7. exit               │
                  └────────────────────────────────────────────────────────────────────────────────────┘
   Without admin, the window walks the folders itself (no prompt, any file system).
 ```
 
-One program, `xylem.exe`, plays three roles: the app, the Fast-scan helper and the virtual-disk helper. Which one depends on how it's started. Everything heavy runs on worker threads, so the window never freezes.
+One program, `diskroot.exe`, plays three roles: the app, the Fast-scan helper and the virtual-disk helper. Which one depends on how it's started. Everything heavy runs on worker threads, so the window never freezes.
 
 ## The name
 
-> In botany, **xylem** is the vascular tissue that pulls water up from the deepest roots to the canopy.
+> **DiskRoot** gets to the *root* of what fills your drive: it reads the drive from the bottom (the raw file table) and carries the answer all the way up to plain English. It started as **Xylem**, after the plant tissue that pulls water up from the deepest roots to the canopy, and that picture still fits:
 
-| Botany | Xylem |
+| A plant | DiskRoot |
 |---|---|
 | **Roots** reach into the soil | The helper drops straight into the drive: the **boot sector**, then the raw **Master File Table**, not the folder APIs. |
 | **Vessels** carry sap upward | Every file is one row in flat arrays. Sizes **roll up** from children to parents in a single backwards loop. |
@@ -58,7 +58,7 @@ One program, `xylem.exe`, plays three roles: the app, the Fast-scan helper and t
 ### The MFT reader (`crates/scan-mft`): Fast scan, NTFS, admin
 Every NTFS drive keeps a table with one 1 KB record per file and folder: the **Master File Table (MFT)**. Reading it directly is much faster than asking Windows folder by folder.
 
-1. **Boot sector** (`volume.rs`): the first sector of the drive says how big a cluster is, how big an MFT record is, and where the MFT starts. Values outside what NTFS really uses are rejected, so a damaged drive can't make Xylem allocate absurd buffers.
+1. **Boot sector** (`volume.rs`): the first sector of the drive says how big a cluster is, how big an MFT record is, and where the MFT starts. Values outside what NTFS really uses are rejected, so a damaged drive can't make DiskRoot allocate absurd buffers.
 2. **The MFT's own record (record 0)** describes where the MFT itself lies on disk, as a list of fragments (a *run list*). Very fragmented MFTs are followed through extension records.
 3. **Reading:** the MFT is split into 4 MB jobs. Several threads read them with unbuffered, overlapped I/O through **one shared drive handle** (opening one handle per thread cost ~0.35 s each).
 4. **Parsing** (`record.rs`), for each 1 KB record:
@@ -84,7 +84,7 @@ Each file record becomes exactly one entry, so a hardlinked file is counted **on
 ## 2. Vessels: the data model
 
 ### The index (`crates/core`)
-Instead of millions of small objects, Xylem keeps **one array per property**, and a file is just a number (`u32` id) into all of them:
+Instead of millions of small objects, DiskRoot keeps **one array per property**, and a file is just a number (`u32` id) into all of them:
 
 | Column | Bytes per item | What it holds |
 |---|---|---|
@@ -96,9 +96,9 @@ Instead of millions of small objects, Xylem keeps **one array per property**, an
 | `mtime` | 2 | last-modified day; for folders, the newest inside |
 | names | ~22 on average | all names, UTF-8, one after another |
 
-- **Why parent id < child id matters:** to give every folder its total size, Xylem walks the arrays **once, backwards**, adding each item to its parent. Because children always come after their parents, every child is finished before its parent is read. 2 million items take a few milliseconds.
+- **Why parent id < child id matters:** to give every folder its total size, DiskRoot walks the arrays **once, backwards**, adding each item to its parent. Because children always come after their parents, every child is finished before its parent is read. 2 million items take a few milliseconds.
 - **Memory:** about 81 bytes per item including the category data below. 154 MB for a 2-million-item drive.
-- **File format** (`store.rs`, `XYLMIDX2`): the same columns written one after another (only folders' own sizes, totals are recomputed). When it's loaded, the file's declared sizes must match its real length before anything is allocated, every parent id must be smaller than its child's, names must be valid and may not contain `\ / :`. A damaged or crafted file is rejected, never trusted. Version 1 files (Xylem 0.1) still load, with dates unknown.
+- **File format** (`store.rs`, `XYLMIDX2`): the same columns written one after another (only folders' own sizes, totals are recomputed). When it's loaded, the file's declared sizes must match its real length before anything is allocated, every parent id must be smaller than its child's, names must be valid and may not contain `\ / :`. A damaged or crafted file is rejected, never trusted. Version 1 files (DiskRoot 0.1) still load, with dates unknown.
 
 ---
 
@@ -141,9 +141,9 @@ The folder where a classification was decided is the item's **anchor**. The Cate
 ## 5. Memory: reopen and "what changed"
 
 `remember.rs`, after a scan is on screen (a background thread, so the scan itself isn't slowed):
-1. **Saves the scan** (the index file format above) as `<fingerprint>.idx` in `%LOCALAPPDATA%\Xylem\cache`. The fingerprint is a hash of the scanned path.
+1. **Saves the scan** (the index file format above) as `<fingerprint>.idx` in `%LOCALAPPDATA%\DiskRoot\cache`. The fingerprint is a hash of the scanned path.
 2. **Saves a folder snapshot**: every folder's path and size. The previous snapshot is kept as `.prev.snap`.
-3. **Compares** the new snapshot with the previous one. Folders are matched by a fingerprint of their path, and Xylem reports the **deepest** folder where a change happened (at least 1 MB or 0.1% of the total), not every parent above it. These numbers also feed the tree's Change column.
+3. **Compares** the new snapshot with the previous one. Folders are matched by a fingerprint of their path, and DiskRoot reports the **deepest** folder where a change happened (at least 1 MB or 0.1% of the total), not every parent above it. These numbers also feed the tree's Change column.
 4. **Instant reopen:** at start, the last root's file is loaded, checked like any other file, and shown with its age. C: reopens in about 0.3–0.4 s.
 5. At most 8 roots are kept. After a delete, the saved scan of that root is dropped, because it's out of date.
 6. **Size history** (`history.rs`): the folders of 1 MB or more are added to `<fingerprint>.hist` as one point (time, scan method, root size, the volume's size and free space, and only the folders whose size changed since the previous point). Old points are thinned (every scan for 2 days, daily for 60 days, weekly after) by replaying the sizes and re-expressing the kept points, so their sizes stay exact. "Drive full in ~N days" fits a robust trend to the volume's daily used space (rare sudden jumps removed, Theil-Sen slope, range from quartiles) and needs a week of scans.
@@ -156,7 +156,7 @@ The folder where a classification was decided is the item's **anchor**. The Cate
 3. The app re-measures only those paths: a file whose size changed moves every folder above it by the difference (and their newest date), a deleted item leaves the tree, a new item is counted in the status bar.
 4. If Windows reports that its buffer overflowed, the app says "press F5" instead of guessing.
 
-Size alerts are checked after every scan and every live update. Each alert stores the folder's size when it was set; when the folder has grown by the chosen amount, the alert fires once and re-arms at the new size. Nothing runs when Xylem is closed.
+Size alerts are checked after every scan and every live update. Each alert stores the folder's size when it was set; when the folder has grown by the chosen amount, the alert fires once and re-arms at the new size. Nothing runs when DiskRoot is closed.
 
 ---
 
@@ -178,17 +178,17 @@ Size alerts are checked after every scan and every live update. Each alert store
 
 ## 8. Windows' own tools
 
-Xylem itself only ever moves things to the Recycle Bin. Everything else is done by Windows' own tools, only when you click, started by their **full path in System32** and **never through a shell**, so no argument is ever interpreted by `cmd.exe`:
+DiskRoot itself only ever moves things to the Recycle Bin. Everything else is done by Windows' own tools, only when you click, started by their **full path in System32** and **never through a shell**, so no argument is ever interpreted by `cmd.exe`:
 
 | Action | Tool | Admin |
 |---|---|---|
 | Shrink WinSxS | `Dism.exe /Online /Cleanup-Image /StartComponentCleanup` | Yes (UAC) |
 | Restore points | System Protection settings | Windows asks |
 | `Windows.old`, upgrade files | Settings > Storage | Windows asks |
-| Compress / uncompress a folder | Xylem's engine: Windows' file compression (`FSCTL_SET_EXTERNAL_BACKING` / `FSCTL_DELETE_EXTERNAL_BACKING`), files in parallel | No |
-| Compact a WSL/Docker disk | `diskpart`: attach read-only, compact, detach; fed through a pipe by `xylem.exe --helper-compact-vhdx`, which re-checks the path and that the disk isn't in use | Yes (UAC) |
+| Compress / uncompress a folder | DiskRoot's engine: Windows' file compression (`FSCTL_SET_EXTERNAL_BACKING` / `FSCTL_DELETE_EXTERNAL_BACKING`), files in parallel | No |
+| Compact a WSL/Docker disk | `diskpart`: attach read-only, compact, detach; fed through a pipe by `diskroot.exe --helper-compact-vhdx`, which re-checks the path and that the disk isn't in use | Yes (UAC) |
 | Shut down WSL | `wsl.exe --shutdown` | No |
-| Cleanup plan | A PowerShell script Xylem writes for you to review (dry run unless `-Run`) | Xylem never runs it |
+| Cleanup plan | A PowerShell script DiskRoot writes for you to review (dry run unless `-Run`) | DiskRoot never runs it |
 
 ---
 
@@ -209,7 +209,7 @@ Comparisons with other tools are in [BENCHMARKS.md](BENCHMARKS.md).
 
 ## 10. Accuracy
 
-| Situation | What Xylem does |
+| Situation | What DiskRoot does |
 |---|---|
 | Hardlinks (one file, several names) | Both count them once. Fast scan reads one record per file; the folder walk asks for each file's ID and gives the bytes to one name (outside WinSxS first, then the alphabetically first path), 0 B to the others. The details pane lists all names of a file. |
 | Compressed, sparse and CompactOS files | Size on disk = bytes actually used. Files packed by Windows' file compression list as ~0 bytes, so the folder walk asks Windows for their real size |
@@ -218,4 +218,4 @@ Comparisons with other tools are in [BENCHMARKS.md](BENCHMARKS.md).
 | `pagefile.sys`, `hiberfil.sys`, `$MFT`, System Volume Information | Included in Fast scan; they're real space |
 | Live updates | A changed file's size on disk comes from Windows when it's compressed or sparse, else it's rounded to 4 KB until the next scan |
 | Folder dates | A folder shows the newest last-modified date of anything inside it |
-| Checked how | The folder walk is compared item by item with a plain Rust directory walk (`xylem-bench verify`): an exact match on `C:\Program Files`. Fast-scan totals match Windows' used space. |
+| Checked how | The folder walk is compared item by item with a plain Rust directory walk (`diskroot-bench verify`): an exact match on `C:\Program Files`. Fast-scan totals match Windows' used space. |

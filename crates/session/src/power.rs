@@ -1,8 +1,8 @@
 //! Phase 10 "power tools", all opt-in and all done by Windows' own tools:
 //!
 //! - [`powershell_plan`]: a cleanup script for review and running elsewhere.
-//!   Xylem writes it and never runs it.
-//! - Folder compression lives in [`crate::compress`] (Xylem's own engine
+//!   DiskRoot writes it and never runs it.
+//! - Folder compression lives in [`crate::compress`] (DiskRoot's own engine
 //!   driving Windows' file compression directly).
 //! - [`compact_vhdx`]: shrinks a WSL/Docker virtual disk with Windows'
 //!   `diskpart` behind the UAC prompt, only while nothing uses the disk.
@@ -47,14 +47,14 @@ pub fn powershell_plan(items: &[PlanItem], scan_root: &str, when: &str) -> Strin
     }
     let total: u64 = ok.iter().map(|i| i.bytes).sum();
     let mut s = String::new();
-    s.push_str("# Xylem cleanup plan\n");
+    s.push_str("# DiskRoot cleanup plan\n");
     s.push_str(&format!("# Made {when} from a scan of {}\n", crate::safety::visible(scan_root)));
-    s.push_str(&format!("# {} items, about {} on disk.\n#\n", ok.len(), xylem_core::format::bytes(total)));
+    s.push_str(&format!("# {} items, about {} on disk.\n#\n", ok.len(), diskroot_core::format::bytes(total)));
     s.push_str("# Read it first. Without -Run it only shows what it would do:\n");
     s.push_str("#   powershell -ExecutionPolicy Bypass -File <this file>\n");
     s.push_str("#   powershell -ExecutionPolicy Bypass -File <this file> -Run\n");
     s.push_str("# Everything goes to the Recycle Bin. An item is skipped if it's gone, changed type,\n");
-    s.push_str("# or it (or a folder above it) is now a link. Xylem itself never runs this script.\n");
+    s.push_str("# or it (or a folder above it) is now a link. DiskRoot itself never runs this script.\n");
     if !skipped.is_empty() {
         s.push_str("#\n# Left out (unusual characters; delete these by hand if you want):\n");
         for x in &skipped {
@@ -113,7 +113,7 @@ pub fn wsl_shutdown() -> Result<(), String> {
     }
 }
 
-/// Checks that `path` is a virtual disk Xylem may hand to diskpart.
+/// Checks that `path` is a virtual disk DiskRoot may hand to diskpart.
 pub fn check_vhdx(path: &Path) -> Result<(), String> {
     let s = path.to_string_lossy();
     if let Some(why) = unsafe_path(&s) {
@@ -128,7 +128,7 @@ pub fn check_vhdx(path: &Path) -> Result<(), String> {
     }
     let win = crate::integrity::windows_dir().to_string_lossy().to_ascii_lowercase();
     if s.to_ascii_lowercase().starts_with(&win) {
-        return Err("Xylem won't touch virtual disks inside Windows.".into());
+        return Err("DiskRoot won't touch virtual disks inside Windows.".into());
     }
     Ok(())
 }
@@ -138,13 +138,13 @@ pub fn diskpart_script(path: &Path) -> String {
     format!("select vdisk file=\"{}\"\nattach vdisk readonly\ncompact vdisk\ndetach vdisk\nexit\n", path.display())
 }
 
-/// Exit codes of `xylem.exe --helper-compact-vhdx <path>`.
+/// Exit codes of `diskroot.exe --helper-compact-vhdx <path>`.
 pub const COMPACT_OK: i32 = 0;
 pub const COMPACT_BAD_ARGS: i32 = 2;
 pub const COMPACT_IN_USE: i32 = 6;
 pub const COMPACT_FAILED: i32 = 7;
 
-/// Elevated side: `xylem.exe --helper-compact-vhdx <path>`. Re-checks the
+/// Elevated side: `diskroot.exe --helper-compact-vhdx <path>`. Re-checks the
 /// path and that nothing uses the disk, then feeds the script to diskpart
 /// through a pipe (no script file that another program could swap).
 pub fn run_if_compact_helper(args: &[String]) -> Option<i32> {
@@ -182,19 +182,19 @@ pub fn compact_vhdx(path: &Path) -> Result<String, String> {
     // Release builds only elevate an installed copy (same rule as Fast scan).
     #[cfg(not(debug_assertions))]
     if !crate::integrity::fast_scan_allowed() {
-        return Err("Compacting needs admin rights, so it only works from an installed copy of Xylem.".into());
+        return Err("Compacting needs admin rights, so it only works from an installed copy of DiskRoot.".into());
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe = exe.with_file_name("xylem.exe");
+    let exe = exe.with_file_name("diskroot.exe");
     let before = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let code = tools::run_system_tool_admin(&exe, &format!("--helper-compact-vhdx \"{}\"", path.display()))?;
     let after = std::fs::metadata(path).map(|m| m.len()).unwrap_or(before);
     match code as i32 {
         COMPACT_OK => Ok(format!(
             "Done: {} → {} ({} freed).",
-            xylem_core::format::bytes(before),
-            xylem_core::format::bytes(after),
-            xylem_core::format::bytes(before.saturating_sub(after))
+            diskroot_core::format::bytes(before),
+            diskroot_core::format::bytes(after),
+            diskroot_core::format::bytes(before.saturating_sub(after))
         )),
         COMPACT_IN_USE => Err("The virtual disk was in use when the compaction was about to start. Nothing was changed.".into()),
         COMPACT_BAD_ARGS => Err("The helper refused the path.".into()),
@@ -228,7 +228,7 @@ mod tests {
         assert!(check_vhdx(Path::new("relative.vhdx")).is_err());
         assert!(check_vhdx(Path::new(r"C:\x\disk.vhd")).is_err());
         assert!(check_vhdx(Path::new(r"C:\Windows\a.vhdx")).is_err());
-        let dir = std::env::temp_dir().join(format!("xylem-vhdx-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("diskroot-vhdx-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("ext4.vhdx");
         std::fs::write(&f, b"not really a disk").unwrap();

@@ -117,7 +117,7 @@ impl Watcher {
         let (tx, rx) = mpsc::channel();
         let s2 = Arc::clone(&stop);
         std::thread::Builder::new()
-            .name("xylem-watch".into())
+            .name("diskroot-watch".into())
             .spawn(move || run(&dir, &ev, &s2, &tx, &*wake))
             .map_err(|e| e.to_string())?;
         Ok(Self { stop, rx })
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn reports_changes_in_a_real_folder() {
-        let dir = std::env::temp_dir().join(format!("xylem-watch-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("diskroot-watch-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         let w = Watcher::start(&dir.display().to_string()).unwrap();

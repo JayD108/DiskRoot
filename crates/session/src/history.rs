@@ -1,7 +1,7 @@
 //! Size history: how folders and the drive grew over time.
 //!
 //! One file per scanned root, `<key>.hist` next to the remembered scan in
-//! `%LOCALAPPDATA%\Xylem\cache\`. A full folder snapshot of C: is ~39 MB,
+//! `%LOCALAPPDATA%\DiskRoot\cache\`. A full folder snapshot of C: is ~39 MB,
 //! far too big to keep one per scan, so the history keeps only folders of
 //! at least 1 MB (~26k on C:) and, per scan, only those whose size changed
 //! since the scan before (~300 between two scans 1.5 h apart, ~3 KB).
@@ -284,7 +284,7 @@ impl History {
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
         if &magic != MAGIC {
-            return Err(bad("not a Xylem history"));
+            return Err(bad("not a DiskRoot history"));
         }
         let root = read_str(r)?;
         let n = read_u32(r)?;
@@ -447,7 +447,7 @@ fn remove_jumps(daily: &mut [(u64, f64)]) -> u32 {
 impl Forecast {
     /// One honest sentence for `drive` (e.g. "C:").
     pub fn text(&self, drive: &str) -> String {
-        let gb = |b: f64| xylem_core::format::bytes(b.abs() as u64);
+        let gb = |b: f64| diskroot_core::format::bytes(b.abs() as u64);
         match self {
             Self::NeedMore { days } => format!(
                 "A forecast needs at least a week of scans of {drive} ({} so far). Scheduled scans collect them for you.",

@@ -6,25 +6,25 @@
 
 ## Result
 
-**Xylem was the fastest in every test, with and without admin rights.**
+**DiskRoot was the fastest in every test, with and without admin rights.**
 
 ### With admin rights (fast NTFS / MFT modes)
 
-| Test | Xylem | eDirStat 2.0 | WizTree 4.33 | WinDirStat 2.9 |
+| Test | DiskRoot | eDirStat 2.0 | WizTree 4.33 | WinDirStat 2.9 |
 |---|---|---|---|---|
 | Scan the whole drive | **1.07 s** | 2.41 s (2.3x slower) | 4.42 s (4.1x slower) | — |
 | Scan + CSV of every file | **1.59 s** | — | 16.57 s (10.4x slower) | 8.09 s (5.1x slower) |
 
 ### Without admin rights (folder walks)
 
-| Test | Xylem | eDirStat 2.0 | WizTree 4.33 | WinDirStat 2.9 |
+| Test | DiskRoot | eDirStat 2.0 | WizTree 4.33 | WinDirStat 2.9 |
 |---|---|---|---|---|
 | Scan the whole drive | **4.29 s** | 5.28 s (1.2x slower) | 20.83 s (4.9x slower) | — |
 | Scan + CSV of every file | **4.85 s** | — | 34.74 s (7.2x slower) | 21.13 s (4.4x slower) |
 
 Medians of 3 timed runs (after 1 warm-up run per tool). Individual runs are in `bench-results/results.csv` (not committed; re-run to regenerate).
 
-### Xylem 0.2 against 0.1
+### DiskRoot 0.2 against 0.1
 0.2 added dates, live updates, rules and more. The rule is that scans don't get slower, so it was measured against the commit before Phases 8–10, the two builds alternating 5 times each on the same drive (with background fuzzing running, so both are slower than on an idle PC):
 
 | | Before (fa32b84) | 0.2 |
@@ -44,7 +44,7 @@ No measurable slowdown; memory is up 2.5% for the dates.
 
 ## Compression
 
-How much Xylem's **Compress** saves, by file type. Measured 12 Nov 2026 on copies of real files (the originals were only read) with the open probe [`tools/compress-probe`](../tools/compress-probe): each copy compressed with every Windows (WOF) algorithm on one thread, checked byte-for-byte identical afterwards, then uncompressed. zstd and lz4 (in memory, not usable transparently by Windows) are there for comparison. Percent = space saved; MB/s = input per second, one thread (the engine runs many files in parallel).
+How much DiskRoot's **Compress** saves, by file type. Measured 12 Nov 2026 on copies of real files (the originals were only read) with the open probe [`tools/compress-probe`](../tools/compress-probe): each copy compressed with every Windows (WOF) algorithm on one thread, checked byte-for-byte identical afterwards, then uncompressed. zstd and lz4 (in memory, not usable transparently by Windows) are there for comparison. Percent = space saved; MB/s = input per second, one thread (the engine runs many files in parallel).
 
 | File type (size) | XPRESS4K | XPRESS8K | **XPRESS16K (Fast)** | **LZX (Maximum)** | zstd 1 | zstd 3 | zstd 9 | lz4 |
 |---|---|---|---|---|---|---|---|---|
@@ -86,7 +86,7 @@ Compressing a few 16 KB chunks spread over the file with Windows' XPRESS-Huffman
 
 ## Size history
 
-Measured 12 Nov 2026 on the C: drive below (two real remembered scans 1.5 h apart, in memory and a temp file; `xylem-rnd` E13):
+Measured 12 Nov 2026 on the C: drive below (two real remembered scans 1.5 h apart, in memory and a temp file; `diskroot-rnd` E13):
 
 | | |
 |---|---|
@@ -100,7 +100,7 @@ Measured 12 Nov 2026 on the C: drive below (two real remembered scans 1.5 h apar
 
 ## What stays in "Other"
 
-13 Nov 2026, the C: drive below (remembered index, read-only; `xylem-rnd` E15):
+13 Nov 2026, the C: drive below (remembered index, read-only; `diskroot-rnd` E15):
 
 | | Before smarter categories | After |
 |---|---|---|
@@ -110,7 +110,7 @@ Measured 12 Nov 2026 on the C: drive below (two real remembered scans 1.5 h apar
 
 Biggest moves: `.tmp` 7.7 GB, model weights (`.bin` next to `tokenizer_config.json`) 5.0 GB, `.csv` 4.1 GB, Oracle `.dbf` 1.5 GB, `.partial` 1.5 GB, `.jsonl` 1.1 GB.
 
-## Xylem's own writes
+## DiskRoot's own writes
 
 What saving one scan of C: (1.7M files) writes, 13 Nov 2026:
 
@@ -127,15 +127,15 @@ What saving one scan of C: (1.7M files) writes, 13 Nov 2026:
 - **Same drive, warm cache, tools interleaved round-robin** so a busy moment on the disk doesn't hit just one tool.
 - **Time** = wall clock from process start to exit: what a user waits for, including start-up and writing output.
 - **"Scan"** = the smallest output each tool offers:
-  - Xylem: `xylem-cli scan C: --top 1`.
+  - DiskRoot: `droot scan C: --top 1`.
   - eDirStat: `--benchmark C:\` (its headless benchmark mode).
   - WizTree: `/export` limited to the top level, folders only.
 - **"Scan + CSV"** = a CSV listing every file and folder:
-  - Xylem: `--export`.
+  - DiskRoot: `--export`.
   - WizTree: `/export`.
   - WinDirStat: `/SaveTo`.
-- **Fast modes:** Xylem `--mode mft`, WizTree `/admin=1`, WinDirStat and eDirStat with their NTFS scanners (all elevated). Without admin: `--mode walk`, `/admin=0`, and each tool's normal walker.
-- **Every scan was complete:** item counts agree between tools (eDirStat 1,668,474 files / 317,176 folders vs Xylem 1,668,411 / 317,824 without admin; WinDirStat's admin CSV has 2,055,330 rows).
+- **Fast modes:** DiskRoot `--mode mft`, WizTree `/admin=1`, WinDirStat and eDirStat with their NTFS scanners (all elevated). Without admin: `--mode walk`, `/admin=0`, and each tool's normal walker.
+- **Every scan was complete:** item counts agree between tools (eDirStat 1,668,474 files / 317,176 folders vs DiskRoot 1,668,411 / 317,824 without admin; WinDirStat's admin CSV has 2,055,330 rows).
 
 ## Caveats (read before quoting)
 - **One machine, one drive.** Results on HDDs, other CPUs or very different file trees may differ. Please send us your numbers.
@@ -145,4 +145,4 @@ What saving one scan of C: (1.7M files) writes, 13 Nov 2026:
   - **TreeSize 9.9.1:** its command line didn't scan on this PC. `/NOGUI` exited after ~3 s with no output, and `/CSV` export didn't finish within 5 minutes, even for a small folder; most likely a first-run or trial dialog. To be added once that's resolved.
   - **SizeTrend 4.0:** no documented command line to time.
 - **WizTree "scan only"** still writes a tiny CSV; WizTree has no scan-only command. Its scan+CSV numbers are the more direct comparison.
-- Versions: Xylem 0.1.0 (commit after d0223b4), WizTree 4.33, WinDirStat 2.9.3, eDirStat 2.0.0.
+- Versions: DiskRoot 0.1.0 (commit after d0223b4), WizTree 4.33, WinDirStat 2.9.3, eDirStat 2.0.0.

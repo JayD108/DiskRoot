@@ -1,10 +1,10 @@
 [package]
-name = "xylem-scan-mft"
+name = "diskroot-scan-mft"
 description = "Reads the NTFS Master File Table directly (admin) for very fast scans"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-xylem-core.workspace = true
-xylem-scan-walk.workspace = true
+diskroot-core.workspace = true
+diskroot-scan-walk.workspace = true

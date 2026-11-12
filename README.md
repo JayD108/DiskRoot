@@ -1,34 +1,36 @@
 <div align="center">
 
-<img src="docs/logo/xylem-logo-512.png" alt="Xylem logo: a leaf whose veins form growth rings, with one amber slice like a disk-usage chart" width="140">
+<img src="docs/logo/diskroot-logo-512.png" alt="DiskRoot logo: a leaf whose veins form growth rings, with one amber slice like a disk-usage chart" width="140">
 
-# Xylem
+# DiskRoot
 
-### Your drive, explained.
+### Get to the root of your disk. No admin needed.
 
 **What's filling it · what each thing is · whether it's safe to delete · how the drive itself is doing**
 
-Free and open source, for Windows 10 and 11. Offline. Read-only scanning. No admin needed.
+Free and open source, for Windows 10 and 11. Offline. Read-only scanning.
 
-[![Download](https://img.shields.io/badge/⬇_Download-Xylem_for_Windows-2f6b3a?style=for-the-badge)](https://github.com/JayD108/Xylem/releases/latest/download/xylem-setup.exe)
+*Formerly **Xylem**: same app, new name. Upgrading keeps your settings and saved scans.*
 
-[portable zip](https://github.com/JayD108/Xylem/releases/latest/download/xylem-portable.zip) · [all releases](https://github.com/JayD108/Xylem/releases) · [what's new](https://github.com/JayD108/Xylem/releases/latest)
+[![Download](https://img.shields.io/badge/⬇_Download-DiskRoot_for_Windows-2f6b3a?style=for-the-badge)](https://github.com/JayD108/DiskRoot/releases/latest/download/diskroot-setup.exe)
+
+[portable zip](https://github.com/JayD108/DiskRoot/releases/latest/download/diskroot-portable.zip) · [all releases](https://github.com/JayD108/DiskRoot/releases) · [what's new](https://github.com/JayD108/DiskRoot/releases/latest)
 
 ![Windows 10 | 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4) ![Offline](https://img.shields.io/badge/network-none-2f6b3a) ![Read-only scanning](https://img.shields.io/badge/scanning-read--only-2f6b3a) ![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue) ![Rust](https://img.shields.io/badge/made%20with-Rust-b7410e)
 
 </div>
 
-![Xylem scanning C:\Windows: tree-table, sunburst map and the details pane explaining that Windows files must not be deleted by hand](docs/screenshots/xylem-location.png)
+![DiskRoot scanning C:\Windows: tree-table, sunburst map and the details pane explaining that Windows files must not be deleted by hand](docs/screenshots/diskroot-location.png)
 
 ## Three questions, answered in seconds
 
-| When your drive fills up you ask… | Xylem answers |
+| When your drive fills up you ask… | DiskRoot answers |
 |---|---|
 | 📍 **Where** is the space going? | A tree and a sunburst or treemap of every folder, by location or by category, with what changed since last time. |
-| 🔎 **What** is it? | A game, `node_modules`, an AI model, a dataset, Windows itself: every file gets a category, known folders get a plain-English note, and Xylem says which program or game a folder belongs to. |
+| 🔎 **What** is it? | A game, `node_modules`, an AI model, a dataset, Windows itself: every file gets a category, known folders get a plain-English note, and DiskRoot says which program or game a folder belongs to. |
 | ✅ **Is it safe to delete?** | *Safe to clear*, *check first* or *don't delete by hand*, and **every way to get space back** with how much each one gives. |
 
-And one more nobody else asks: 💚 **is the drive itself OK?** Xylem reads each SSD's own health report and shows which programs are wearing it out.
+And one more nobody else asks: 💚 **is the drive itself OK?** DiskRoot reads each SSD's own health report and shows which programs are wearing it out.
 
 ## Measured, not promised
 
@@ -60,7 +62,7 @@ Method and more numbers: [BENCHMARKS.md](docs/BENCHMARKS.md).
 
 - **Save space:** what to compress (big, not changed or added for months, with measured estimates) and every other way: caches, old build folders, AI model stores, Recycle Bin, hibernation file, previous Windows, WSL/Docker disks, old installers, duplicates, Compact OS. Each with its size and exactly how.
 - **Code projects understood:** Node, Rust, Python, .NET, Java, Gradle, CMake, Go and Unreal projects are recognised, and their rebuildable parts (`node_modules`, `target`, `bin`/`obj`, …) are marked safe to clear. *Mark all* takes every one in a click.
-- **Compress… (right-click):** Xylem's own engine drives Windows' file compression on many files at once. Same files, less space, undoable, and it tells you the SSD writes it costs.
+- **Compress… (right-click):** DiskRoot's own engine drives Windows' file compression on many files at once. Same files, less space, undoable, and it tells you the SSD writes it costs.
 - **Careful deleting:** Recycle Bin only, after you confirm, re-checked on disk first. Windows and system folders are locked. Warnings for OneDrive, Git repositories, running apps and very large deletes.
 - **Also:** largest files and types, duplicate finder, similar folders (`project`, `project_v2`, `project - Copy`), leftovers of uninstalled programs, a PowerShell cleanup plan to review, guided WSL/Docker disk compaction.
 </details>
@@ -76,7 +78,7 @@ Method and more numbers: [BENCHMARKS.md](docs/BENCHMARKS.md).
 <details open>
 <summary><b>🕰️ Keep watch, without keeping anything running</b></summary>
 
-- **Scheduled scans:** every 30 minutes or more (Xylem recommends how often). No admin, no window, nothing left running: each run scans, saves, and exits.
+- **Scheduled scans:** every 30 minutes or more (DiskRoot recommends how often). No admin, no window, nothing left running: each run scans, saves, and exits.
 - **What changed while you were away**, a **size chart for every folder**, what grew this day/week/month, and *"C: would be full in about 40–70 days"* (after a week of scans, never a fake exact date).
 - **Quiet warnings** (Windows notifications, at most once a day): low free space, fast growth, a program writing a lot while idle, a weekly report.
 </details>
@@ -85,43 +87,43 @@ Method and more numbers: [BENCHMARKS.md](docs/BENCHMARKS.md).
 <summary><b>🪶 Light, private, yours</b></summary>
 
 - Shows its own RAM and CPU; free its memory with one click (your scan stays saved); gentle scanning keeps other programs fast.
-- **Teach Xylem:** right-click a folder → *This is…* (my project, a dataset, a game…), or write your own rules.
+- **Teach DiskRoot:** right-click a folder → *This is…* (my project, a dataset, a game…), or write your own rules.
 - Light and dark themes, keyboard control of the tree and windows (Help → Keyboard shortcuts), screen-reader names for the map.
 - No network code at all, no accounts, no telemetry. One small program (~9 MB).
 </details>
 
 Every feature, with what happens underneath: [FEATURES-AND-DEVELOPMENT.md](docs/FEATURES-AND-DEVELOPMENT.md).
 
-![Dark theme, treemap grouped by category](docs/screenshots/xylem-category.png)
+![Dark theme, treemap grouped by category](docs/screenshots/diskroot-category.png)
 
 ## Get started in a minute
 
-1. **[Download `xylem-setup.exe`](https://github.com/JayD108/Xylem/releases/latest/download/xylem-setup.exe)** (about 3 MB) and run it. Releases aren't signed yet, so Windows may say *"Windows protected your PC"*: click **More info → Run anyway** (check the file against `SHA256SUMS.txt` on the [release page](https://github.com/JayD108/Xylem/releases/latest) if you like).
-2. Open **Xylem**, pick a drive, press **Scan** (F5), or **Fast scan** (Ctrl+F5) for a whole drive.
+1. **[Download `diskroot-setup.exe`](https://github.com/JayD108/DiskRoot/releases/latest/download/diskroot-setup.exe)** (about 3 MB) and run it. Releases aren't signed yet, so Windows may say *"Windows protected your PC"*: click **More info → Run anyway** (check the file against `SHA256SUMS.txt` on the [release page](https://github.com/JayD108/DiskRoot/releases/latest) if you like).
+2. Open **DiskRoot**, pick a drive, press **Scan** (F5), or **Fast scan** (Ctrl+F5) for a whole drive.
 3. Click around: anything you select is explained at the bottom.
-4. Press **Save space**. Turn on **View → Scheduled scans** if you want Xylem to keep watch.
+4. Press **Save space**. Turn on **View → Scheduled scans** if you want DiskRoot to keep watch.
 
 <details>
 <summary>What the installer puts on your PC, portable use, silent install</summary>
 
 | | |
 |---|---|
-| `xylem.exe` | The app, in Program Files (only admins can change it there, which keeps Fast scan safe) |
-| `xylem-cli` | The command-line tool, already on PATH ([guide](docs/CLI.md)) |
-| Start menu, right-click **Analyze with Xylem**, optional desktop shortcut | Pick them on the components page |
-| Uninstaller | Settings → Apps → Xylem. Removes exactly what it installed, including the PATH entry and any scheduled scan |
+| `diskroot.exe` | The app, in Program Files (only admins can change it there, which keeps Fast scan safe) |
+| `droot` | The command-line tool, already on PATH ([guide](docs/CLI.md)) |
+| Start menu, right-click **Analyze with DiskRoot**, optional desktop shortcut | Pick them on the components page |
+| Uninstaller | Settings → Apps → DiskRoot. Removes exactly what it installed, including the PATH entry and any scheduled scan |
 
-**No install?** Use the **[portable zip](https://github.com/JayD108/Xylem/releases/latest/download/xylem-portable.zip)**: unzip anywhere, run `xylem.exe` (Fast scan needs the installed version).
-**IT:** `xylem-setup.exe /S` installs silently; `"C:\Program Files\Xylem\uninstall.exe" /S` removes it.
+**No install?** Use the **[portable zip](https://github.com/JayD108/DiskRoot/releases/latest/download/diskroot-portable.zip)**: unzip anywhere, run `diskroot.exe` (Fast scan needs the installed version).
+**IT:** `diskroot-setup.exe /S` installs silently; `"C:\Program Files\DiskRoot\uninstall.exe" /S` removes it.
 </details>
 
 ## For the terminal
 
 ```text
-> xylem-cli scan C:\ --top 5          what's biggest
-> xylem-cli health                    is the SSD OK?
-> xylem-cli writes --secs 10          who's writing right now?
-> xylem-cli history C: --days 30      what grew this month, when it would be full
+> droot scan C:\ --top 5        what's biggest
+> droot health                  is the SSD OK?
+> droot writes --secs 10        who's writing right now?
+> droot history C: --days 30    what grew this month, when it would be full
 ```
 
 Every command has `--json` for scripts. Guide: [docs/CLI.md](docs/CLI.md).
@@ -129,16 +131,16 @@ Every command has `--json` for scripts. Guide: [docs/CLI.md](docs/CLI.md).
 ## How it stays safe
 
 ```
- You ──► xylem.exe (normal user) ──► Scan: walks folders, no admin needed
+ You ──► diskroot.exe (normal user) ──► Scan: walks folders, no admin needed
                 │
                 └── Fast scan ──► Windows asks for admin ──► a short-lived helper reads the
                                   drive's file table (read-only), hands the result back, exits
 ```
 
-- **Offline:** no network code at all. **Read-only scanning:** it never changes your files. Xylem's own saved scans go to `%LOCALAPPDATA%\Xylem`, compressed (about 45 MB for a 1.5 TB drive).
+- **Offline:** no network code at all. **Read-only scanning:** it never changes your files. DiskRoot's own saved scans go to `%LOCALAPPDATA%\DiskRoot`, compressed (about 45 MB for a 1.5 TB drive).
 - **Nothing changes without your OK:** delete goes to the Recycle Bin, compression is undoable, Save space only suggests.
 - **Least privilege:** the window doesn't need admin (started as admin, it warns, and its scans stay folder walks); only the short-lived Fast-scan helper reads the raw drive; scheduled scans never ask for admin.
-- **Tested before every release:** no network connections, read-only scanning, the admin helper's limits, fuzzing of every file parser. The shield button in the app shows exactly what Xylem does.
+- **Tested before every release:** no network connections, read-only scanning, the admin helper's limits, fuzzing of every file parser. The shield button in the app shows exactly what DiskRoot does.
 
 Details: [SECURITY-AND-PRIVACY.md](docs/SECURITY-AND-PRIVACY.md). Report a problem privately: [SECURITY.md](SECURITY.md).
 
@@ -148,14 +150,14 @@ Details: [SECURITY-AND-PRIVACY.md](docs/SECURITY-AND-PRIVACY.md). Report a probl
 |---|---|
 | 🛠️ [How it works](docs/HOW-IT-WORKS.md) | Under the hood: reading the drive, the data model, categories, the map, history, deleting, accuracy |
 | 📖 [Features and development](docs/FEATURES-AND-DEVELOPMENT.md) | Every feature: what it does, how to use it, what happens underneath; building and tests |
-| 🔒 [Security and privacy](docs/SECURITY-AND-PRIVACY.md) | What Xylem reads and never does, admin rights, your data on disk |
+| 🔒 [Security and privacy](docs/SECURITY-AND-PRIVACY.md) | What DiskRoot reads and never does, admin rights, your data on disk |
 | 💻 [Command line](docs/CLI.md) | Every command and option, JSON and CSV, script examples |
 | 📊 [Benchmarks](docs/BENCHMARKS.md) | Speed and compression measurements, with the method |
 | 🗺️ [Roadmap](docs/ROADMAP.md) | Releases and what's next |
 
 ## Help build it
 
-Xylem is open for contributions, and one area especially: **compression**. Text and programs save 50–70%, but float arrays save ~15% and model weights only 6–8%. If you know compression, read the [call for compression research](CONTRIBUTING.md#call-for-compression-research-). Other open problems (drive health on more SSD brands, known offenders with sources, accessibility, testing) are in [HELP-WANTED.md](docs/HELP-WANTED.md). Start with [CONTRIBUTING.md](CONTRIBUTING.md).
+DiskRoot is open for contributions, and one area especially: **compression**. Text and programs save 50–70%, but float arrays save ~15% and model weights only 6–8%. If you know compression, read the [call for compression research](CONTRIBUTING.md#call-for-compression-research-). Other open problems (drive health on more SSD brands, known offenders with sources, accessibility, testing) are in [HELP-WANTED.md](docs/HELP-WANTED.md). Start with [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Acknowledgements
 

@@ -23,8 +23,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, mpsc};
 use std::thread;
 use std::time::Instant;
 
-use xylem_core::win::{FILE_ATTRIBUTE_REPARSE_POINT, node_flags};
-use xylem_core::{Index, Scan, ScanStats, flags};
+use diskroot_core::win::{FILE_ATTRIBUTE_REPARSE_POINT, node_flags};
+use diskroot_core::{Index, Scan, ScanStats, flags};
 
 use crate::ffi::*;
 
@@ -181,7 +181,7 @@ struct Listing {
     handle: Option<Arc<OwnedHandle>>,
     /// (index into `metas`, name) of files whose listed size on disk is less
     /// than their size without being sparse or NTFS-compressed: files
-    /// compressed by Windows (compact /EXE, CompactOS, Xylem). The listing
+    /// compressed by Windows (compact /EXE, CompactOS, DiskRoot). The listing
     /// shows only the emptied main stream for them (often 0), so their
     /// real size on disk is asked for separately.
     shrunk: Vec<(u32, Vec<u16>)>,
@@ -304,7 +304,7 @@ fn count_hardlinks_once(index: &mut Index, mut ids: Vec<(u64, u32)>) {
         while id != 0 && parts.len() < 1024 {
             parts.push(index.name(id).to_lowercase());
             id = index.parent(id);
-            if id == xylem_core::NO_PARENT {
+            if id == diskroot_core::NO_PARENT {
                 break;
             }
         }
@@ -577,8 +577,8 @@ fn parse_entries(bytes: &[u8], units: &mut Vec<u16>, out: &mut Listing, ids: boo
             if !is_dir && size > 4096 && alloc < size && f & (flags::SPARSE | flags::COMPRESSED | flags::CLOUD | flags::LINK) == 0 {
                 out.shrunk.push((out.metas.len() as u32, units.clone()));
             }
-            let mtime = xylem_core::filetime_days(rd_u64(e, OFF_LAST_WRITE));
-            let added = xylem_core::filetime_days(rd_u64(e, OFF_CREATION));
+            let mtime = diskroot_core::filetime_days(rd_u64(e, OFF_LAST_WRITE));
+            let added = diskroot_core::filetime_days(rd_u64(e, OFF_CREATION));
             let file_id = if ids && !is_dir { rd_u64(e, OFF_FILE_ID) } else { 0 };
             out.metas.push(Meta { name_len, file_id, size, alloc, flags: f, mtime, added });
         }
@@ -606,13 +606,13 @@ fn rd_u64(b: &[u8], at: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xylem_core::win::FILE_ATTRIBUTE_DIRECTORY;
+    use diskroot_core::win::FILE_ATTRIBUTE_DIRECTORY;
 
     /// Hardlinks in a real folder: counted once, under the same name on
     /// every scan, and the other names are flagged.
     #[test]
     fn hardlinks_are_counted_once() {
-        let dir = std::env::temp_dir().join(format!("xylem-hardlinks-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("diskroot-hardlinks-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("b")).unwrap();
         std::fs::create_dir_all(dir.join("a")).unwrap();

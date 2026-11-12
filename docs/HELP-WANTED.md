@@ -1,16 +1,16 @@
-# Help wanted: what would make Xylem better
+# Help wanted: what would make DiskRoot better
 
 [← Back to README](../README.md) · How to contribute: [CONTRIBUTING.md](../CONTRIBUTING.md)
 
-This is the honest list of what Xylem needs next: open problems, known gaps and measured weak spots. Each item says why it matters, where the code is, and how to show it works. Pick one, open an issue saying you're on it, and send a pull request.
+This is the honest list of what DiskRoot needs next: open problems, known gaps and measured weak spots. Each item says why it matters, where the code is, and how to show it works. Pick one, open an issue saying you're on it, and send a pull request.
 
-Every change keeps Xylem's rules: **offline, read-only scanning, nothing changes without the user's OK, never admin in the window, fast, OSI-licensed, honest numbers.**
+Every change keeps DiskRoot's rules: **offline, read-only scanning, nothing changes without the user's OK, never admin in the window, fast, OSI-licensed, honest numbers.**
 
 ---
 
 ## 1. Compression engine (biggest opportunity)
 
-Xylem compresses folders in place with Windows' own file compression (WOF), driven by its own parallel engine ([`crates/session/src/compress.rs`](../crates/session/src/compress.rs)). Files stay usable and Uncompress undoes it. Here's what it achieves today on real data, measured on copies (E10, single thread, one file per type):
+DiskRoot compresses folders in place with Windows' own file compression (WOF), driven by its own parallel engine ([`crates/session/src/compress.rs`](../crates/session/src/compress.rs)). Files stay usable and Uncompress undoes it. Here's what it achieves today on real data, measured on copies (E10, single thread, one file per type):
 
 | File type | Fast (XPRESS16K) | Maximum (LZX) | zstd 3 (not transparent) |
 |---|---|---|---|
@@ -77,7 +77,7 @@ How to measure: [CONTRIBUTING.md → How to contribute research](../CONTRIBUTING
 - **Benchmarks on other PCs** (idle machine): `tools/bench-competitors.ps1`, results into [BENCHMARKS.md](BENCHMARKS.md).
 - **Compression numbers for more file types** (games, Office files, photos in RAW, VM images, source trees): run the probe on copies and send the table.
 
-- **Drive health on other drives:** run `xylem-cli health --json` on Samsung, Kingston, Crucial, SK hynix NVMe drives (and a SATA SSD or HDD, which should say "needs admin" / "not an SSD"), compare with CrystalDiskInfo, and open an issue with both. No admin needed.
+- **Drive health on other drives:** run `droot health --json` on Samsung, Kingston, Crucial, SK hynix NVMe drives (and a SATA SSD or HDD, which should say "needs admin" / "not an SSD"), compare with CrystalDiskInfo, and open an issue with both. No admin needed.
 - **Known offenders:** programs or drive firmware that wear SSDs fast. Each entry needs public sources (vendor statement or several independent reports), the process name or model + firmware, and what to do. See `crates/session/src/offenders.rs`.
 
 ## 6. After 1.0 (needs a careful design first)

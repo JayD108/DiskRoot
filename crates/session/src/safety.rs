@@ -59,7 +59,7 @@ pub const LARGE_FILES: u32 = 50_000;
 /// - no folder between the scan root and it became a link since the scan
 ///   (that would redirect the delete somewhere else).
 pub fn verify_before_recycle(path: &Path, scan_root: &Path, expect_dir: bool, was_link: bool) -> Result<(), String> {
-    let changed = |what: &str| Err(format!("{what} since the scan, so Xylem won't delete it. Rescan and try again."));
+    let changed = |what: &str| Err(format!("{what} since the scan, so DiskRoot won't delete it. Rescan and try again."));
     let meta = std::fs::symlink_metadata(path).map_err(|_| "It no longer exists. Rescan to refresh.".to_owned())?;
     let is_link = meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 && meta.file_type().is_symlink();
     if is_link != was_link {
@@ -85,7 +85,7 @@ pub fn verify_before_recycle(path: &Path, scan_root: &Path, expect_dir: bool, wa
 
 /// Names Windows silently rewrites or treats as devices. A file created as
 /// `report.` (trailing dot) is a *different* file from `report`, but the
-/// Recycle Bin call would delete `report`. Xylem refuses such names (and
+/// Recycle Bin call would delete `report`. DiskRoot refuses such names (and
 /// over-long paths) instead of risking the wrong item.
 pub fn unusual_name(path: &Path) -> Option<String> {
     const DEVICES: [&str; 22] = [
@@ -226,14 +226,14 @@ pub fn hard_lock(path: &Path) -> Option<String> {
         .collect();
     let item = id(path)?;
     if let Some((p, _)) = own.iter().chain(&tree).find(|(_, i)| *i == item) {
-        return Some(format!("This is {} itself, which Xylem never deletes.", p.display()));
+        return Some(format!("This is {} itself, which DiskRoot never deletes.", p.display()));
     }
     let mut cur = path.parent();
     while let Some(dir) = cur {
         if let Some(d) = id(dir)
             && let Some((p, _)) = tree.iter().find(|(_, i)| *i == d)
         {
-            return Some(format!("It's inside {}, which Xylem never deletes from.", p.display()));
+            return Some(format!("It's inside {}, which DiskRoot never deletes from.", p.display()));
         }
         cur = dir.parent();
     }
@@ -306,7 +306,7 @@ pub fn pin_identity(chain: &[(PathBuf, FileId)]) -> Result<Pinned, String> {
     const ERROR_ACCESS_DENIED: i32 = 5;
     const ERROR_SHARING_VIOLATION: i32 = 32;
     let replaced = |p: &Path| {
-        format!("{} was replaced or moved after you confirmed, so Xylem won't delete anything. Rescan and try again.", p.display())
+        format!("{} was replaced or moved after you confirmed, so DiskRoot won't delete anything. Rescan and try again.", p.display())
     };
     let mut held = Vec::with_capacity(chain.len());
     // Top down: once a folder is pinned, nothing below it can be re-pointed
@@ -324,7 +324,7 @@ pub fn pin_identity(chain: &[(PathBuf, FileId)]) -> Result<Pinned, String> {
         };
         let f = f.map_err(|e| {
             if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION) {
-                format!("{} is being renamed or deleted right now, so Xylem won't delete anything. Try again.", p.display())
+                format!("{} is being renamed or deleted right now, so DiskRoot won't delete anything. Try again.", p.display())
             } else {
                 replaced(p)
             }
@@ -352,13 +352,13 @@ pub struct LogEntry {
     pub outcome: String,
 }
 
-/// `%LOCALAPPDATA%\Xylem\deletions.log` (one JSON object per line).
+/// `%LOCALAPPDATA%\DiskRoot\deletions.log` (one JSON object per line).
 pub fn log_path() -> Option<PathBuf> {
     // Unit tests must never write into the user's real deletion history.
     if cfg!(test) {
-        return Some(std::env::temp_dir().join(format!("xylem-test-log-{}", std::process::id())).join("deletions.log"));
+        return Some(std::env::temp_dir().join(format!("diskroot-test-log-{}", std::process::id())).join("deletions.log"));
     }
-    std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Xylem").join("deletions.log"))
+    std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("DiskRoot").join("deletions.log"))
 }
 
 pub fn append_log(entry: &LogEntry) {
@@ -415,7 +415,7 @@ mod tests {
 
     #[test]
     fn lists_hardlink_names() {
-        let dir = std::env::temp_dir().join(format!("xylem-links-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("diskroot-links-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::write(dir.join("a.txt"), b"x").unwrap();
@@ -451,7 +451,7 @@ mod tests {
     /// the item itself stays movable, and a swapped folder is refused.
     #[test]
     fn pinned_chain_blocks_swaps() {
-        let root = std::env::temp_dir().join(format!("xylem-pin-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("diskroot-pin-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("a").join("b")).unwrap();
         let item = root.join("a").join("b").join("f.txt");
@@ -476,7 +476,7 @@ mod tests {
 
     #[test]
     fn re_check_catches_changes() {
-        let root = std::env::temp_dir().join(format!("xylem-safety-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("diskroot-safety-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("a").join("b")).unwrap();
         std::fs::write(root.join("a").join("f.txt"), b"x").unwrap();

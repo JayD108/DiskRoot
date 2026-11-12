@@ -1,5 +1,5 @@
 //! The native window: menu bar, toolbar, tree-table, map, details pane,
-//! status bar ("classic utility, modern finish"). All data comes from `xylem_session`; scans and deletes
+//! status bar ("classic utility, modern finish"). All data comes from `diskroot_session`; scans and deletes
 //! run on worker threads so the window never freezes.
 
 use std::collections::{BTreeSet, HashSet};
@@ -12,16 +12,16 @@ use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, Frame, Key, Layout, Margin, Modal, Rect, RichText, ScrollArea, Sense,
     Stroke, StrokeKind, TextEdit, Ui, ViewportCommand, pos2, vec2,
 };
-use xylem_session::compress::{self, Level};
-use xylem_session::integrity::{Integrity, SignatureState};
-use xylem_session::similar;
-use xylem_session::savings::{self, TipAction};
-use xylem_session::schedule::{self, Schedule};
-use xylem_session::health::{self, Level as Health};
-use xylem_session::history::{self, Forecast, History};
-use xylem_session::remember::{self, Changes, PrevSizes};
-use xylem_session::safety::{DeleteWarnings, LogEntry, visible};
-use xylem_session::{Action, DeleteOut, FileRow, ItemInfo, Leftover, PendingDelete, RulesStatus, Safety, Scanned, Shape, Summary, TypeRow};
+use diskroot_session::compress::{self, Level};
+use diskroot_session::integrity::{Integrity, SignatureState};
+use diskroot_session::similar;
+use diskroot_session::savings::{self, TipAction};
+use diskroot_session::schedule::{self, Schedule};
+use diskroot_session::health::{self, Level as Health};
+use diskroot_session::history::{self, Forecast, History};
+use diskroot_session::remember::{self, Changes, PrevSizes};
+use diskroot_session::safety::{DeleteWarnings, LogEntry, visible};
+use diskroot_session::{Action, DeleteOut, FileRow, ItemInfo, Leftover, PendingDelete, RulesStatus, Safety, Scanned, Shape, Summary, TypeRow};
 
 use crate::map::{self, Hit, Kind, Layout as MapLayout, PaintCtx};
 use crate::settings::{Alert, Settings};
@@ -63,9 +63,9 @@ enum JobKind {
     Reopen(String),
     Export(String),
     DeleteMany(usize),
-    /// A Windows tool Xylem started and waits for (e.g. DISM).
+    /// A Windows tool DiskRoot started and waits for (e.g. DISM).
     Tool(String),
-    /// Xylem's compression engine: title, live counters, total bytes, total files.
+    /// DiskRoot's compression engine: title, live counters, total bytes, total files.
     Compress(String, Arc<compress::Progress>, u64, u64),
 }
 
@@ -100,7 +100,7 @@ struct Job {
 
 enum Dialog {
     About,
-    /// First launch: what Xylem does and doesn't do.
+    /// First launch: what DiskRoot does and doesn't do.
     Welcome,
     Security(Box<Integrity>),
     History(Vec<LogEntry>),
@@ -114,7 +114,7 @@ enum Dialog {
     Rules,
     /// View > Size alerts.
     Alerts,
-    /// Compress (or uncompress) a folder with Xylem's engine.
+    /// Compress (or uncompress) a folder with DiskRoot's engine.
     Compress(Box<CompressAsk>),
     /// View > Similar folders.
     Similar(Box<similar::Found>),
@@ -124,7 +124,7 @@ enum Dialog {
     Leftovers(Vec<Leftover>),
     /// View > Ways to save space.
     Savings(Box<SavingsView>),
-    /// Xylem's own memory and CPU, and freeing memory.
+    /// DiskRoot's own memory and CPU, and freeing memory.
     Memory,
     /// View > Scheduled scans.
     Schedule(Box<ScheduleView>),
@@ -137,7 +137,7 @@ enum Dialog {
     /// Home: everything important on one screen.
     Home(Box<HomeView>),
     /// View > Where every GB is.
-    Space(Box<xylem_session::SpaceReport>),
+    Space(Box<diskroot_session::SpaceReport>),
     /// Folders the scan couldn't read: (scan root, paths).
     Unreadable(Box<(String, Vec<String>)>),
     /// Explains a Windows tool before starting it.
@@ -181,7 +181,7 @@ struct GrowthView {
     first: u64,
     disk: u64,
     /// Log files that grew in each of the last 3+ scans.
-    logs: Vec<xylem_session::logs::Growing>,
+    logs: Vec<diskroot_session::logs::Growing>,
 }
 
 /// (kind of data, bytes, files) that a failed drive would take with it.
@@ -213,7 +213,7 @@ impl HealthView {
 /// View > Who's writing: a live sample (every 2 s while open), what
 /// background scans saw while the PC was idle, and folder hotspots.
 struct WritersView {
-    sampler: xylem_session::writes::Sampler,
+    sampler: diskroot_session::writes::Sampler,
     last: Instant,
     /// (disk number, its letters).
     disks: Vec<(u32, String)>,
@@ -246,7 +246,7 @@ fn write_advice() -> Vec<String> {
 impl WritersView {
     fn open() -> Self {
         let mut disks: Vec<(u32, String)> = Vec::new();
-        for d in xylem_session::drives() {
+        for d in diskroot_session::drives() {
             if let Some(n) = health::disk_of(&d) {
                 let l = d.trim_end_matches('\\').to_owned();
                 match disks.iter_mut().find(|x| x.0 == n) {
@@ -272,7 +272,7 @@ impl WritersView {
         let mut away: Vec<(String, f64, usize)> = sum.into_iter().map(|(k, (r, c))| (k, r / n, c)).collect();
         away.sort_by(|a, b| b.1.total_cmp(&a.1));
         away.truncate(8);
-        Self { sampler: xylem_session::writes::Sampler::new(&disks.iter().map(|d| d.0).collect::<Vec<_>>()), last: Instant::now(), disks, away, away_runs: idle_runs.len(), advice: write_advice() }
+        Self { sampler: diskroot_session::writes::Sampler::new(&disks.iter().map(|d| d.0).collect::<Vec<_>>()), last: Instant::now(), disks, away, away_runs: idle_runs.len(), advice: write_advice() }
     }
 }
 
@@ -297,7 +297,7 @@ struct HomeView {
 impl HomeView {
     fn build(s: &Scanned) -> Self {
         let root = s.summary().root;
-        let space = xylem_session::disk_space(&root);
+        let space = diskroot_session::disk_space(&root);
         let is_drive = root.len() == 3 && root.ends_with(":\\");
         let nearly_full = space.and_then(|(t, f)| health::nearly_full(&root, t, f, health::is_ssd(&root) == Some(true)));
         let forecast = if is_drive { history::load(&root).map(|h| history::forecast(&h.points).text(root.trim_end_matches('\\'))) } else { None };
@@ -337,7 +337,7 @@ struct CompressAsk {
 }
 
 /// Deleting several marked items at once: each one prepared and armed on
-/// its own (all the usual checks), plus the ones Xylem refused and why.
+/// its own (all the usual checks), plus the ones DiskRoot refused and why.
 struct ConfirmMany {
     items: Vec<PendingDelete>,
     refused: Vec<(String, String)>,
@@ -364,13 +364,13 @@ struct DriveBar {
 
 /// A running duplicate search: shared progress, the cancel flag, and where
 /// the result arrives.
-type DupesRun = (Arc<xylem_session::dupes::Progress>, Arc<AtomicBool>, Receiver<Vec<xylem_session::dupes::DupGroup>>);
+type DupesRun = (Arc<diskroot_session::dupes::Progress>, Arc<AtomicBool>, Receiver<Vec<diskroot_session::dupes::DupGroup>>);
 
 /// The duplicate finder window: intro, running (progress), or results.
 struct DupesView {
     min_mb: u64,
     running: Option<DupesRun>,
-    groups: Option<Vec<xylem_session::dupes::DupGroup>>,
+    groups: Option<Vec<diskroot_session::dupes::DupGroup>>,
 }
 
 /// "Largest files & file types": the search text and current results.
@@ -406,10 +406,10 @@ struct MapState {
     cached: Option<(Rect, Kind, MapLayout)>,
     up: Option<Key_>,
     /// Bytes per age bucket under the map root (age view, folder roots).
-    ages: Option<[u64; xylem_session::AGE_UNKNOWN + 1]>,
+    ages: Option<[u64; diskroot_session::AGE_UNKNOWN + 1]>,
 }
 
-pub struct XylemApp {
+pub struct DiskRootApp {
     settings: Settings,
     path: String,
     drives: Vec<String>,
@@ -453,8 +453,8 @@ pub struct XylemApp {
     ssd_cache: std::collections::HashMap<String, Option<bool>>,
     /// Which program or game folders belong to ("Belongs to"); loaded once
     /// on a background thread at start.
-    owners: Option<Arc<xylem_session::owners::Owners>>,
-    owners_rx: Option<Receiver<xylem_session::owners::Owners>>,
+    owners: Option<Arc<diskroot_session::owners::Owners>>,
+    owners_rx: Option<Receiver<diskroot_session::owners::Owners>>,
     /// Save space being worked out on a worker thread.
     savings_rx: Option<Receiver<SavingsView>>,
     /// Home being worked out on a worker thread.
@@ -464,13 +464,13 @@ pub struct XylemApp {
     hot_since: Instant,
     /// The selected folder's size at each history point: (node, series).
     hist_cache: Option<(u32, Vec<(u64, u64)>)>,
-    /// The Xylem logo (start screen, About), uploaded once.
+    /// The DiskRoot logo (start screen, About), uploaded once.
     logo: egui::TextureHandle,
     scroll_to_selected: bool,
     /// The user's own rules: loaded or not, and why.
     rules_status: RulesStatus,
     /// Live updates: the running watch on the scan root.
-    watcher: Option<xylem_session::watch::Watcher>,
+    watcher: Option<diskroot_session::watch::Watcher>,
     /// New items seen since the scan (relative path -> bytes): not in the
     /// tree until the next scan.
     live_new: std::collections::HashMap<String, u64>,
@@ -478,7 +478,7 @@ pub struct XylemApp {
     live_overflow: bool,
     /// Flash the taskbar button (a size alert fired).
     attention: bool,
-    /// Xylem's own RAM and CPU, sampled at most every 2 s.
+    /// DiskRoot's own RAM and CPU, sampled at most every 2 s.
     footprint: Footprint,
     /// When the window was minimized (for "free memory when minimized").
     minimized_since: Option<Instant>,
@@ -505,28 +505,30 @@ impl Footprint {
         if self.at.is_some_and(|t| now.duration_since(t) < Duration::from_secs(2)) {
             return;
         }
-        let cpu = xylem_session::process::cpu_seconds().unwrap_or(0.0);
+        let cpu = diskroot_session::process::cpu_seconds().unwrap_or(0.0);
         if let Some(t) = self.at {
             let cores = std::thread::available_parallelism().map_or(1, |n| n.get()) as f64;
             let wall = now.duration_since(t).as_secs_f64().max(0.001);
             self.cpu_pct = ((cpu - self.cpu_secs) / wall / cores * 100.0).clamp(0.0, 100.0);
         }
-        if let Some((ram, peak, private)) = xylem_session::process::memory() {
+        if let Some((ram, peak, private)) = diskroot_session::process::memory() {
             (self.ram, self.peak, self.private) = (ram, peak, private);
         }
         (self.at, self.cpu_secs) = (Some(now), cpu);
     }
 }
 
-impl XylemApp {
+impl DiskRootApp {
     pub fn new(cc: &eframe::CreationContext<'_>, start: Option<String>) -> Self {
         theme::install_fonts(&cc.egui_ctx);
+        // DiskRoot used to be called Xylem: move its settings and saved scans first.
+        let migrated = diskroot_session::migrate_from_xylem();
         let settings = Settings::load();
         theme::apply(&cc.egui_ctx, if settings.dark { Theme::Dark } else { Theme::Light });
         let mut app = Self {
             path: start.clone().unwrap_or_else(|| settings.last_path.clone()),
             settings,
-            drives: xylem_session::drives(),
+            drives: diskroot_session::drives(),
             scanned: None,
             summary: None,
             job: None,
@@ -561,7 +563,7 @@ impl XylemApp {
             owners_rx: {
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    let _ = tx.send(xylem_session::owners::Owners::load());
+                    let _ = tx.send(diskroot_session::owners::Owners::load());
                 });
                 Some(rx)
             },
@@ -569,12 +571,12 @@ impl XylemApp {
             hot_since: Instant::now(),
             hist_cache: None,
             logo: cc.egui_ctx.load_texture(
-                "xylem-logo",
+                "diskroot-logo",
                 egui::ColorImage::from_rgba_unmultiplied([128, 128], include_bytes!("../assets/logo-128.rgba")),
                 egui::TextureOptions::LINEAR,
             ),
             scroll_to_selected: false,
-            rules_status: xylem_session::reload_rules(),
+            rules_status: diskroot_session::reload_rules(),
             watcher: None,
             live_new: std::collections::HashMap::new(),
             live_overflow: false,
@@ -591,13 +593,22 @@ impl XylemApp {
         } else if app.settings.remember_scans {
             app.start_reopen();
         }
+        if migrated.moved {
+            app.say("Welcome to DiskRoot (formerly Xylem): your settings and saved scans came along.");
+        }
+        if migrated.schedule_to_restore && app.dialog.is_none() {
+            app.dialog = Some(Dialog::Message(
+                "Scheduled scans".into(),
+                "Xylem is now called DiskRoot. Your schedule is saved, but the old scheduled task ran the old program, so it was removed. To keep scanning automatically, open View → Scheduled scans and press Save.".into(),
+            ));
+        }
         // Started with "Run as administrator": say so. Everything still works
         // (scans in this window stay folder walks; Fast scan still uses the
         // locked-down helper), but deleting and the rest run with admin rights.
-        if xylem_session::is_elevated() && app.dialog.is_none() {
+        if diskroot_session::is_elevated() && app.dialog.is_none() {
             app.dialog = Some(Dialog::Message(
-                "Xylem is running as administrator".into(),
-                "Xylem doesn't need this, and it's safer without it: started this way, everything this window does (deleting, Compress, Windows' tools) runs with admin rights. Scans here stay normal folder walks, and Fast scan still goes through its locked-down helper.\n\nClose Xylem and start it normally (not with \"Run as administrator\") next time.".into(),
+                "DiskRoot is running as administrator".into(),
+                "DiskRoot doesn't need this, and it's safer without it: started this way, everything this window does (deleting, Compress, Windows' tools) runs with admin rights. Scans here stay normal folder walks, and Fast scan still goes through its locked-down helper.\n\nClose DiskRoot and start it normally (not with \"Run as administrator\") next time.".into(),
             ));
         }
         app
@@ -684,9 +695,9 @@ impl XylemApp {
         let p = path.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         let c = Arc::clone(&cancel);
-        xylem_session::set_gentle(self.settings.gentle_scan);
+        diskroot_session::set_gentle(self.settings.gentle_scan);
         std::thread::spawn(move || {
-            let r = if fast { xylem_session::scan_admin(&p, &c) } else { xylem_session::scan(&p) };
+            let r = if fast { diskroot_session::scan_admin(&p, &c) } else { diskroot_session::scan(&p) };
             let _ = tx.send(Done::Scanned(Box::new(r)));
         });
         self.job = Some(Job { kind: if fast { JobKind::Fast(path) } else { JobKind::Scan(path) }, started: Instant::now(), rx, cancel });
@@ -702,7 +713,7 @@ impl XylemApp {
         let p = path.clone();
         std::thread::spawn(move || {
             let t = Instant::now();
-            let r = xylem_session::reopen(&p).map(|(scanned, time)| Reopened {
+            let r = diskroot_session::reopen(&p).map(|(scanned, time)| Reopened {
                 scanned,
                 time,
                 changes: remember::last_changes(&p),
@@ -801,7 +812,7 @@ impl XylemApp {
                 match r {
                     Ok(p) => {
                         self.say(format!("Exported to {}", p.display()));
-                        let _ = xylem_session::reveal(&p.display().to_string());
+                        let _ = diskroot_session::reveal(&p.display().to_string());
                     }
                     Err(e) => self.dialog = Some(Dialog::Message("Couldn't export".into(), e)),
                 }
@@ -841,7 +852,7 @@ impl XylemApp {
         self.drive_bar = self.scanned.as_ref().map(|s| {
             let sum = s.summary();
             let top = s.list(0, 5).map(|l| l.items.into_iter().map(|i| (i.id, i.name, i.on_disk, i.cat)).collect()).unwrap_or_default();
-            let space = xylem_session::disk_space(&sum.root);
+            let space = diskroot_session::disk_space(&sum.root);
             // Asked once per drive letter, not at every refresh (live updates).
             let letter = sum.root.get(..1).unwrap_or("").to_uppercase();
             let ssd = *self.ssd_cache.entry(letter).or_insert_with(|| health::is_ssd(&sum.root));
@@ -876,7 +887,7 @@ impl XylemApp {
         }
         if let Some(sum) = &self.summary {
             let ctx = self.egui_ctx.clone();
-            match xylem_session::watch::Watcher::start_with_wake(&sum.root, Box::new(move || ctx.request_repaint())) {
+            match diskroot_session::watch::Watcher::start_with_wake(&sum.root, Box::new(move || ctx.request_repaint())) {
                 Ok(w) => self.watcher = Some(w),
                 Err(e) => self.say(format!("Live updates are off for this scan: {e}")),
             }
@@ -885,7 +896,7 @@ impl XylemApp {
 
     /// Applies what the watcher reported (at most once a second).
     fn poll_watch(&mut self, ctx: &egui::Context) {
-        use xylem_session::watch::Event;
+        use diskroot_session::watch::Event;
         let Some(w) = &self.watcher else { return };
         let _ = ctx; // the watcher wakes the window when something changed
         if self.job.is_some() {
@@ -1052,7 +1063,7 @@ impl XylemApp {
     }
 
     fn cat_label(&self, own_cat: u8, sub: u16) -> String {
-        let c = xylem_session::categories().get(own_cat as usize).map_or("", |c| c.name);
+        let c = diskroot_session::categories().get(own_cat as usize).map_or("", |c| c.name);
         match self.scanned.as_ref().and_then(|s| s.rules().subs.get(sub as usize)) {
             Some(s) if s.name != c => format!("{c} › {}", s.name),
             _ => c.to_owned(),
@@ -1291,7 +1302,7 @@ impl XylemApp {
         };
         let kids = map::children(&nodes);
         let ages = match (&root, self.settings.color_by_age) {
-            (MapRoot::Node(n), true) => Some(s.age_breakdown(*n, xylem_session::today_days())),
+            (MapRoot::Node(n), true) => Some(s.age_breakdown(*n, diskroot_session::today_days())),
             _ => None,
         };
         self.map = Some(MapState { root, nodes, kids, cached: None, up, ages });
@@ -1325,7 +1336,7 @@ impl XylemApp {
                 let mut keep = self.settings.remember_scans;
                 if ui
                     .checkbox(&mut keep, "Remember scans")
-                    .on_hover_text("Saves each scan on this PC (names and sizes only) so it reopens instantly and Xylem can show what changed.")
+                    .on_hover_text("Saves each scan on this PC (names and sizes only) so it reopens instantly and DiskRoot can show what changed.")
                     .changed()
                 {
                     self.settings.remember_scans = keep;
@@ -1339,13 +1350,13 @@ impl XylemApp {
                     self.changes = None;
                     ui.close();
                 }
-                if ui.add_enabled(self.scanned.is_some() && self.job.is_none(), egui::Button::new("Export to CSV")).on_hover_text("Every file and folder of this scan, saved in Documents\\Xylem").clicked() {
+                if ui.add_enabled(self.scanned.is_some() && self.job.is_none(), egui::Button::new("Export to CSV")).on_hover_text("Every file and folder of this scan, saved in Documents\\DiskRoot").clicked() {
                     self.start_export();
                     ui.close();
                 }
                 if ui
                     .add_enabled(!self.marked.is_empty(), egui::Button::new("Export marked as PowerShell script…"))
-                    .on_hover_text("A script that moves the marked items to the Recycle Bin, re-checking each one. Xylem only writes it; you review and run it.")
+                    .on_hover_text("A script that moves the marked items to the Recycle Bin, re-checking each one. DiskRoot only writes it; you review and run it.")
                     .clicked()
                 {
                     self.export_plan();
@@ -1404,7 +1415,7 @@ impl XylemApp {
                     self.open_health();
                     ui.close();
                 }
-                if ui.button("Scheduled scans…").on_hover_text("Let Xylem scan by itself every few hours (no admin, no window), so it can show what changed").clicked() {
+                if ui.button("Scheduled scans…").on_hover_text("Let DiskRoot scan by itself every few hours (no admin, no window), so it can show what changed").clicked() {
                     self.open_schedule();
                     ui.close();
                 }
@@ -1437,7 +1448,7 @@ impl XylemApp {
                 changed |= ui.radio_value(&mut self.settings.treemap, false, "Sunburst map").clicked();
                 changed |= ui.radio_value(&mut self.settings.treemap, true, "Treemap").clicked();
                 let mut live = self.settings.live_updates;
-                if ui.checkbox(&mut live, "Live updates").on_hover_text("Watch the scanned folder while Xylem is open and update sizes as files change").changed() {
+                if ui.checkbox(&mut live, "Live updates").on_hover_text("Watch the scanned folder while DiskRoot is open and update sizes as files change").changed() {
                     self.settings.live_updates = live;
                     self.settings.save();
                     if live { self.start_watch() } else { self.watcher = None }
@@ -1507,7 +1518,7 @@ impl XylemApp {
                     ));
                     ui.close();
                 }
-                if ui.button("About Xylem").clicked() {
+                if ui.button("About DiskRoot").clicked() {
                     self.dialog = Some(Dialog::About);
                     ui.close();
                 }
@@ -1587,7 +1598,7 @@ impl XylemApp {
                 self.open_savings();
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if shield_button(ui, &t).on_hover_text("Security & privacy: what Xylem does with your disk").clicked() {
+                if shield_button(ui, &t).on_hover_text("Security & privacy: what DiskRoot does with your disk").clicked() {
                     self.open_security();
                 }
                 let r = ui.add(TextEdit::singleline(&mut self.filter).desired_width(200.0).hint_text("Filter by name  (Ctrl+F)"));
@@ -1628,9 +1639,9 @@ impl XylemApp {
                 self.footprint.sample();
                 let f = self.footprint;
                 let r = ui
-                    .add(egui::Label::new(muted(format!("Xylem {} · {:.0}% CPU", fmt_bytes(f.ram), f.cpu_pct))).sense(Sense::click()))
+                    .add(egui::Label::new(muted(format!("DiskRoot {} · {:.0}% CPU", fmt_bytes(f.ram), f.cpu_pct))).sense(Sense::click()))
                     .on_hover_text(format!(
-                        "Xylem's own use of this PC.\nRAM in use: {} (peak {}, private {}).\nCPU: {:.1}% of the whole processor.\nClick to see what uses the memory, or to free it.",
+                        "DiskRoot's own use of this PC.\nRAM in use: {} (peak {}, private {}).\nCPU: {:.1}% of the whole processor.\nClick to see what uses the memory, or to free it.",
                         fmt_bytes(f.ram),
                         fmt_bytes(f.peak),
                         fmt_bytes(f.private),
@@ -1796,7 +1807,7 @@ impl XylemApp {
                 ui.add_space(12.0);
             }
             for d in &self.drives {
-                let space = xylem_session::disk_space(d);
+                let space = diskroot_session::disk_space(d);
                 let (rect, resp) = ui.allocate_exact_size(vec2(420.0, 54.0), Sense::click());
                 let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Scan {d}")));
@@ -1870,9 +1881,9 @@ impl XylemApp {
             }
 
             let rows = self.rows.take().unwrap_or_default();
-            let today = self.settings.color_by_age.then(xylem_session::today_days);
+            let today = self.settings.color_by_age.then(diskroot_session::today_days);
             let row_color = |r: &Row| match (today, &r.key) {
-                (Some(d), Key_::Node(_)) => theme::age_color(xylem_session::age_bucket(d, r.mtime)),
+                (Some(d), Key_::Node(_)) => theme::age_color(diskroot_session::age_bucket(d, r.mtime)),
                 (Some(_), _) => t.faint,
                 (None, _) if r.cat == u8::MAX => t.faint,
                 (None, _) => theme::cat_color(r.cat),
@@ -2031,9 +2042,9 @@ impl XylemApp {
                                         }
                                     });
                                     ui.menu_button("This is…", |ui| {
-                                        ui.label(RichText::new("Teach Xylem what this folder is (a category in your own rules; never a safety label)").color(t.faint).size(11.5));
+                                        ui.label(RichText::new("Teach DiskRoot what this folder is (a category in your own rules; never a safety label)").color(t.faint).size(11.5));
                                         const ACTS: [&str; 5] = ["teach-0", "teach-1", "teach-2", "teach-3", "teach-4"];
-                                        for (k, (label, _, _)) in xylem_session::TEACH.iter().enumerate() {
+                                        for (k, (label, _, _)) in diskroot_session::TEACH.iter().enumerate() {
                                             if ui.button(*label).clicked() {
                                                 ctx_action = Some((i, ACTS[k]));
                                                 ui.close();
@@ -2101,13 +2112,13 @@ impl XylemApp {
                         a if a.starts_with("teach-") || a == "untaught" => {
                             let Some(path) = self.scanned.as_ref().and_then(|s| s.info(n).ok()).map(|i| i.path) else { return };
                             let r = match a.strip_prefix("teach-").and_then(|k| k.parse::<usize>().ok()) {
-                                Some(k) => xylem_session::teach(&path, k).map(|()| format!("Taught: {} is \"{}\". It's a rule in your own rules file (File > Custom rules).", visible(&path), xylem_session::TEACH[k].2)),
-                                None => xylem_session::forget_taught(&path).map(|gone| if gone { format!("Forgot what you taught about {}.", visible(&path)) } else { "Nothing taught here.".into() }),
+                                Some(k) => diskroot_session::teach(&path, k).map(|()| format!("Taught: {} is \"{}\". It's a rule in your own rules file (File > Custom rules).", visible(&path), diskroot_session::TEACH[k].2)),
+                                None => diskroot_session::forget_taught(&path).map(|gone| if gone { format!("Forgot what you taught about {}.", visible(&path)) } else { "Nothing taught here.".into() }),
                             };
                             match r {
                                 Ok(msg) => {
                                     self.reload_rules();
-                                    let wanted = a.strip_prefix("teach-").and_then(|k| k.parse::<usize>().ok()).map(|k| xylem_session::TEACH[k].2);
+                                    let wanted = a.strip_prefix("teach-").and_then(|k| k.parse::<usize>().ok()).map(|k| diskroot_session::TEACH[k].2);
                                     let now = self.scanned.as_ref().and_then(|s| s.info(n).ok().and_then(|i| s.rules().subs.get(i.sub as usize).map(|x| x.name.clone())));
                                     match (wanted, now) {
                                         (Some(w), Some(now)) if now != w => self.say(format!("Saved, but a built-in rule already classifies this folder as \"{now}\", and built-in rules come first. Your rule applies elsewhere it matches.")),
@@ -2130,7 +2141,7 @@ impl XylemApp {
         let Some(s) = &self.scanned else { return };
         let ids = s.markable(key);
         if ids.is_empty() {
-            self.say("Nothing here is labelled \"safe to clear\" by Xylem's rules, so nothing was marked.");
+            self.say("Nothing here is labelled \"safe to clear\" by DiskRoot's rules, so nothing was marked.");
             return;
         }
         let bytes: u64 = ids.iter().filter_map(|&n| s.info(n).ok()).map(|i| i.on_disk).sum();
@@ -2144,8 +2155,8 @@ impl XylemApp {
     /// settings pages just open.
     fn start_tool(&mut self, a: Action, confirmed: bool) {
         let r = match a {
-            Action::SystemProtection => xylem_session::tools::open_system_protection(),
-            Action::StorageSettings => xylem_session::tools::open_storage_settings(),
+            Action::SystemProtection => diskroot_session::tools::open_system_protection(),
+            Action::StorageSettings => diskroot_session::tools::open_storage_settings(),
             Action::DismCleanup if !confirmed => {
                 self.dialog = Some(Dialog::Tool(a));
                 return;
@@ -2156,7 +2167,7 @@ impl XylemApp {
                 }
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    let _ = tx.send(Done::Tool(xylem_session::tools::dism_component_cleanup()));
+                    let _ = tx.send(Done::Tool(diskroot_session::tools::dism_component_cleanup()));
                 });
                 self.job = Some(Job { kind: JobKind::Tool("Windows component cleanup (DISM)".into()), started: Instant::now(), rx, cancel: Arc::default() });
                 return;
@@ -2178,7 +2189,7 @@ impl XylemApp {
         let path = s.info(n).map(|i| i.path).unwrap_or_default();
         self.dialog = Some(match (s.compress_plan(n, false), s.compress_plan(n, true)) {
             (Ok(plan), Ok(undo)) => Dialog::Compress(Box::new(CompressAsk { path, plan, undo, level })),
-            (Err(e), _) | (_, Err(e)) => Dialog::Message("Xylem won't compress this".into(), e),
+            (Err(e), _) | (_, Err(e)) => Dialog::Message("DiskRoot won't compress this".into(), e),
         });
     }
 
@@ -2292,7 +2303,7 @@ impl XylemApp {
             self.dialog = Some(Dialog::Message(
                 "No size history yet".into(),
                 format!(
-                    "Xylem keeps a small size history of every scan it remembers (folders of 1 MB or more, on this PC only). Scan {} again later, or turn on View → Scheduled scans, and the history starts filling.{}",
+                    "DiskRoot keeps a small size history of every scan it remembers (folders of 1 MB or more, on this PC only). Scan {} again later, or turn on View → Scheduled scans, and the history starts filling.{}",
                     visible(&root),
                     if self.settings.remember_scans { "" } else { "\n\nRemembering scans is off (File menu), so no history is kept." }
                 ),
@@ -2311,7 +2322,7 @@ impl XylemApp {
             points: h.points.len(),
             first: h.points[0].time,
             disk: history::disk_usage(),
-            logs: xylem_session::logs::growing(&xylem_session::logs::load(&root)),
+            logs: diskroot_session::logs::growing(&diskroot_session::logs::load(&root)),
             root,
         })));
     }
@@ -2347,7 +2358,7 @@ impl XylemApp {
             _ => None,
         };
         // What one save of this root writes (measured from its cache files).
-        let saved = sum.and_then(|s| remember::cache_dir().map(|d| xylem_session::cachefile::bytes_written_per_save(&d, &remember::key(&s.root)))).filter(|&b| b > 0);
+        let saved = sum.and_then(|s| remember::cache_dir().map(|d| diskroot_session::cachefile::bytes_written_per_save(&d, &remember::key(&s.root)))).filter(|&b| b > 0);
         schedule::recommend(secs, per_day, saved)
     }
 
@@ -2360,7 +2371,7 @@ impl XylemApp {
     fn open_leftovers(&mut self) {
         if let Some(s) = &self.scanned {
             let mut list = s.leftovers(300);
-            list.extend(s.orphan_hints(&xylem_session::orphans::Programs::installed(), 50 << 20, 90));
+            list.extend(s.orphan_hints(&diskroot_session::orphans::Programs::installed(), 50 << 20, 90));
             list.sort_by_key(|l| std::cmp::Reverse(l.on_disk));
             self.dialog = Some(Dialog::Leftovers(list));
         }
@@ -2375,7 +2386,7 @@ impl XylemApp {
         if let Some(s) = &self.scanned
             && let Ok(i) = s.info(n)
         {
-            let busy = xylem_session::power::in_use(std::path::Path::new(&i.path));
+            let busy = diskroot_session::power::in_use(std::path::Path::new(&i.path));
             self.dialog = Some(Dialog::Vhdx(i.path, i.on_disk, busy));
         }
     }
@@ -2469,33 +2480,33 @@ impl XylemApp {
         self.job = Some(Job { kind: JobKind::Tool(name), started: Instant::now(), rx, cancel: Arc::default() });
     }
 
-    /// File > Export marked as PowerShell script: Documents\Xylem\cleanup <time>.ps1
+    /// File > Export marked as PowerShell script: Documents\DiskRoot\cleanup <time>.ps1
     /// (UTF-8 with BOM, so Windows PowerShell 5.1 reads non-English names right).
     fn export_plan(&mut self) {
         let Some(s) = &self.scanned else { return };
         let nodes: Vec<u32> = self.marked.iter().copied().collect();
         let (items, refused) = s.plan_items(&nodes);
         if items.is_empty() {
-            self.dialog = Some(Dialog::Message("Nothing to export".into(), "None of the marked items can be deleted by Xylem (protected or unusual names).".into()));
+            self.dialog = Some(Dialog::Message("Nothing to export".into(), "None of the marked items can be deleted by DiskRoot (protected or unusual names).".into()));
             return;
         }
-        let stamp = xylem_session::safety::utc_now();
-        let script = xylem_session::power::powershell_plan(&items, &s.summary().root, &format!("{stamp} UTC"));
-        let docs = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from).unwrap_or_default().join("Documents").join("Xylem");
+        let stamp = diskroot_session::safety::utc_now();
+        let script = diskroot_session::power::powershell_plan(&items, &s.summary().root, &format!("{stamp} UTC"));
+        let docs = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from).unwrap_or_default().join("Documents").join("DiskRoot");
         let path = docs.join(format!("cleanup {}.ps1", stamp.replace([':', ' '], "-")));
         let mut bytes = vec![0xEF, 0xBB, 0xBF];
         bytes.extend_from_slice(script.as_bytes());
         match std::fs::create_dir_all(&docs).and_then(|()| std::fs::write(&path, bytes)) {
             Ok(()) => {
                 let mut msg = format!(
-                    "{} items written to\n{}\n\nOpen it in a text editor and read it. Run it with -Run to recycle them; without -Run it only shows what it would do. Xylem doesn't run it.",
+                    "{} items written to\n{}\n\nOpen it in a text editor and read it. Run it with -Run to recycle them; without -Run it only shows what it would do. DiskRoot doesn't run it.",
                     items.len(),
                     path.display()
                 );
                 if !refused.is_empty() {
                     msg += &format!("\n\nLeft out ({}): {}", refused.len(), refused.iter().map(|r| r.0.as_str()).collect::<Vec<_>>().join(", "));
                 }
-                let _ = xylem_session::reveal(&path.display().to_string());
+                let _ = diskroot_session::reveal(&path.display().to_string());
                 self.dialog = Some(Dialog::Message("Cleanup script saved".into(), msg));
             }
             Err(e) => self.dialog = Some(Dialog::Message("Couldn't save the script".into(), e.to_string())),
@@ -2508,11 +2519,11 @@ impl XylemApp {
         self.settings.alerts.retain(|a| !a.path.eq_ignore_ascii_case(&info.path));
         self.settings.alerts.push(Alert { path: info.path.clone(), baseline: info.on_disk, grow });
         self.settings.save();
-        self.say(format!("Alert set: Xylem tells you when {} grows by {} (while it's open, or at the next scan)", info.name, fmt_bytes(grow)));
+        self.say(format!("Alert set: DiskRoot tells you when {} grows by {} (while it's open, or at the next scan)", info.name, fmt_bytes(grow)));
     }
 
     fn reload_rules(&mut self) {
-        self.rules_status = xylem_session::reload_rules();
+        self.rules_status = diskroot_session::reload_rules();
         if let Some(s) = &mut self.scanned {
             s.reclassify();
             self.summary = Some(s.summary());
@@ -2528,7 +2539,7 @@ impl XylemApp {
 
     fn reveal_in_explorer(&mut self, n: u32) {
         if let Some(s) = &self.scanned
-            && let Err(e) = s.path(n).and_then(|p| xylem_session::reveal(&p)) {
+            && let Err(e) = s.path(n).and_then(|p| diskroot_session::reveal(&p)) {
                 self.dialog = Some(Dialog::Message("Couldn't open Explorer".into(), e));
             }
     }
@@ -2546,7 +2557,7 @@ impl XylemApp {
         let prepared = s.prepare_delete(n).and_then(|mut p| p.arm().map(|()| p));
         match (s.info(n), prepared) {
             (Ok(_), _) if n == 0 => {
-                self.dialog = Some(Dialog::Message("Can't delete this".into(), "Xylem won't delete the whole scanned folder or drive.".into()));
+                self.dialog = Some(Dialog::Message("Can't delete this".into(), "DiskRoot won't delete the whole scanned folder or drive.".into()));
             }
             (Ok(info), _) if info.protected.is_some() => {
                 self.dialog = Some(Dialog::ConfirmDelete(Box::new(Confirm { info, warnings: DeleteWarnings::default(), ack: false, pending: None })));
@@ -2590,7 +2601,7 @@ impl XylemApp {
         }
         let bytes: u64 = items.iter().map(|p| p.freed).sum();
         let files: u64 = items.iter().map(|p| u64::from(p.files)).sum();
-        warnings.large |= bytes >= xylem_session::safety::LARGE_BYTES || files >= u64::from(xylem_session::safety::LARGE_FILES);
+        warnings.large |= bytes >= diskroot_session::safety::LARGE_BYTES || files >= u64::from(diskroot_session::safety::LARGE_FILES);
         self.dialog = Some(Dialog::ConfirmMany(Box::new(ConfirmMany { items, refused, bytes, warnings, ack: false })));
     }
 
@@ -2637,17 +2648,17 @@ impl XylemApp {
     }
 
     fn open_security(&mut self) {
-        self.dialog = Some(Dialog::Security(Box::new(xylem_session::integrity::check_current_exe())));
+        self.dialog = Some(Dialog::Security(Box::new(diskroot_session::integrity::check_current_exe())));
     }
 
-    /// Writes the scan to Documents\Xylem\<root> <date>.csv on a worker thread.
+    /// Writes the scan to Documents\DiskRoot\<root> <date>.csv on a worker thread.
     fn start_export(&mut self) {
         let Some(s) = &self.scanned else { return };
         let (idx, _, _) = s.remember_parts();
         let root = s.summary().root;
-        let docs = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from).unwrap_or_default().join("Documents").join("Xylem");
+        let docs = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from).unwrap_or_default().join("Documents").join("DiskRoot");
         let safe: String = root.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
-        let stamp = xylem_session::safety::utc_now().replace([':', ' '], "-");
+        let stamp = diskroot_session::safety::utc_now().replace([':', ' '], "-");
         let path = docs.join(format!("{} {stamp}.csv", safe.trim_matches('_')));
         let (tx, rx) = mpsc::channel();
         let shown = path.display().to_string();
@@ -2668,7 +2679,7 @@ impl XylemApp {
     }
 
     fn open_history(&mut self) {
-        self.dialog = Some(Dialog::History(xylem_session::safety::read_log(200)));
+        self.dialog = Some(Dialog::History(diskroot_session::safety::read_log(200)));
     }
 
     fn map_pane(&mut self, ui: &mut Ui) {
@@ -2738,7 +2749,7 @@ impl XylemApp {
                 center_title: &m.nodes[0].name,
                 center_value: &value,
                 can_go_up: m.up.is_some(),
-                today: self.settings.color_by_age.then(xylem_session::today_days),
+                today: self.settings.color_by_age.then(diskroot_session::today_days),
             };
             map::paint(&ui.painter_at(map_rect), layout, &pc);
 
@@ -2773,7 +2784,7 @@ impl XylemApp {
                         }
                         if n.mtime > 0 {
                             let what = if n.dir { "Newest inside" } else { "Modified" };
-                            ui.label(RichText::new(format!("{what}: {}", xylem_session::age_text(xylem_session::today_days(), n.mtime))).color(t.muted));
+                            ui.label(RichText::new(format!("{what}: {}", diskroot_session::age_text(diskroot_session::today_days(), n.mtime))).color(t.muted));
                         }
                         if !n.hint.is_empty() {
                             ui.label(RichText::new(&n.hint).color(t.faint).size(11.5));
@@ -2845,13 +2856,13 @@ impl XylemApp {
     /// (key, name, bytes, total, colour) entries under the map.
     fn legend_items(&self) -> Vec<(Key_, String, u64, u64, u8)> {
         let (Some(s), Some(m)) = (&self.scanned, &self.map) else { return Vec::new() };
-        let cats = xylem_session::categories();
+        let cats = diskroot_session::categories();
         let mut out = Vec::new();
         if self.settings.color_by_age {
             if let Some(ages) = &m.ages {
                 let total: u64 = ages.iter().sum();
                 for (b, &v) in ages.iter().enumerate().filter(|x| *x.1 > 0) {
-                    let name = xylem_session::AGE_BUCKETS.get(b).map_or("Date unknown", |x| x.1);
+                    let name = diskroot_session::AGE_BUCKETS.get(b).map_or("Date unknown", |x| x.1);
                     out.push((Key_::Cat(format!("age:{b}")), name.to_owned(), v, total, 100 + b as u8));
                 }
             }
@@ -2884,7 +2895,7 @@ impl XylemApp {
             && self.links_cache.as_ref().is_none_or(|c| c.0 != *n)
         {
             let names = match s.info(*n) {
-                Ok(i) if !i.dir => xylem_session::safety::hardlink_names(std::path::Path::new(&i.path)),
+                Ok(i) if !i.dir => diskroot_session::safety::hardlink_names(std::path::Path::new(&i.path)),
                 _ => Vec::new(),
             };
             self.links_cache = Some((*n, names));
@@ -2977,7 +2988,7 @@ impl XylemApp {
                                 let mt = s.mtime(*n);
                                 if mt > 0 {
                                     key(ui, if info.dir { "Newest inside" } else { "Modified" });
-                                    ui.label(format!("{} · {}", xylem_session::date_text(mt), xylem_session::age_text(xylem_session::today_days(), mt)));
+                                    ui.label(format!("{} · {}", diskroot_session::date_text(mt), diskroot_session::age_text(diskroot_session::today_days(), mt)));
                                     ui.end_row();
                                 }
                                 if let Some((_, series)) = self.hist_cache.as_ref().filter(|c| c.0 == *n && c.1.len() >= 2) {
@@ -2990,7 +3001,7 @@ impl XylemApp {
                                         let span = remember::gap_text(last.0.saturating_sub(week.0));
                                         let text = if d == 0 { format!("no change in {span}") } else { format!("{} in {span}", fmt_delta(d)) };
                                         ui.label(RichText::new(text).color(if d > 0 { theme::WARN } else { t.muted }))
-                                            .on_hover_text("From the scans Xylem remembered (folders of 1 MB or more). View → Size history for more.");
+                                            .on_hover_text("From the scans DiskRoot remembered (folders of 1 MB or more). View → Size history for more.");
                                     });
                                     ui.end_row();
                                 }
@@ -3031,7 +3042,7 @@ impl XylemApp {
                             }
                             if let Some(a) = tool {
                                 let (text, hint) = match a {
-                                    Action::DismCleanup => ("Clean up with Windows…", "Runs Windows' DISM component cleanup (admin). Xylem itself deletes nothing here."),
+                                    Action::DismCleanup => ("Clean up with Windows…", "Runs Windows' DISM component cleanup (admin). DiskRoot itself deletes nothing here."),
                                     Action::SystemProtection => ("System Protection…", "Opens Windows' System Protection settings to manage restore points."),
                                     Action::StorageSettings => ("Open Storage settings…", "Windows removes these: Settings > System > Storage > Temporary files."),
                                 };
@@ -3039,13 +3050,13 @@ impl XylemApp {
                                     tool_action = Some(a);
                                 }
                             }
-                            let cloud = s.is_cloud(*n) || xylem_session::safety::in_cloud_folder(std::path::Path::new(&info.path));
+                            let cloud = s.is_cloud(*n) || diskroot_session::safety::in_cloud_folder(std::path::Path::new(&info.path));
                             if info.dir
                                 && info.protected.is_none()
                                 && info.parent.is_some()
                                 && !cloud
                                 && self.job.is_none()
-                                && ui.add_sized([170.0, 28.0], egui::Button::new("Compress…")).on_hover_text("Xylem's fast compression (Windows' own file compression, several files at once): same files, less space. Undoable.").clicked()
+                                && ui.add_sized([170.0, 28.0], egui::Button::new("Compress…")).on_hover_text("DiskRoot's fast compression (Windows' own file compression, several files at once): same files, less space. Undoable.").clicked()
                             {
                                 action = Some(("compress", *n));
                             }
@@ -3075,7 +3086,7 @@ impl XylemApp {
                             ui.add_space(4.0);
                             if ui
                                 .add_enabled(self.job.is_none(), egui::Button::new(format!("Mark all {} that are safe to clear ({})", ids.len(), fmt_bytes(bytes))))
-                                .on_hover_text("Marks every place here that Xylem's rules label \"safe to clear\". Press Delete to review them in one confirmation.")
+                                .on_hover_text("Marks every place here that DiskRoot's rules label \"safe to clear\". Press Delete to review them in one confirmation.")
                                 .clicked()
                             {
                                 mark_key = Some(k.clone());
@@ -3116,7 +3127,7 @@ impl XylemApp {
                 JobKind::Scan(p) => (format!("Scanning {p}"), "Walking folders (no admin needed)…".to_owned()),
                 JobKind::Fast(p) => (
                     format!("Fast scan of {p}"),
-                    "Approve the Windows prompt. Xylem then reads the drive's Master File Table, read-only.".to_owned(),
+                    "Approve the Windows prompt. DiskRoot then reads the drive's Master File Table, read-only.".to_owned(),
                 ),
                 JobKind::Delete(n) => (format!("Moving \"{n}\" to the Recycle Bin"), "Windows is moving the files…".to_owned()),
                 JobKind::Reopen(p) => (format!("Opening the remembered scan of {p}"), "Loading the last scan from this PC…".to_owned()),
@@ -3128,10 +3139,10 @@ impl XylemApp {
                 ),
                 JobKind::Tool(name) => (
                     name.clone(),
-                    "Approve the Windows prompt. The tool runs in its own window and can take several minutes; Xylem waits until it's done.".to_owned(),
+                    "Approve the Windows prompt. The tool runs in its own window and can take several minutes; DiskRoot waits until it's done.".to_owned(),
                 ),
             };
-            Modal::new(egui::Id::unique("xylem-job")).show(ctx, |ui| {
+            Modal::new(egui::Id::unique("diskroot-job")).show(ctx, |ui| {
                 // Fixed size from the first frame, so the dialog doesn't jump.
                 ui.set_width(420.0);
                 ui.set_min_height(96.0);
@@ -3174,7 +3185,7 @@ impl XylemApp {
                     ui.label(RichText::new(format!("{} {what} so far", fmt_bytes(saved))).color(t.accent));
                 }
                 if matches!(job.kind, JobKind::Scan(_)) {
-                    let found = xylem_session::scan_progress();
+                    let found = diskroot_session::scan_progress();
                     ui.add_space(4.0);
                     ui.label(RichText::new(if found > 1 { format!("{} items found", fmt_count(found)) } else { "Starting…".to_owned() }).color(t.muted));
                 }
@@ -3218,12 +3229,12 @@ impl XylemApp {
         // One window id per dialog kind, so a dialog never inherits another
         // one's remembered size.
         let kind = std::mem::discriminant(&*d);
-        let resp = Modal::new(egui::Id::unique("xylem-dialog").with(kind)).show(ctx, |ui| {
+        let resp = Modal::new(egui::Id::unique("diskroot-dialog").with(kind)).show(ctx, |ui| {
             ui.set_width(if wide { 720.0 } else { 500.0 });
             match d {
                 Dialog::Schedule(v) => {
                     ui.label(RichText::new("Scheduled scans").font(theme::semibold(16.0)));
-                    ui.add(egui::Label::new(RichText::new("Xylem can scan by itself and remember the result, so when you open it you see what changed. Each run is a normal scan (no admin, no window) at background priority; it saves the result and exits, so nothing stays in memory between scans. Fast scan stays something you start here.").color(t.muted)).wrap());
+                    ui.add(egui::Label::new(RichText::new("DiskRoot can scan by itself and remember the result, so when you open it you see what changed. Each run is a normal scan (no admin, no window) at background priority; it saves the result and exits, so nothing stays in memory between scans. Fast scan stays something you start here.").color(t.muted)).wrap());
                     ui.add_space(6.0);
                     ui.checkbox(&mut v.on, RichText::new("Scan automatically").font(theme::semibold(13.5)));
                     ui.add_enabled_ui(v.on, |ui| {
@@ -3445,7 +3456,7 @@ impl XylemApp {
                         if small {
                             "Everything is accounted for, within 1% of the used space. What's left is space NTFS keeps for itself (reserved storage and bookkeeping that isn't a file).".to_owned()
                         } else if gap > 0 {
-                            format!("{} isn't in any file Fast scan found: Windows' reserved storage (space set aside for updates), and space NTFS keeps for itself. Shown as is; Xylem doesn't guess.", fmt_bytes(gap as u64))
+                            format!("{} isn't in any file Fast scan found: Windows' reserved storage (space set aside for updates), and space NTFS keeps for itself. Shown as is; DiskRoot doesn't guess.", fmt_bytes(gap as u64))
                         } else {
                             "Fast scan counted a little more than Windows reports as used (sizes rounded to whole clusters, and files changing during the scan).".to_owned()
                         }
@@ -3506,7 +3517,7 @@ impl XylemApp {
                             }
                             ui.end_row();
                             for w in &top {
-                                if xylem_session::offenders::for_process(&w.name).is_some() {
+                                if diskroot_session::offenders::for_process(&w.name).is_some() {
                                     ui.label(RichText::new(format!("⚠ {}", w.name)).color(theme::WARN));
                                 } else {
                                     ui.label(&w.name);
@@ -3518,7 +3529,7 @@ impl XylemApp {
                             }
                         });
                     }
-                    let known: Vec<&xylem_session::offenders::Offender> = top.iter().map(|w| w.name.as_str()).chain(v.away.iter().map(|a| a.0.as_str())).filter_map(xylem_session::offenders::for_process).collect();
+                    let known: Vec<&diskroot_session::offenders::Offender> = top.iter().map(|w| w.name.as_str()).chain(v.away.iter().map(|a| a.0.as_str())).filter_map(diskroot_session::offenders::for_process).collect();
                     let mut shown_titles: Vec<&str> = Vec::new();
                     for o in known {
                         if shown_titles.contains(&o.title) {
@@ -3540,7 +3551,7 @@ impl XylemApp {
                         }
                     }
                     ui.add_space(8.0);
-                    ui.label(RichText::new("Settings that write a lot (advice only: Xylem changes nothing)").font(theme::semibold(13.0)));
+                    ui.label(RichText::new("Settings that write a lot (advice only: DiskRoot changes nothing)").font(theme::semibold(13.0)));
                     for tip in &v.advice {
                         ui.add(egui::Label::new(RichText::new(format!("• {tip}")).color(t.muted)).wrap());
                     }
@@ -3550,7 +3561,7 @@ impl XylemApp {
                     ui.add_space(8.0);
                     ui.label(RichText::new("Folders changed most often").font(theme::semibold(13.0)));
                     if self.watcher.is_none() {
-                        ui.label(RichText::new("Needs live updates on and a scan on screen (it watches the scanned folder while Xylem is open).").color(t.faint));
+                        ui.label(RichText::new("Needs live updates on and a scan on screen (it watches the scanned folder while DiskRoot is open).").color(t.faint));
                     } else {
                         let mut hot: Vec<(&String, &u32)> = self.hot.iter().collect();
                         hot.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
@@ -3569,7 +3580,7 @@ impl XylemApp {
                 Dialog::Health(v) => {
                     let (drives, trim) = (&v.drives, &v.trim);
                     ui.label(RichText::new("Drive health").font(theme::semibold(16.0)));
-                    ui.add(egui::Label::new(RichText::new("What the drives report about themselves: how much of their rated life is used, how much was written, temperature and errors. Xylem only asks for these reports; it changes nothing and needs no admin.").color(t.muted)).wrap());
+                    ui.add(egui::Label::new(RichText::new("What the drives report about themselves: how much of their rated life is used, how much was written, temperature and errors. DiskRoot only asks for these reports; it changes nothing and needs no admin.").color(t.muted)).wrap());
                     ui.add_space(6.0);
                     egui::ScrollArea::vertical().id_salt("health").max_height(420.0).show(ui, |ui| {
                         if drives.is_empty() {
@@ -3605,7 +3616,7 @@ impl XylemApp {
                                         });
                                     }
                                     None => {
-                                        ui.label(RichText::new("Writes per day: shown after two days of notes (Xylem notes the numbers once a day when it scans).").color(t.faint));
+                                        ui.label(RichText::new("Writes per day: shown after two days of notes (DiskRoot notes the numbers once a day when it scans).").color(t.faint));
                                     }
                                 }
                                 ui.add(egui::Label::new(RichText::new(tr.life.as_str())).wrap());
@@ -3618,7 +3629,7 @@ impl XylemApp {
                                 let urgent = level != Health::Good && level != Health::Unknown;
                                 ui.add(egui::Label::new(RichText::new(format!("If {letter} failed, this would be lost unless you have a copy somewhere else: {list} (OneDrive folders aren't counted here). Keep a copy (File History, OneDrive, an external drive){}", if urgent { ", now" } else { "" }) + ".").color(if urgent { theme::WARN } else { t.muted })).wrap());
                             }
-                            if let Some(o) = xylem_session::offenders::for_drive(&d.model, &d.firmware) {
+                            if let Some(o) = diskroot_session::offenders::for_drive(&d.model, &d.firmware) {
                                 ui.add(egui::Label::new(RichText::new(format!("⚠ {}: {} {}", o.title, o.what, o.todo)).color(theme::WARN)).wrap())
                                     .on_hover_text(format!("Checked {} against:\n{}", o.checked, o.sources.join("\n")));
                             }
@@ -3642,7 +3653,7 @@ impl XylemApp {
                         "{} · {} scans since {} · the history uses {} on this PC",
                         visible(&v.root),
                         v.points,
-                        xylem_session::date_text((v.first / 86_400) as u16),
+                        diskroot_session::date_text((v.first / 86_400) as u16),
                         fmt_bytes(v.disk)
                     )).color(t.muted)).wrap());
                     ui.add_space(6.0);
@@ -3718,12 +3729,12 @@ impl XylemApp {
                 Dialog::Memory => {
                     self.footprint.sample();
                     let f = self.footprint;
-                    ui.label(RichText::new("Xylem's memory and CPU").font(theme::semibold(16.0)));
+                    ui.label(RichText::new("DiskRoot's memory and CPU").font(theme::semibold(16.0)));
                     ui.add_space(4.0);
                     facts(ui, &t, &[
                         ("RAM in use", &format!("{} (the most so far: {})", fmt_bytes(f.ram), fmt_bytes(f.peak))),
-                        ("Private", &format!("{} (memory only Xylem holds; Task Manager's \"Commit size\")", fmt_bytes(f.private))),
-                        ("CPU", &format!("{:.1}% of the whole processor right now. Idle, Xylem uses almost none (well under 1% of one core).", f.cpu_pct)),
+                        ("Private", &format!("{} (memory only DiskRoot holds; Task Manager's \"Commit size\")", fmt_bytes(f.private))),
+                        ("CPU", &format!("{:.1}% of the whole processor right now. Idle, DiskRoot uses almost none (well under 1% of one core).", f.cpu_pct)),
                     ]);
                     ui.add_space(6.0);
                     if let Some(s) = &self.scanned {
@@ -3755,7 +3766,7 @@ impl XylemApp {
                         self.settings.save();
                     }
                     let mut auto = self.settings.free_when_minimized;
-                    if ui.checkbox(&mut auto, "Free memory when Xylem has been minimized for 10 minutes").changed() {
+                    if ui.checkbox(&mut auto, "Free memory when DiskRoot has been minimized for 10 minutes").changed() {
                         self.settings.free_when_minimized = auto;
                         self.settings.save();
                     }
@@ -3767,17 +3778,17 @@ impl XylemApp {
                     ui.horizontal(|ui| {
                         ui.add(egui::Image::new(&self.logo).fit_to_exact_size(vec2(56.0, 56.0)));
                         ui.vertical(|ui| {
-                            ui.label(RichText::new("Xylem").font(theme::semibold(18.0)));
+                            ui.label(RichText::new("DiskRoot").font(theme::semibold(18.0)));
                             ui.label(format!("Version {} · disk space analyzer for Windows", env!("CARGO_PKG_VERSION")));
                         });
                     });
                     ui.add_space(6.0);
-                    ui.label(RichText::new("Xylem is the plant tissue that carries water up from the roots. This app carries your drive's file table up into a map.").color(t.muted));
+                    ui.label(RichText::new("DiskRoot gets to the root of what fills your drive: from the raw file table up to plain-English answers. (It began as Xylem, after the plant tissue that carries water up from the roots.)").color(t.muted));
                 }
                 Dialog::Welcome => {
-                    ui.label(RichText::new("Welcome to Xylem").font(theme::semibold(16.0)));
+                    ui.label(RichText::new("Welcome to DiskRoot").font(theme::semibold(16.0)));
                     ui.add_space(4.0);
-                    ui.label(RichText::new("Before you start, here is exactly what Xylem does on your computer:").color(t.muted));
+                    ui.label(RichText::new("Before you start, here is exactly what DiskRoot does on your computer:").color(t.muted));
                     ui.add_space(8.0);
                     facts(ui, &t, &[
                         ("Reads", "File names and sizes. It doesn't read what's inside your files, except when you start View → Find duplicate files."),
@@ -3785,24 +3796,24 @@ impl XylemApp {
                         ("Asks first", "Admin rights only when you ask for them, always through the Windows prompt: Fast scan (the helper exits after the scan), and the optional DISM cleanup and virtual-disk compaction."),
                         ("Deletes carefully", "Only when you confirm, always to the Recycle Bin, re-checked on disk first. Windows and system folders are locked."),
                         ("Keeps a record", "Every delete is written to a log on this PC (File → Deletion history)."),
-                        ("Remembers scans", "Your last scans are saved on this PC (names and sizes only), so they reopen instantly and Xylem can show what changed. Turn it off or forget them in the File menu."),
+                        ("Remembers scans", "Your last scans are saved on this PC (names and sizes only), so they reopen instantly and DiskRoot can show what changed. Turn it off or forget them in the File menu."),
                     ]);
                 }
                 Dialog::Security(ig) => {
                     ui.label(RichText::new("Security & privacy").font(theme::semibold(16.0)));
                     ui.add_space(8.0);
                     facts(ui, &t, &[
-                        ("Network", "Xylem makes no network connections and sends nothing anywhere. The native app has no browser engine."),
-                        ("Disk access", "Folders and drives are opened for reading only; scanning never changes your files. Xylem saves its own scans (compressed) in %LOCALAPPDATA%\\Xylem."),
+                        ("Network", "DiskRoot makes no network connections and sends nothing anywhere. The native app has no browser engine."),
+                        ("Disk access", "Folders and drives are opened for reading only; scanning never changes your files. DiskRoot saves its own scans (compressed) in %LOCALAPPDATA%\\DiskRoot."),
                         ("Admin rights", "Only after the Windows prompt: for Fast scan (a helper reads the file table in about 1–5 s and exits), and if you use them, Windows' DISM cleanup and virtual-disk compaction."),
-                        ("Deleting", "Always to the Recycle Bin, after you confirm. Right before moving, Xylem re-checks the item: if it changed, or a folder on its path became a link since the scan, it refuses."),
+                        ("Deleting", "Always to the Recycle Bin, after you confirm. Right before moving, DiskRoot re-checks the item: if it changed, or a folder on its path became a link since the scan, it refuses."),
                         ("Warnings", "Extra confirmation for OneDrive folders (deleting syncs to your other devices), Git repositories (unpushed work) and very large deletes."),
-                        ("History", "Each delete is logged on this PC in %LOCALAPPDATA%\\Xylem\\deletions.log."),
-                        ("Remembered scans", "Names and sizes of your last scans (up to 8 drives or folders) are kept in %LOCALAPPDATA%\\Xylem\\cache for instant reopen and \"what changed\". Never uploaded. File → Remember scans turns it off; File → Forget remembered scans deletes them."),
+                        ("History", "Each delete is logged on this PC in %LOCALAPPDATA%\\DiskRoot\\deletions.log."),
+                        ("Remembered scans", "Names and sizes of your last scans (up to 8 drives or folders) are kept in %LOCALAPPDATA%\\DiskRoot\\cache for instant reopen and \"what changed\". Never uploaded. File → Remember scans turns it off; File → Forget remembered scans deletes them."),
                     ]);
                     ui.add_space(10.0);
                     ui.separator();
-                    ui.label(RichText::new("This copy of Xylem").font(theme::semibold(13.5)));
+                    ui.label(RichText::new("This copy of DiskRoot").font(theme::semibold(13.5)));
                     ui.add_space(4.0);
                     let (sig_ok, sig_text) = match ig.signature {
                         SignatureState::Signed => (true, "Digitally signed, and Windows trusts the signature."),
@@ -3812,7 +3823,7 @@ impl XylemApp {
                     let loc_text = if ig.protected_location {
                         "Installed in Program Files, which only administrators can change."
                     } else {
-                        "Running from a folder your user account can change. Install Xylem to protect the admin helper used by Fast scan."
+                        "Running from a folder your user account can change. Install DiskRoot to protect the admin helper used by Fast scan."
                     };
                     for (ok, k, v) in [(ig.protected_location, "Location", loc_text), (sig_ok, "Signature", sig_text)] {
                         let (mark, col) = if ok { ("✔", t.accent) } else { ("!", theme::WARN) };
@@ -3825,10 +3836,10 @@ impl XylemApp {
                 }
                 Dialog::History(entries) => {
                     ui.label(RichText::new("Deletion history").font(theme::semibold(16.0)));
-                    ui.label(RichText::new("Everything deleted through Xylem on this PC, newest first. Recycled items can be restored from the Recycle Bin.").color(t.muted));
+                    ui.label(RichText::new("Everything deleted through DiskRoot on this PC, newest first. Recycled items can be restored from the Recycle Bin.").color(t.muted));
                     ui.add_space(8.0);
                     if entries.is_empty() {
-                        ui.label(RichText::new("Nothing has been deleted with Xylem yet.").color(t.faint));
+                        ui.label(RichText::new("Nothing has been deleted with DiskRoot yet.").color(t.faint));
                     } else {
                         egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
                             egui::Grid::new("history").num_columns(4).striped(true).spacing([14.0, 5.0]).show(ui, |ui| {
@@ -3878,7 +3889,7 @@ impl XylemApp {
                     }
                     if ch.hardlink_switch() {
                         ui.add_space(4.0);
-                        ui.add(egui::Label::new(RichText::new("This version of Xylem counts hardlinked files once (the same data under two names, mostly in Windows' WinSxS); the previous scan counted every name. Part of this drop is that, not deleted files.").color(theme::WARN)).wrap());
+                        ui.add(egui::Label::new(RichText::new("This version of DiskRoot counts hardlinked files once (the same data under two names, mostly in Windows' WinSxS); the previous scan counted every name. Part of this drop is that, not deleted files.").color(theme::WARN)).wrap());
                     }
                     ui.add_space(4.0);
                     let total = i128::from(ch.after_total) - i128::from(ch.before_total);
@@ -3925,7 +3936,7 @@ impl XylemApp {
                     });
                     if !c.refused.is_empty() {
                         ui.add_space(6.0);
-                        ui.label(RichText::new(format!("Skipped ({}): Xylem won't delete these", c.refused.len())).font(theme::semibold(13.0)).color(theme::cat_color(5)));
+                        ui.label(RichText::new(format!("Skipped ({}): DiskRoot won't delete these", c.refused.len())).font(theme::semibold(13.0)).color(theme::cat_color(5)));
                         for (name, why) in &c.refused {
                             ui.add(egui::Label::new(RichText::new(format!("{}: {why}", visible(name))).color(t.muted)).wrap());
                         }
@@ -4002,7 +4013,7 @@ impl XylemApp {
                             }
                         }
                     } else {
-                        ui.add(egui::Label::new(RichText::new("This is the only part of Xylem that reads file contents: it compares files of the same size, first by their beginning and end, then in full. Nothing leaves your PC. Online-only cloud files are skipped (reading them would download them), and hardlinks (one file with two names) aren't counted as copies.").color(t.muted)).wrap());
+                        ui.add(egui::Label::new(RichText::new("This is the only part of DiskRoot that reads file contents: it compares files of the same size, first by their beginning and end, then in full. Nothing leaves your PC. Online-only cloud files are skipped (reading them would download them), and hardlinks (one file with two names) aren't counted as copies.").color(t.muted)).wrap());
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
                             ui.label("Only files of at least");
@@ -4034,7 +4045,7 @@ impl XylemApp {
                                     let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
                                     ui.painter().rect_filled(dot, CornerRadius::same(2), theme::cat_color(f.cat));
                                     let r = ui.add(egui::Label::new(visible(&f.name)).truncate().sense(Sense::click()));
-                                    if r.on_hover_text(format!("{}\nModified {}\nClick to show it in the tree", visible(&f.path), xylem_session::age_text(xylem_session::today_days(), f.mtime))).clicked() {
+                                    if r.on_hover_text(format!("{}\nModified {}\nClick to show it in the tree", visible(&f.path), diskroot_session::age_text(diskroot_session::today_days(), f.mtime))).clicked() {
                                         jump_node = Some(f.id);
                                     }
                                 });
@@ -4062,7 +4073,7 @@ impl XylemApp {
                     let st = &self.rules_status;
                     ui.label(RichText::new("Custom rules").font(theme::semibold(16.0)));
                     ui.add_space(4.0);
-                    ui.add(egui::Label::new(RichText::new("Add your own categories for folders and file types, e.g. \"Projects/*/out\" as Dev stuff > My build output. Your rules can't change what Xylem protects: they never apply where a built-in rule matches or inside protected places like C:\\Windows, and their safety label stays \"Your rule\".").color(t.muted)).wrap());
+                    ui.add(egui::Label::new(RichText::new("Add your own categories for folders and file types, e.g. \"Projects/*/out\" as Dev stuff > My build output. Your rules can't change what DiskRoot protects: they never apply where a built-in rule matches or inside protected places like C:\\Windows, and their safety label stays \"Your rule\".").color(t.muted)).wrap());
                     ui.add_space(8.0);
                     let (mark, col, text) = match (&st.error, st.found) {
                         (Some(e), _) => ("!", theme::WARN, format!("Not loaded: {e}")),
@@ -4116,7 +4127,7 @@ impl XylemApp {
                         format!("{} files here are compressed now. Uncompress restores them; it needs {} free.", fmt_count(c.undo.files.len() as u64), fmt_bytes(c.undo.needs_free))
                     };
                     facts(ui, &t, &[
-                        ("How", "Windows' own file compression, run by Xylem on several files at once. Files keep their place, names and dates, and open as usual: Windows unpacks them as they're read."),
+                        ("How", "Windows' own file compression, run by DiskRoot on several files at once. Files keep their place, names and dates, and open as usual: Windows unpacks them as they're read."),
                         ("Safe", "Each file is opened read-only and locked against changes while it's packed; files another program is writing are skipped. Nothing is deleted, moved or copied."),
                         ("Best for", "Programs, games, code, logs and documents you mostly read. Photos, videos, archives and most model weights barely shrink; files that look random are skipped."),
                         ("Note", "A file that's changed later is stored uncompressed again. Reading compressed files costs a little CPU."),
@@ -4135,7 +4146,7 @@ impl XylemApp {
                         for m in &g.members {
                             ui.horizontal(|ui| {
                                 ui.add_sized(vec2(70.0, 18.0), egui::Label::new(RichText::new(fmt_bytes(m.bytes)).color(t.muted)));
-                                let age = if m.mtime > 0 { xylem_session::age_text(xylem_session::today_days(), m.mtime) } else { String::new() };
+                                let age = if m.mtime > 0 { diskroot_session::age_text(diskroot_session::today_days(), m.mtime) } else { String::new() };
                                 ui.add_sized(vec2(90.0, 18.0), egui::Label::new(RichText::new(age).color(t.faint).size(11.5)));
                                 let r = ui.add(egui::Label::new(visible(&m.path)).truncate().sense(Sense::click()));
                                 if r.on_hover_text(format!("{} · {}\nClick to show it in the tree", visible(&m.path), fmt_files(u64::from(m.files)))).clicked() {
@@ -4167,7 +4178,7 @@ impl XylemApp {
                         }
                     });
                     ui.add_space(4.0);
-                    ui.add(egui::Label::new(RichText::new("Xylem never deletes from here. Check what a copy is before removing it: two folders can look alike and still differ inside.").color(t.muted).size(11.5)).wrap());
+                    ui.add(egui::Label::new(RichText::new("DiskRoot never deletes from here. Check what a copy is before removing it: two folders can look alike and still differ inside.").color(t.muted).size(11.5)).wrap());
                 }
                 Dialog::Savings(v) => {
                     ui.label(RichText::new("Ways to save space").font(theme::semibold(16.0)));
@@ -4176,7 +4187,7 @@ impl XylemApp {
                         ui.selectable_value(&mut v.tab, 1, format!("Other ways ({})", v.tips.len()));
                     });
                     ui.separator();
-                    let today = xylem_session::today_days();
+                    let today = diskroot_session::today_days();
                     if v.tab == 0 {
                         if let Some(why) = &v.sugg.not_possible {
                             ui.add(egui::Label::new(RichText::new(why.as_str()).color(t.muted)).wrap());
@@ -4202,7 +4213,7 @@ impl XylemApp {
                                 }
                             });
                             if !v.sugg.has_arrival_dates {
-                                ui.label(RichText::new("This scan was saved by an older Xylem and has no arrival dates, so downloaded files may look older than they are. Press Scan for exact ages.").color(theme::WARN).size(12.0));
+                                ui.label(RichText::new("This scan was saved by an older DiskRoot and has no arrival dates, so downloaded files may look older than they are. Press Scan for exact ages.").color(theme::WARN).size(12.0));
                             }
                             let n = v.sugg.items.len();
                             let summary = if n == 0 {
@@ -4223,7 +4234,7 @@ impl XylemApp {
                                         let fast = c.estimate(Level::Fast);
                                         ui.add_sized(vec2(78.0, 18.0), egui::Label::new(RichText::new(format!("~{}", fmt_bytes(fast))).color(t.accent)));
                                         ui.add_sized(vec2(70.0, 18.0), egui::Label::new(RichText::new(fmt_bytes(c.on_disk)).color(t.muted)));
-                                        ui.add_sized(vec2(90.0, 18.0), egui::Label::new(RichText::new(xylem_session::age_text(today, c.mtime)).color(t.faint).size(11.5)));
+                                        ui.add_sized(vec2(90.0, 18.0), egui::Label::new(RichText::new(diskroot_session::age_text(today, c.mtime)).color(t.faint).size(11.5)));
                                         let level = c.suggested(today);
                                         let w = (ui.available_width() - 100.0).max(80.0);
                                         ui.allocate_ui_with_layout(vec2(w, 18.0), Layout::left_to_right(Align::Center), |ui| {
@@ -4237,7 +4248,7 @@ impl XylemApp {
                                                 fmt_bytes(fast),
                                                 fmt_bytes(c.estimate(Level::Max)),
                                                 level.label(),
-                                                xylem_session::date_text(c.mtime)
+                                                diskroot_session::date_text(c.mtime)
                                             );
                                             if r.on_hover_text(hover).clicked() {
                                                 jump_node = Some(c.node);
@@ -4251,10 +4262,10 @@ impl XylemApp {
                                 }
                             });
                             ui.add_space(6.0);
-                            ui.add(egui::Label::new(RichText::new("Age: when the newest file inside last changed or arrived on this PC (a download keeps its author's old date, so the arrival date counts too). Windows doesn't reliably record when a file was last opened, so this means \"not changed since\", not \"not used since\". Compressed files still open as usual. Zip or 7z archives save more, but the files can't be opened until unpacked, so Xylem doesn't make them.").color(t.muted).size(11.5)).wrap());
+                            ui.add(egui::Label::new(RichText::new("Age: when the newest file inside last changed or arrived on this PC (a download keeps its author's old date, so the arrival date counts too). Windows doesn't reliably record when a file was last opened, so this means \"not changed since\", not \"not used since\". Compressed files still open as usual. Zip or 7z archives save more, but the files can't be opened until unpacked, so DiskRoot doesn't make them.").color(t.muted).size(11.5)).wrap());
                         }
                     } else {
-                        ui.add(egui::Label::new(RichText::new("Biggest first, from this scan. Xylem doesn't delete anything from here: each way says how, or opens the right place.").color(t.muted)).wrap());
+                        ui.add(egui::Label::new(RichText::new("Biggest first, from this scan. DiskRoot doesn't delete anything from here: each way says how, or opens the right place.").color(t.muted)).wrap());
                         ui.add_space(4.0);
                         egui::ScrollArea::vertical().id_salt("savings-tips").max_height(400.0).show(ui, |ui| {
                             for (ti, tip) in v.tips.iter().enumerate() {
@@ -4264,7 +4275,7 @@ impl XylemApp {
                                     for p in tip.places.iter().take(30) {
                                         ui.horizontal(|ui| {
                                             ui.add_sized(vec2(70.0, 18.0), egui::Label::new(RichText::new(fmt_bytes(p.bytes)).color(t.muted)));
-                                            let age = if p.mtime > 0 { xylem_session::age_text(today, p.mtime) } else { String::new() };
+                                            let age = if p.mtime > 0 { diskroot_session::age_text(today, p.mtime) } else { String::new() };
                                             ui.add_sized(vec2(90.0, 18.0), egui::Label::new(RichText::new(age).color(t.faint).size(11.5)));
                                             let w = (ui.available_width() - if p.vhdx { 90.0 } else { 0.0 }).max(80.0);
                                             ui.allocate_ui_with_layout(vec2(w, 18.0), Layout::left_to_right(Align::Center), |ui| {
@@ -4326,7 +4337,7 @@ impl XylemApp {
                 }
                 Dialog::Alerts => {
                     ui.label(RichText::new("Size alerts").font(theme::semibold(16.0)));
-                    ui.add(egui::Label::new(RichText::new("Xylem checks these folders after every scan and, with live updates on, while it's open. It doesn't run in the background. Right-click a folder > \"Alert me if it grows by\" to add one.").color(t.muted)).wrap());
+                    ui.add(egui::Label::new(RichText::new("DiskRoot checks these folders after every scan and, with live updates on, while it's open. It doesn't run in the background. Right-click a folder > \"Alert me if it grows by\" to add one.").color(t.muted)).wrap());
                     ui.add_space(8.0);
                     if self.settings.alerts.is_empty() {
                         ui.label(RichText::new("No alerts yet.").color(t.faint));
@@ -4360,7 +4371,7 @@ impl XylemApp {
                         ("Admin", "Windows asks for permission first."),
                         ("Time", "Usually a few minutes, sometimes longer. It runs in its own window."),
                         ("Effect", "Removes superseded component versions. Updates installed before it can no longer be uninstalled."),
-                        ("Xylem", "Starts DISM and waits. It deletes nothing itself here."),
+                        ("DiskRoot", "Starts DISM and waits. It deletes nothing itself here."),
                     ]);
                 }
                 Dialog::Leftovers(list) => {
@@ -4377,7 +4388,7 @@ impl XylemApp {
                                 ui.add_sized(vec2(70.0, 18.0), egui::Label::new(RichText::new(fmt_bytes(l.on_disk)).color(t.muted)));
                                 ui.allocate_ui_with_layout(vec2(160.0, 18.0), Layout::left_to_right(Align::Center), |ui| {
                                     ui.set_min_width(160.0);
-                                    let kind = if l.mtime > 0 { format!("{} · {}", l.kind, xylem_session::age_text(xylem_session::today_days(), l.mtime)) } else { l.kind.clone() };
+                                    let kind = if l.mtime > 0 { format!("{} · {}", l.kind, diskroot_session::age_text(diskroot_session::today_days(), l.mtime)) } else { l.kind.clone() };
                                     ui.add(egui::Label::new(RichText::new(kind).color(if l.deletable && !l.hint { t.text } else { theme::WARN })).truncate());
                                 });
                                 let r = ui.add(egui::Label::new(visible(&l.name)).truncate().sense(Sense::click()));
@@ -4397,7 +4408,7 @@ impl XylemApp {
                     let can: Vec<u32> = list.iter().filter(|l| l.deletable && !l.hint).map(|l| l.id).collect();
                     if !can.is_empty() {
                         ui.add_space(6.0);
-                        ui.add(egui::Label::new(RichText::new("Downloads are yours to judge: Xylem can't tell whether you still need an installer or archive. Marking selects them for one review; nothing is deleted until you confirm.").color(t.muted).size(11.5)).wrap());
+                        ui.add(egui::Label::new(RichText::new("Downloads are yours to judge: DiskRoot can't tell whether you still need an installer or archive. Marking selects them for one review; nothing is deleted until you confirm.").color(t.muted).size(11.5)).wrap());
                         if ui.button(format!("Mark the {} downloads for review", can.len())).clicked() {
                             leftover_marks = Some(can);
                         }
@@ -4421,7 +4432,7 @@ impl XylemApp {
                     }
                     ui.add_space(6.0);
                     if let Some(why) = &info.protected {
-                        ui.label(RichText::new(format!("Xylem won't delete this. {why}")).color(theme::cat_color(5)));
+                        ui.label(RichText::new(format!("DiskRoot won't delete this. {why}")).color(theme::cat_color(5)));
                     } else {
                         let w = &c.warnings;
                         let warn = |ui: &mut Ui, title: &str, text: &str| {
@@ -4510,7 +4521,7 @@ impl XylemApp {
                         if ui.button("Size history…").clicked() {
                             action = Some("home-history");
                         }
-                        if ui.checkbox(&mut self.settings.home_at_start, "Show this when Xylem starts").changed() {
+                        if ui.checkbox(&mut self.settings.home_at_start, "Show this when DiskRoot starts").changed() {
                             self.settings.save();
                         }
                         return;
@@ -4563,7 +4574,7 @@ impl XylemApp {
                         if ui.button("Scheduled scans…").on_hover_text("Background scans fill the history for you").clicked() {
                             action = Some("open-schedule");
                         }
-                        if ui.button("Clear history").on_hover_text("Deletes this drive's or folder's size history (Xylem's own file). Remembered scans stay.").clicked() {
+                        if ui.button("Clear history").on_hover_text("Deletes this drive's or folder's size history (DiskRoot's own file). Remembered scans stay.").clicked() {
                             action = Some("history-clear");
                         }
                         return;
@@ -4700,20 +4711,20 @@ impl XylemApp {
             }
             Some("vhdx-check") => {
                 if let Some(Dialog::Vhdx(path, _, busy)) = &mut self.dialog {
-                    *busy = xylem_session::power::in_use(std::path::Path::new(path));
+                    *busy = diskroot_session::power::in_use(std::path::Path::new(path));
                 }
             }
             Some("wsl-shutdown") => {
-                if let Err(e) = xylem_session::power::wsl_shutdown() {
+                if let Err(e) = diskroot_session::power::wsl_shutdown() {
                     self.say(e);
                 }
                 if let Some(Dialog::Vhdx(path, _, busy)) = &mut self.dialog {
-                    *busy = xylem_session::power::in_use(std::path::Path::new(path));
+                    *busy = diskroot_session::power::in_use(std::path::Path::new(path));
                 }
             }
             Some("vhdx-go") => {
                 if let Some(Dialog::Vhdx(path, _, _)) = self.dialog.take() {
-                    self.run_tool_job("Compacting the virtual disk (diskpart)".into(), move || xylem_session::power::compact_vhdx(std::path::Path::new(&path)));
+                    self.run_tool_job("Compacting the virtual disk (diskpart)".into(), move || diskroot_session::power::compact_vhdx(std::path::Path::new(&path)));
                 }
             }
             Some("open-schedule") => self.open_schedule(),
@@ -4766,9 +4777,9 @@ impl XylemApp {
                 self.free_memory();
             }
             Some("rules-reload") => self.reload_rules(),
-            Some("rules-edit") => match xylem_session::create_example_rules() {
+            Some("rules-edit") => match diskroot_session::create_example_rules() {
                 Ok(p) => {
-                    let notepad = xylem_session::tools::system32("notepad.exe");
+                    let notepad = diskroot_session::tools::system32("notepad.exe");
                     if let Err(e) = std::process::Command::new(notepad).arg(&p).spawn() {
                         self.say(format!("Couldn't open Notepad: {e}"));
                     }
@@ -4776,8 +4787,8 @@ impl XylemApp {
                 Err(e) => self.dialog = Some(Dialog::Message("Couldn't create the rules file".into(), e)),
             },
             Some("open-log") => {
-                if let Some(p) = xylem_session::safety::log_path() {
-                    let _ = xylem_session::reveal(&p.display().to_string());
+                if let Some(p) = diskroot_session::safety::log_path() {
+                    let _ = diskroot_session::reveal(&p.display().to_string());
                 }
             }
             _ => {}
@@ -4786,12 +4797,12 @@ impl XylemApp {
             && let (Some(s), Some(Dialog::Dupes(dv))) = (&self.scanned, &mut self.dialog)
         {
             let cands = s.duplicate_candidates(dv.min_mb << 20);
-            let prog = Arc::new(xylem_session::dupes::Progress::default());
+            let prog = Arc::new(diskroot_session::dupes::Progress::default());
             let cancel = Arc::new(AtomicBool::new(false));
             let (tx, rx) = mpsc::channel();
             let (p2, c2) = (Arc::clone(&prog), Arc::clone(&cancel));
             std::thread::spawn(move || {
-                let _ = tx.send(xylem_session::dupes::find(cands, &c2, &p2));
+                let _ = tx.send(diskroot_session::dupes::find(cands, &c2, &p2));
             });
             dv.running = Some((prog, cancel, rx));
         }
@@ -4952,10 +4963,10 @@ impl XylemApp {
         let want = match (&self.scanned, &self.selected) {
             (Some(s), Some(Key_::Node(n))) => {
                 let folder = s.info(*n).map(|i| i.folder).unwrap_or(0);
-                format!("Xylem: {}", s.path(folder).unwrap_or_default())
+                format!("DiskRoot: {}", s.path(folder).unwrap_or_default())
             }
-            (Some(s), _) => format!("Xylem: {}", s.summary().root),
-            _ => "Xylem".into(),
+            (Some(s), _) => format!("DiskRoot: {}", s.summary().root),
+            _ => "DiskRoot".into(),
         };
         if want != self.title {
             ctx.send_viewport_cmd(ViewportCommand::Title(want.clone()));
@@ -4985,7 +4996,7 @@ impl Columns {
     }
 }
 
-impl eframe::App for XylemApp {
+impl eframe::App for DiskRootApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_job(&ctx);
@@ -5115,7 +5126,7 @@ fn size_chart(ui: &mut Ui, t: &Tokens, pts: &[(u64, u64)], size: egui::Vec2, axi
         let font = egui::FontId::proportional(11.0);
         p.text(pos2(rect.min.x, plot.min.y), egui::Align2::LEFT_TOP, fmt_bytes(hi), font.clone(), t.muted);
         p.text(pos2(rect.min.x, plot.max.y), egui::Align2::LEFT_BOTTOM, fmt_bytes(lo), font.clone(), t.muted);
-        let day = |s: u64| xylem_session::date_text((s / 86_400) as u16);
+        let day = |s: u64| diskroot_session::date_text((s / 86_400) as u16);
         p.text(pos2(plot.min.x, rect.max.y), egui::Align2::LEFT_BOTTOM, day(pts[0].0), font.clone(), t.faint);
         p.text(pos2(plot.max.x, rect.max.y), egui::Align2::RIGHT_BOTTOM, day(pts[pts.len() - 1].0), font, t.faint);
     }
@@ -5126,7 +5137,7 @@ fn size_chart(ui: &mut Ui, t: &Tokens, pts: &[(u64, u64)], size: egui::Vec2, axi
         resp.on_hover_text_at_pointer(format!(
             "{} · {} ({})",
             fmt_bytes(bytes),
-            xylem_session::date_text((when / 86_400) as u16),
+            diskroot_session::date_text((when / 86_400) as u16),
             remember::age_text(when)
         ));
     }

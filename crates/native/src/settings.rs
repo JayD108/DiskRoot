@@ -1,5 +1,5 @@
 //! Remembered UI preferences, stored as a small JSON file in
-//! `%APPDATA%\Xylem\settings.json`. Purely local; failures are ignored
+//! `%APPDATA%\DiskRoot\settings.json`. Purely local; failures are ignored
 //! (the app just starts with defaults).
 
 use serde::{Deserialize, Serialize};
@@ -27,12 +27,12 @@ pub struct Settings {
     pub free_when_minimized: bool,
     /// Scan in Windows' background mode so other programs stay fast.
     pub gentle_scan: bool,
-    /// Open Home (the overview) when Xylem starts with a remembered scan.
+    /// Open Home (the overview) when DiskRoot starts with a remembered scan.
     pub home_at_start: bool,
 }
 
 /// A size alert on a folder (checked after scans and live updates while
-/// Xylem is open).
+/// DiskRoot is open).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Alert {
     /// Full path of the folder.
@@ -50,7 +50,7 @@ impl Default for Settings {
 }
 
 fn file() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("Xylem").join("settings.json"))
+    std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("DiskRoot").join("settings.json"))
 }
 
 impl Settings {

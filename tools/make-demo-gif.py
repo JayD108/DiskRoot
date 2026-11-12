@@ -73,7 +73,7 @@ def label(im, text):
 
 frames, durations = [], []
 # 1. Start screen (shown for 0.8 s).
-frames.append(label(load(rows[0][0]), "Fast scan of C:  (Xylem 0.2)"))
+frames.append(label(load(rows[0][0]), "Fast scan of C:  (DiskRoot 0.2)"))
 durations.append(800)
 # 2. The admin prompt: one frame, labelled, then cut.
 if first_helper > 4:

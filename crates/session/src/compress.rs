@@ -1,8 +1,8 @@
-//! Xylem's compression engine: fast, transparent compression of a folder.
+//! DiskRoot's compression engine: fast, transparent compression of a folder.
 //!
 //! It uses Windows' own file compression (WOF, the same format `compact.exe
 //! /EXE` writes): files stay where they are, every program opens them as
-//! usual, and Windows decompresses on read. Xylem doesn't invent a format;
+//! usual, and Windows decompresses on read. DiskRoot doesn't invent a format;
 //! it drives Windows directly instead of through compact.exe, which is what
 //! makes it fast:
 //!
@@ -15,7 +15,7 @@
 //!   Windows also refuses a file that wouldn't get smaller (error 344).
 //! - **Real progress and Cancel** (between files).
 //!
-//! Safety, measured in the R&D probe (`xylem-rnd`, E9): the bytes read back
+//! Safety, measured in the R&D probe (`diskroot-rnd`, E9): the bytes read back
 //! are identical, timestamps don't change, undo restores normal storage.
 //! Each file is opened for reading only, without write or delete sharing,
 //! so nothing can change or rename it meanwhile; a file another program is
@@ -250,7 +250,7 @@ pub enum Verdict {
 }
 
 pub fn verdict(name: &str, fl: u8, size: u64, alloc: u64) -> Verdict {
-    use xylem_core::flags;
+    use diskroot_core::flags;
     if fl & (flags::CLOUD | flags::LINK | flags::SPARSE | flags::COMPRESSED) != 0 {
         return Verdict::Already;
     }
@@ -600,7 +600,7 @@ mod tests {
 
     /// A temp folder on the system drive with compressible, random and tiny files.
     fn fixture(tag: &str) -> (PathBuf, Vec<PlanFile>) {
-        let dir = std::env::temp_dir().join(format!("xylem-compress-{tag}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("diskroot-compress-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         let text: Vec<u8> = (0..4_000_000u32).flat_map(|i| format!("line {} of a very repetitive log\n", i % 977).into_bytes()).take(4 << 20).collect();

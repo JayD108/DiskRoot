@@ -9,11 +9,11 @@
 //! path when running as admin on NTFS.
 
 #[cfg(not(windows))]
-compile_error!("xylem-scan-walk only supports Windows");
+compile_error!("diskroot-scan-walk only supports Windows");
 
 mod ffi;
 pub mod sys;
 mod walker;
 
-pub use xylem_core::{Scan, ScanStats};
+pub use diskroot_core::{Scan, ScanStats};
 pub use walker::{GENTLE, PROGRESS, ScanOptions, default_threads, scan};

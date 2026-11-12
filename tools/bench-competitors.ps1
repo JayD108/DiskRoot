@@ -1,4 +1,4 @@
-﻿# Fair speed benchmark: Xylem vs other disk analyzers on the same drive.
+﻿# Fair speed benchmark: DiskRoot vs other disk analyzers on the same drive.
 #
 #   .\tools\bench-competitors.ps1 -Mode user    # normal user (folder walks)
 #   .\tools\bench-competitors.ps1 -Mode admin   # run elevated (MFT / fast modes)
@@ -12,12 +12,12 @@ $ErrorActionPreference = "Continue"
 $root = Split-Path -Parent $PSScriptRoot
 $out = Join-Path $root "bench-results"
 New-Item -ItemType Directory -Force $out | Out-Null
-$tmp = Join-Path $env:TEMP "xylem-bench-out"
+$tmp = Join-Path $env:TEMP "diskroot-bench-out"
 New-Item -ItemType Directory -Force $tmp | Out-Null
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (($Mode -eq "admin") -ne $isAdmin) { throw "Mode $Mode but elevated=$isAdmin" }
 
-$xylem = Join-Path $root "target\release\xylem-cli.exe"
+$diskroot = Join-Path $root "target\release\droot.exe"
 $wiz = "C:\Program Files\WizTree\WizTree64.exe"
 $wds = "C:\Program Files\WinDirStat\WinDirStat.exe"
 $ts = "$env:USERPROFILE\AppData\Local\Programs\JAM Software\TreeSize\TreeSize.exe"
@@ -28,12 +28,12 @@ $d = "$Drive\"
 
 # name, class, exe, args
 $tests = @(
-  @("Xylem", "scan", $xylem, @("scan", $Drive, "--mode", $xmode, "--top", "1")),
+  @("DiskRoot", "scan", $diskroot, @("scan", $Drive, "--mode", $xmode, "--top", "1")),
   @("WizTree 4.33", "scan", $wiz, @($Drive, "/export=`"$tmp\wiz-min.csv`"", "/exportfiles=0", "/exportmaxdepth=1", "/admin=$adm")),
   # TreeSize: its command line did not scan here (likely a first-run/trial dialog),
   # so it is excluded until that is resolved.
   @("eDirStat 2.0", "scan", $ed, @("--benchmark", $d)),
-  @("Xylem", "scan+csv", $xylem, @("scan", $Drive, "--mode", $xmode, "--top", "1", "--export", "$tmp\xylem.csv")),
+  @("DiskRoot", "scan+csv", $diskroot, @("scan", $Drive, "--mode", $xmode, "--top", "1", "--export", "$tmp\diskroot.csv")),
   @("WizTree 4.33", "scan+csv", $wiz, @($Drive, "/export=`"$tmp\wiz.csv`"", "/admin=$adm")),
   @("WinDirStat 2.9", "scan+csv", $wds, @("/SaveTo", "$tmp\wds.csv", $d))
 )
@@ -61,7 +61,7 @@ for ($r = 1; $r -le $Runs; $r++) {
   }
 }
 # Sanity: how many rows did each full export contain?
-foreach ($f in "xylem.csv", "wiz.csv", "wds.csv") {
+foreach ($f in "diskroot.csv", "wiz.csv", "wds.csv") {
   $p = Join-Path $tmp $f
   if (Test-Path $p) { "{0}: {1:N0} lines" -f $f, ((Get-Content $p -ReadCount 100000 | Measure-Object -Sum { $_.Count }).Sum) | Add-Content (Join-Path $out "export-sizes-$Mode.txt") }
 }

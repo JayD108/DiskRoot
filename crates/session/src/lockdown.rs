@@ -214,15 +214,15 @@ mod tests {
     /// can still do.
     #[test]
     fn locked_down_process_cannot_write_or_spawn() {
-        if std::env::var_os("XYLEM_LOCKDOWN_CHILD").is_some() {
+        if std::env::var_os("DISKROOT_LOCKDOWN_CHILD").is_some() {
             return; // handled by `child_side`
         }
-        let dir = std::env::temp_dir().join(format!("xylem-lockdown-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("diskroot-lockdown-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let exe = std::env::current_exe().unwrap();
         let out = std::process::Command::new(exe)
             .args(["--exact", "lockdown::tests::child_side", "--nocapture", "--test-threads=1"])
-            .env("XYLEM_LOCKDOWN_CHILD", &dir)
+            .env("DISKROOT_LOCKDOWN_CHILD", &dir)
             .output()
             .unwrap();
         let _ = std::fs::remove_dir_all(&dir);
@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn child_side() {
-        let Some(dir) = std::env::var_os("XYLEM_LOCKDOWN_CHILD").map(std::path::PathBuf::from) else { return };
+        let Some(dir) = std::env::var_os("DISKROOT_LOCKDOWN_CHILD").map(std::path::PathBuf::from) else { return };
         use std::io::Write;
         let pre = dir.join("pre.tmp");
         let post = dir.join("post.tmp");

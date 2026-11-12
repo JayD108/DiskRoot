@@ -62,7 +62,7 @@ fn top(idx: &Index, n: usize, by: SortBy, keep: impl Fn(u32) -> bool) -> Vec<Ent
 /// Writes one CSV row per file and folder: path, size, on disk, files,
 /// kind. Folder paths are cached (parents always come before children), so
 /// each row costs one string join instead of a walk up to the root. Items
-/// deleted through Xylem are left out. Every path starts with the drive or
+/// deleted through DiskRoot are left out. Every path starts with the drive or
 /// share (never `=`, `+`, `-`, `@`) and is quoted, so spreadsheet apps
 /// can't treat a cell as a formula.
 pub fn write_csv(idx: &Index, w: &mut impl std::io::Write) -> std::io::Result<()> {

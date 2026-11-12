@@ -1,5 +1,5 @@
 blank_issues_enabled: true
 contact_links:
   - name: Report a security problem privately
-    url: https://github.com/JayD108/Xylem/security/advisories/new
+    url: https://github.com/JayD108/DiskRoot/security/advisories/new
     about: Please don't report security problems in public issues.
