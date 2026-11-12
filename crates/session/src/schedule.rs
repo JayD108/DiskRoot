@@ -61,11 +61,14 @@ pub struct Schedule {
     pub warn_grow_gb: u32,
     /// Once a week, a notification with growth, writes per day and drive health.
     pub weekly_report: bool,
+    /// Warn when a program keeps writing at least this many GB a day while
+    /// the PC is idle (0 = off).
+    pub warn_idle_gb_day: u32,
 }
 
 impl Default for Schedule {
     fn default() -> Self {
-        Self { every_min: 120, roots: vec!["C:\\".into()], on_battery: false, only_idle: false, warn_free_gb: 10, warn_grow_gb: 0, weekly_report: false }
+        Self { every_min: 120, roots: vec!["C:\\".into()], on_battery: false, only_idle: false, warn_free_gb: 10, warn_grow_gb: 0, weekly_report: false, warn_idle_gb_day: 10 }
     }
 }
 
@@ -284,6 +287,7 @@ fn run_scheduled() -> i32 {
     crate::health::record_daily(&crate::health::drives());
     // Who writes while nobody is looking: 30 s, before Xylem itself reads anything.
     let (mut writers, idle) = crate::writes::sample_for(30, 5);
+    let mut idle_warning = crate::warn::after_idle_sample(&runs(), &writers, idle, now_secs(), s.warn_idle_gb_day);
     for root in &s.roots {
         let t = Instant::now();
         let r = scan_and_remember(root);
@@ -296,6 +300,11 @@ fn run_scheduled() -> i32 {
             Err(e) => (0, None, Some(e)),
         };
         let warning = if error.is_none() { crate::warn::after_scan(root, s.warn_free_gb, s.warn_grow_gb, now_secs()) } else { None };
+        let warning = match (idle_warning.take(), warning) {
+            (Some(a), Some(b)) => Some(format!("{a}
+{b}")),
+            (a, b) => a.or(b),
+        };
         append_run(&Run { time: now_secs(), root: root.clone(), secs, peak_ram, files, delta, error, warning, writers: std::mem::take(&mut writers), idle });
     }
     if s.weekly_report {

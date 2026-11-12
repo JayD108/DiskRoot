@@ -97,7 +97,7 @@ Still to do before 1.0: destructive tests on disposable machines, 24-hour fuzzin
 |---|---|---|
 | `%APPDATA%\Xylem\settings.json` | Theme, view choices, size alerts, last path | Delete the file |
 | `%APPDATA%\Xylem\rules.json` | Your custom rules, if you made any | Delete the file |
-| `%LOCALAPPDATA%\Xylem\cache\` | Names and sizes of your last scans (up to 8 drives or folders), for instant reopen and "what changed"; a size history of folders of 1 MB or more (`.hist`, at most 16 MB per drive or folder) | File → Forget remembered scans; View → Size history → Clear history; File → Remember scans turns both off |
+| `%LOCALAPPDATA%\Xylem\cache\` | Names and sizes of your last scans (up to 8 drives or folders), for instant reopen and "what changed"; a size history of folders of 1 MB or more (`.hist`, at most 16 MB per drive or folder); paths and sizes of the biggest log files of the last 8 scans (`.logs.json`) | File → Forget remembered scans; View → Size history → Clear history; File → Remember scans turns both off |
 | `%LOCALAPPDATA%\Xylem\health.jsonl` | One line per drive per day: model, data written/read, wear %, powered-on hours, temperature, errors | Delete the file |
 | `%LOCALAPPDATA%\Xylem\scheduled-scans.jsonl`, `warnings.json` | Scheduled scans only: one line per background scan (time, duration, memory, change, warning shown), and when each warning was last shown | Delete the files |
 | `%LOCALAPPDATA%\Xylem\deletions.log` | What you deleted with Xylem | Delete the file |

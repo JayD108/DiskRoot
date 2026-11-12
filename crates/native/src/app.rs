@@ -172,6 +172,8 @@ struct GrowthView {
     points: usize,
     first: u64,
     disk: u64,
+    /// Log files that grew in each of the last 3+ scans.
+    logs: Vec<xylem_session::logs::Growing>,
 }
 
 /// View > Drive health: each drive with its trend, and Windows' TRIM setting.
@@ -206,6 +208,25 @@ struct WritersView {
     /// idle samples there were.
     away: Vec<(String, f64, usize)>,
     away_runs: usize,
+    /// Settings that write a lot, as plain advice.
+    advice: Vec<String>,
+}
+
+/// Advice about Windows settings that write a lot (read-only checks).
+fn write_advice() -> Vec<String> {
+    let mut out = Vec::new();
+    let sys = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+    if let Ok(m) = std::fs::metadata(format!("{sys}\\hiberfil.sys")) {
+        out.push(format!(
+            "Hibernation: {sys}\\hiberfil.sys is {}. Each hibernate writes up to that much (with Fast Startup, also at shut down). If you never hibernate, \"powercfg /h off\" (as admin) removes it and those writes.",
+            fmt_bytes(m.len())
+        ));
+    }
+    if let Ok(m) = std::fs::metadata(format!("{sys}\\pagefile.sys")) {
+        out.push(format!("Page file: {sys}\\pagefile.sys is {}. Windows writes to it when memory runs short; more RAM or closing heavy programs means fewer writes. Removing it is not recommended.", fmt_bytes(m.len())));
+    }
+    out.push("Browsers and chat apps write their caches all the time; it's normal, and usually a few GB a day at most.".into());
+    out
 }
 
 impl WritersView {
@@ -237,7 +258,7 @@ impl WritersView {
         let mut away: Vec<(String, f64, usize)> = sum.into_iter().map(|(k, (r, c))| (k, r / n, c)).collect();
         away.sort_by(|a, b| b.1.total_cmp(&a.1));
         away.truncate(8);
-        Self { sampler: xylem_session::writes::Sampler::new(&disks.iter().map(|d| d.0).collect::<Vec<_>>()), last: Instant::now(), disks, away, away_runs: idle_runs.len() }
+        Self { sampler: xylem_session::writes::Sampler::new(&disks.iter().map(|d| d.0).collect::<Vec<_>>()), last: Instant::now(), disks, away, away_runs: idle_runs.len(), advice: write_advice() }
     }
 }
 
@@ -2024,6 +2045,7 @@ impl XylemApp {
             points: h.points.len(),
             first: h.points[0].time,
             disk: history::disk_usage(),
+            logs: xylem_session::logs::growing(&xylem_session::logs::load(&root)),
             root,
         })));
     }
@@ -2970,6 +2992,15 @@ impl XylemApp {
                                 }
                             });
                         });
+                        ui.horizontal(|ui| {
+                            ui.label("when a program keeps writing while the PC is idle, more than");
+                            let day = |n: u32| if n == 0 { "never".to_owned() } else { format!("{n} GB a day") };
+                            egui::ComboBox::from_id_salt("warn-idle").selected_text(day(v.s.warn_idle_gb_day)).show_ui(ui, |ui| {
+                                for n in [0, 5, 10, 20, 50] {
+                                    ui.selectable_value(&mut v.s.warn_idle_gb_day, n, day(n));
+                                }
+                            });
+                        });
                         ui.checkbox(&mut v.s.weekly_report, "Once a week: a short report (growth, writes per day, drive health)");
                         ui.horizontal(|ui| {
                             ui.label("when what's scanned grows in a day by more than");
@@ -3040,13 +3071,28 @@ impl XylemApp {
                             }
                             ui.end_row();
                             for w in &top {
-                                ui.label(&w.name);
+                                if xylem_session::offenders::for_process(&w.name).is_some() {
+                                    ui.label(RichText::new(format!("⚠ {}", w.name)).color(theme::WARN));
+                                } else {
+                                    ui.label(&w.name);
+                                }
                                 ui.label(rate(w.now));
                                 ui.label(fmt_bytes(w.active));
                                 ui.label(RichText::new(fmt_bytes(w.idle)).color(if w.idle > 100 << 20 { theme::WARN } else { t.text }));
                                 ui.end_row();
                             }
                         });
+                    }
+                    let known: Vec<&xylem_session::offenders::Offender> = top.iter().map(|w| w.name.as_str()).chain(v.away.iter().map(|a| a.0.as_str())).filter_map(xylem_session::offenders::for_process).collect();
+                    let mut shown_titles: Vec<&str> = Vec::new();
+                    for o in known {
+                        if shown_titles.contains(&o.title) {
+                            continue;
+                        }
+                        shown_titles.push(o.title);
+                        ui.add_space(4.0);
+                        ui.add(egui::Label::new(RichText::new(format!("⚠ {}: {} {}", o.title, o.what, o.todo)).color(theme::WARN)).wrap())
+                            .on_hover_text(format!("Checked {} against:\n{}", o.checked, o.sources.join("\n")));
                     }
                     ui.add_space(8.0);
                     ui.label(RichText::new("While you were away (background scans, last 7 days)").font(theme::semibold(13.0)));
@@ -3057,6 +3103,14 @@ impl XylemApp {
                         for (name, r, c) in &v.away {
                             ui.label(format!("{name}: {} (≈ {} a day) · in {c} of {} samples", rate(*r), fmt_bytes((*r * 86_400.0) as u64), v.away_runs));
                         }
+                    }
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Settings that write a lot (advice only: Xylem changes nothing)").font(theme::semibold(13.0)));
+                    for tip in &v.advice {
+                        ui.add(egui::Label::new(RichText::new(format!("• {tip}")).color(t.muted)).wrap());
+                    }
+                    if v.advice.is_empty() {
+                        ui.label(RichText::new("Nothing to point out.").color(t.faint));
                     }
                     ui.add_space(8.0);
                     ui.label(RichText::new("Folders changed most often").font(theme::semibold(13.0)));
@@ -3120,6 +3174,10 @@ impl XylemApp {
                                     }
                                 }
                                 ui.add(egui::Label::new(RichText::new(tr.life.as_str())).wrap());
+                            }
+                            if let Some(o) = xylem_session::offenders::for_drive(&d.model, &d.firmware) {
+                                ui.add(egui::Label::new(RichText::new(format!("⚠ {}: {} {}", o.title, o.what, o.todo)).color(theme::WARN)).wrap())
+                                    .on_hover_text(format!("Checked {} against:\n{}", o.checked, o.sources.join("\n")));
                             }
                             if !d.firmware.is_empty() {
                                 ui.label(RichText::new(format!("Disk {} · firmware {}", d.number, d.firmware)).color(t.faint).size(11.5));
@@ -3199,6 +3257,17 @@ impl XylemApp {
                                         }
                                     });
                                 });
+                            }
+                        }
+                    }
+                    if !v.logs.is_empty() {
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("Log files that keep growing").font(theme::semibold(13.0)));
+                        ui.label(RichText::new("They grew in every one of the last scans: space now, and SSD writes all the time. Check what writes them before deleting (a program may need its log).").color(t.muted).size(12.0));
+                        for g in v.logs.iter().take(8) {
+                            let r = ui.add(egui::Label::new(format!("{} → {} over {} ({} scans) · {}", fmt_bytes(g.first), fmt_bytes(g.last), remember::gap_text(g.over), g.scans, g.path)).truncate().sense(Sense::click()));
+                            if r.on_hover_text("Click to show it in the tree").clicked() {
+                                jump = Some(g.path.clone());
                             }
                         }
                     }
@@ -3590,6 +3659,9 @@ impl XylemApp {
                         Level::Max => "The most savings, 3-15 times slower. Worth it mainly for text, code and programs you rarely change.",
                     };
                     ui.add(egui::Label::new(RichText::new(format!("{hint} Rough estimate: about {} saved (the real result depends on the data).", fmt_bytes(p.estimate(c.level)))).color(t.muted)).wrap());
+                    // Compressing rewrites the files once: say what that costs an SSD.
+                    let rewritten = p.bytes.saturating_sub(p.estimate(c.level));
+                    ui.add(egui::Label::new(RichText::new(format!("SSD wear: compressing writes about {} once (the compressed copy of these files). Later reads cost nothing extra.", fmt_bytes(rewritten))).color(t.faint).size(12.0)).wrap());
                     ui.add_space(6.0);
                     let undo_text = if c.undo.files.is_empty() {
                         "Uncompress restores everything later (nothing here is compressed yet).".to_owned()

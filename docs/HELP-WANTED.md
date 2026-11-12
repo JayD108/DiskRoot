@@ -77,6 +77,9 @@ How to measure: [CONTRIBUTING.md → How to contribute research](../CONTRIBUTING
 - **Benchmarks on other PCs** (idle machine): `tools/bench-competitors.ps1`, results into [BENCHMARKS.md](BENCHMARKS.md).
 - **Compression numbers for more file types** (games, Office files, photos in RAW, VM images, source trees): run the probe on copies and send the table.
 
+- **Drive health on other drives:** run `xylem-cli health --json` on Samsung, Kingston, Crucial, SK hynix NVMe drives (and a SATA SSD or HDD, which should say "needs admin" / "not an SSD"), compare with CrystalDiskInfo, and open an issue with both. No admin needed.
+- **Known offenders:** programs or drive firmware that wear SSDs fast. Each entry needs public sources (vendor statement or several independent reports), the process name or model + firmware, and what to do. See `crates/session/src/offenders.rs`.
+
 ## 6. After 1.0 (needs a careful design first)
 
 - **Archive & replace** (pack cold folders, verify, replace, restore).

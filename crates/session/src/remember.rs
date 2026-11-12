@@ -397,6 +397,7 @@ pub fn remember(idx: &Arc<Index>, stats: &ScanStats, mode: &str) -> io::Result<O
     write_atomic(&idx_path, |w| idx.save(stats, &mode, w))?;
     // Size history is extra: a failure there never fails remembering.
     let _ = crate::history::record(&snap);
+    crate::logs::record(idx, snap.time);
     prune();
     Ok(prev.map(|p| diff(&p, &snap, 50)))
 }
@@ -491,7 +492,7 @@ pub fn forget_all() -> io::Result<usize> {
     let Ok(entries) = fs::read_dir(&dir) else { return Ok(0) };
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().to_lowercase();
-        let ours = [".idx", ".snap", ".hist", ".tmp"].iter().any(|ext| name.ends_with(ext));
+        let ours = [".idx", ".snap", ".hist", ".logs.json", ".tmp"].iter().any(|ext| name.ends_with(ext));
         if ours && e.file_type().is_ok_and(|t| t.is_file()) {
             fs::remove_file(e.path())?;
             n += 1;
@@ -514,7 +515,7 @@ fn prune() {
         .collect();
     idx.sort_by_key(|x| std::cmp::Reverse(x.0));
     for (_, k) in idx.into_iter().skip(MAX_ROOTS) {
-        for ext in ["idx", "snap", "prev.snap", "seen.snap", "hist"] {
+        for ext in ["idx", "snap", "prev.snap", "seen.snap", "hist", "logs.json"] {
             let _ = fs::remove_file(dir.join(format!("{k}.{ext}")));
         }
     }

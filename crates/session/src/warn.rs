@@ -86,6 +86,48 @@ pub fn after_scan(root: &str, free_gb: u32, grow_gb: u32, now: u64) -> Option<St
     show_due(found, now)
 }
 
+/// Idle writing worth a warning: in this idle sample **and** the previous
+/// idle sample (within 3 days), the program wrote at a pace of at least
+/// `min_gb_day` GB a day, and at least 3x its usual idle pace (median of
+/// its older idle samples over 14 days; no older samples = no usual pace).
+/// Two samples in a row, so a one-off (an update, a backup) doesn't warn.
+pub fn idle_writes(runs: &[crate::schedule::Run], now_writers: &[crate::writes::Writer], idle: bool, now: u64, min_gb_day: u32) -> Vec<Warning> {
+    if !idle || min_gb_day == 0 {
+        return Vec::new();
+    }
+    let per_day = |rate: f64| rate * DAY as f64;
+    let min = f64::from(min_gb_day) * GB as f64;
+    let idle_runs: Vec<&crate::schedule::Run> = runs.iter().filter(|r| r.idle && !r.writers.is_empty() && r.time <= now && now - r.time <= 14 * DAY).collect();
+    let Some(prev) = idle_runs.last().filter(|r| now - r.time <= 3 * DAY) else { return Vec::new() };
+    let mut out = Vec::new();
+    for w in now_writers.iter().filter(|w| per_day(w.rate) >= min) {
+        let Some(p) = prev.writers.iter().find(|x| x.name.eq_ignore_ascii_case(&w.name)) else { continue };
+        if per_day(p.rate) < min {
+            continue;
+        }
+        let mut older: Vec<f64> = idle_runs[..idle_runs.len() - 1]
+            .iter()
+            .map(|r| r.writers.iter().find(|x| x.name.eq_ignore_ascii_case(&w.name)).map_or(0.0, |x| x.rate))
+            .collect();
+        older.sort_by(f64::total_cmp);
+        let usual = older.get(older.len() / 2).copied().unwrap_or(0.0);
+        if usual > 0.0 && w.rate < 3.0 * usual {
+            continue;
+        }
+        let note = crate::offenders::for_process(&w.name).map(|o| format!(" Known issue: {} {}", o.what, o.todo)).unwrap_or_default();
+        out.push(Warning {
+            key: format!("idlewrite:{}", w.name.to_lowercase()),
+            text: format!("{} keeps writing while the PC is idle: about {} a day at its current pace (two background checks in a row).{note}", w.name, xylem_core::format::bytes(per_day(w.rate) as u64)),
+        });
+    }
+    out
+}
+
+/// Shows idle-write warnings (once a day each), returns what was shown.
+pub fn after_idle_sample(runs: &[crate::schedule::Run], writers: &[crate::writes::Writer], idle: bool, now: u64, min_gb_day: u32) -> Option<String> {
+    show_due(idle_writes(runs, writers, idle, now, min_gb_day), now)
+}
+
 /// The weekly drive report's text: growth of each scanned root over the
 /// last week, writes per day and health of each NVMe drive.
 pub fn weekly_text(growth: &[(String, i128)], drives: &[(String, Option<f64>, String)]) -> Option<String> {
@@ -307,6 +349,45 @@ mod tests {
         assert_eq!(due(w.clone(), &mut last, 1_000_000).len(), 1);
         assert!(due(w.clone(), &mut last, 1_000_000 + 3 * DAY).is_empty(), "3 days later: quiet");
         assert_eq!(due(w, &mut last, 1_000_000 + 7 * DAY).len(), 1, "a week later: again");
+    }
+
+    #[test]
+    fn idle_writing_needs_two_samples_in_a_row_and_three_times_usual() {
+        use crate::schedule::Run;
+        use crate::writes::Writer;
+        let gb_day = |g: f64| g * GB as f64 / DAY as f64;
+        let run = |t: u64, idle: bool, ws: &[(&str, f64)]| Run {
+            time: t,
+            root: "C:\\".into(),
+            secs: 1.0,
+            peak_ram: 0,
+            files: 0,
+            delta: None,
+            error: None,
+            warning: None,
+            writers: ws.iter().map(|&(n, r)| Writer { name: n.into(), rate: r }).collect(),
+            idle,
+        };
+        let now = 100 * DAY;
+        let bad = [Writer { name: "atieclxx.exe".into(), rate: gb_day(19.0) }];
+        // First time seen: no warning yet.
+        assert!(idle_writes(&[], &bad, true, now, 10).is_empty());
+        // Seen in the previous idle sample too: warn, with the known-issue note.
+        let prev = [run(now - 4 * 3600, true, &[("atieclxx.exe", gb_day(18.0))])];
+        let w = idle_writes(&prev, &bad, true, now, 10);
+        assert_eq!(w.len(), 1);
+        assert!(w[0].text.starts_with("atieclxx.exe keeps writing while the PC is idle: about 19.0 GB a day"), "{}", w[0].text);
+        assert!(w[0].text.contains("Adrenalin 26.11.1"));
+        // Not idle now, under the threshold, or off: quiet.
+        assert!(idle_writes(&prev, &bad, false, now, 10).is_empty());
+        assert!(idle_writes(&prev, &bad, true, now, 50).is_empty());
+        assert!(idle_writes(&prev, &bad, true, now, 0).is_empty());
+        // Always this busy (usual pace 15 GB/day): not 3x usual, quiet.
+        let usual: Vec<Run> = (2..8).map(|d| run(now - d * DAY, true, &[("backup.exe", gb_day(15.0))])).chain([run(now - 3600, true, &[("backup.exe", gb_day(16.0))])]).collect();
+        assert!(idle_writes(&usual, &[Writer { name: "backup.exe".into(), rate: gb_day(17.0) }], true, now, 10).is_empty());
+        // The previous idle sample is a week old: not "in a row".
+        let old = [run(now - 7 * DAY, true, &[("atieclxx.exe", gb_day(18.0))])];
+        assert!(idle_writes(&old, &bad, true, now, 10).is_empty());
     }
 
     /// Shows one real notification. Run by hand: cargo test -- --ignored real_notification
