@@ -24,6 +24,16 @@ pub fn memory() -> Option<(u64, u64, u64)> {
     (ok != 0).then_some((c.working_set_size as u64, c.peak_working_set_size as u64, c.pagefile_usage as u64))
 }
 
+/// The most memory this process has committed so far (peak private bytes).
+/// Unlike the peak working set, Windows' background mode can't trim this,
+/// so it's the honest "how much memory did the scan need".
+pub fn peak_private() -> Option<u64> {
+    let mut c = ProcessMemoryCounters { cb: size_of::<ProcessMemoryCounters>() as u32, ..Default::default() };
+    // SAFETY: as in `peak_memory_bytes`.
+    let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) };
+    (ok != 0).then_some(c.peak_pagefile_usage as u64)
+}
+
 /// CPU time this process has used so far (kernel + user), in seconds.
 pub fn cpu_seconds() -> Option<f64> {
     let (mut a, mut b, mut k, mut u) = (0u64, 0u64, 0u64, 0u64);

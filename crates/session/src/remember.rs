@@ -408,6 +408,34 @@ pub fn save_index(idx: &Index, stats: &ScanStats, mode: &str) -> io::Result<()> 
     write_atomic(&idx_path, |w| idx.save(stats, &mode, w))
 }
 
+fn seen_path(root: &str) -> Option<PathBuf> {
+    Some(cache_dir()?.join(format!("{}.seen.snap", key(root))))
+}
+
+/// Background scans: before replacing the current snapshot, keep it as the
+/// "last seen" baseline if there isn't one yet (the state the user last
+/// looked at), so the app can say what changed while they were away.
+pub fn keep_seen(root: &str) {
+    let (Some((_, snap, _)), Some(seen)) = (paths(root), seen_path(root)) else { return };
+    if !seen.exists() && snap.exists() {
+        let _ = fs::copy(&snap, &seen);
+    }
+}
+
+/// What changed between the last-seen baseline and the latest scan, if
+/// background scans ran since the user last looked.
+pub fn away_changes(root: &str) -> Option<Changes> {
+    let (_, snap, _) = paths(root)?;
+    Some(diff(&load_snap(&seen_path(root)?)?, &load_snap(&snap)?, 50))
+}
+
+/// The user has seen the latest state: drop the baseline.
+pub fn clear_seen(root: &str) {
+    if let Some(p) = seen_path(root) {
+        let _ = fs::remove_file(p);
+    }
+}
+
 /// Whether a remembered index exists for `root` (instant reopen possible).
 pub fn has_index(root: &str) -> bool {
     paths(root).is_some_and(|(p, _, _)| p.is_file())
@@ -483,7 +511,7 @@ fn prune() {
         .collect();
     idx.sort_by_key(|x| std::cmp::Reverse(x.0));
     for (_, k) in idx.into_iter().skip(MAX_ROOTS) {
-        for ext in ["idx", "snap", "prev.snap"] {
+        for ext in ["idx", "snap", "prev.snap", "seen.snap"] {
             let _ = fs::remove_file(dir.join(format!("{k}.{ext}")));
         }
     }

@@ -152,6 +152,10 @@ SectionEnd
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
+  ; Scheduled scans: remove the per-user tasks Xylem created (names start with
+  ; "Xylem scheduled scan"); nothing else in Task Scheduler is touched.
+  nsExec::ExecToLog `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-ScheduledTask -TaskPath '\' -ErrorAction SilentlyContinue | Where-Object { $$_.TaskName -like 'Xylem scheduled scan*' } | Unregister-ScheduledTask -Confirm:$$false"`
+  Pop $0
   ; Remove only Xylem's folder from the system PATH (everything else kept as it was).
   nsExec::ExecToLog `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$d='$INSTDIR';$$k=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\CurrentControlSet\Control\Session Manager\Environment',$$true);$$p=[string]$$k.GetValue('Path','','DoNotExpandEnvironmentNames');if($$p -ne ''){$$t=$$k.GetValueKind('Path');$$a=@($$p -split ';');$$b=@($$a|?{$$_.TrimEnd('\') -ine $$d});if($$b.Count -ne $$a.Count){$$k.SetValue('Path',($$b -join ';'),$$t)}};$$k.Close()"`
   Pop $0

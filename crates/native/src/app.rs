@@ -16,6 +16,7 @@ use xylem_session::compress::{self, Level};
 use xylem_session::integrity::{Integrity, SignatureState};
 use xylem_session::similar;
 use xylem_session::savings::{self, TipAction};
+use xylem_session::schedule::{self, Schedule};
 use xylem_session::remember::{self, Changes, PrevSizes};
 use xylem_session::safety::{DeleteWarnings, LogEntry, visible};
 use xylem_session::{Action, DeleteOut, FileRow, ItemInfo, Leftover, PendingDelete, RulesStatus, Safety, Scanned, Shape, Summary, TypeRow};
@@ -122,6 +123,8 @@ enum Dialog {
     Savings(Box<SavingsView>),
     /// Xylem's own memory and CPU, and freeing memory.
     Memory,
+    /// View > Scheduled scans.
+    Schedule(Box<ScheduleView>),
     /// Explains a Windows tool before starting it.
     Tool(Action),
 }
@@ -133,6 +136,17 @@ struct SavingsView {
     min_days: u16,
     sugg: savings::Suggestions,
     tips: Vec<savings::Tip>,
+}
+
+/// The Scheduled scans dialog: the schedule being edited, whether the
+/// Windows task exists, the recommendation, and recent runs.
+struct ScheduleView {
+    s: Schedule,
+    on: bool,
+    installed: bool,
+    rec: (u32, String),
+    runs: Vec<schedule::Run>,
+    msg: Option<String>,
 }
 
 /// Smallest rough saving (Maximum) a compress suggestion must reach.
@@ -592,6 +606,7 @@ impl XylemApp {
                 self.path = sum.root.clone();
                 self.settings.last_path = sum.root.clone();
                 self.settings.save();
+                remember::clear_seen(&sum.root);
                 self.show_scan(s, sum);
                 self.remembered_at = None;
                 self.changes = None;
@@ -726,10 +741,28 @@ impl XylemApp {
         if r.changes.is_some() {
             msg.push_str(" · View → What changed");
         }
+        // Background scans since the user last looked: say what changed.
+        let mut changes = r.changes;
+        if let Some(away) = remember::away_changes(&sum.root) {
+            let n = schedule::runs().iter().filter(|x| x.error.is_none() && x.time > away.before_time && x.root.eq_ignore_ascii_case(&sum.root)).count();
+            let d = i128::from(away.after_total) - i128::from(away.before_total);
+            let top = away.items.first().map(|c| format!(" ({} {}{})", if c.path.is_empty() { visible(&sum.root) } else { visible(&c.path) }, if c.delta() >= 0 { "+" } else { "−" }, fmt_bytes(c.delta().unsigned_abs() as u64))).unwrap_or_default();
+            msg = format!(
+                "{} background scan{} since you last looked: {} {}{}{} · View → What changed",
+                n.max(1),
+                if n == 1 { "" } else { "s" },
+                sum.root,
+                if d >= 0 { "+" } else { "−" },
+                fmt_bytes(d.unsigned_abs() as u64),
+                top
+            );
+            changes = Some(away);
+            remember::clear_seen(&sum.root);
+        }
         self.say(msg);
         self.show_scan(r.scanned, sum);
         self.remembered_at = Some(r.time);
-        self.changes = r.changes;
+        self.changes = changes;
         self.prev_sizes = r.prev;
     }
 
@@ -1093,6 +1126,10 @@ impl XylemApp {
                     self.open_savings();
                     ui.close();
                 }
+                if ui.button("Scheduled scans…").on_hover_text("Let Xylem scan by itself every few hours (no admin, no window), so it can show what changed").clicked() {
+                    self.open_schedule();
+                    ui.close();
+                }
                 if ui.add_enabled(self.scanned.is_some(), egui::Button::new("Find duplicate files…")).clicked() {
                     self.open_dupes();
                     ui.close();
@@ -1279,7 +1316,8 @@ impl XylemApp {
                 _ if !self.marked.is_empty() => format!("{} marked (Ctrl+click) · press Delete to move them to the Recycle Bin", self.marked.len()),
                 _ => "Ready".into(),
             };
-            ui.label(msg);
+            // Right-hand items first; the message gets the space that's
+            // left and is shortened (full text on hover) instead of overlapping.
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let muted = |s: String| RichText::new(s).color(t.muted).size(11.5);
                 ui.label(RichText::new("●  Read-only").color(t.accent).size(11.5));
@@ -1329,6 +1367,10 @@ impl XylemApp {
                             .on_hover_text("Some folders couldn't be read. Fast scan (admin) sees everything.");
                     }
                 }
+                ui.separator();
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.add(egui::Label::new(msg).truncate());
+                });
             });
         });
     }
@@ -1793,6 +1835,39 @@ impl XylemApp {
             let tips = s.space_tips();
             self.dialog = Some(Dialog::Savings(Box::new(SavingsView { tab: 0, min_days, sugg, tips })));
         }
+    }
+
+    /// View > Scheduled scans: the saved schedule (or a default for the
+    /// current drive), whether the task exists, and a recommendation.
+    fn open_schedule(&mut self) {
+        let installed = schedule::installed();
+        let mut s = schedule::load().unwrap_or_default();
+        if schedule::load().is_none()
+            && let Some(sum) = &self.summary
+        {
+            s.roots = vec![sum.root.clone()];
+        }
+        let runs = schedule::runs();
+        let rec = Self::recommendation(self.summary.as_ref(), &runs);
+        if !installed && schedule::load().is_none() {
+            s.every_min = rec.0;
+        }
+        self.dialog = Some(Dialog::Schedule(Box::new(ScheduleView { s, on: installed, installed, rec, runs, msg: None })));
+    }
+
+    /// Scan time from the latest normal scan (or background runs) and the
+    /// average daily change from the background runs.
+    fn recommendation(sum: Option<&Summary>, runs: &[schedule::Run]) -> (u32, String) {
+        let ok: Vec<&schedule::Run> = runs.iter().filter(|r| r.error.is_none()).collect();
+        let secs = sum.filter(|s| !s.mode.starts_with("MFT")).map(|s| s.elapsed_ms / 1000.0).or_else(|| (!ok.is_empty()).then(|| ok.iter().map(|r| r.secs).sum::<f64>() / ok.len() as f64));
+        let per_day = match (ok.first(), ok.last()) {
+            (Some(a), Some(b)) if b.time > a.time + 86_400 => {
+                let moved: f64 = ok.iter().filter_map(|r| r.delta).map(|d| d.unsigned_abs() as f64).sum();
+                Some(moved / ((b.time - a.time) as f64 / 86_400.0))
+            }
+            _ => None,
+        };
+        schedule::recommend(secs, per_day)
     }
 
     fn open_similar(&mut self) {
@@ -2615,7 +2690,7 @@ impl XylemApp {
         let mut confirm: Option<u32> = None;
         let mut action: Option<&'static str> = None;
         let mut jump: Option<String> = None;
-        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_) | Dialog::Savings(_));
+        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_) | Dialog::Savings(_) | Dialog::Schedule(_));
         let mut leftover_marks: Option<Vec<u32>> = None;
         let mut tool_start: Option<(Action, bool)> = None;
         let mut dupes_start = false;
@@ -2629,6 +2704,79 @@ impl XylemApp {
         let resp = Modal::new(egui::Id::unique("xylem-dialog").with(kind)).show(ctx, |ui| {
             ui.set_width(if wide { 720.0 } else { 500.0 });
             match d {
+                Dialog::Schedule(v) => {
+                    ui.label(RichText::new("Scheduled scans").font(theme::semibold(16.0)));
+                    ui.add(egui::Label::new(RichText::new("Xylem can scan by itself and remember the result, so when you open it you see what changed. Each run is a normal scan (no admin, no window) at background priority; it saves the result and exits, so nothing stays in memory between scans. Fast scan stays something you start here.").color(t.muted)).wrap());
+                    ui.add_space(6.0);
+                    ui.checkbox(&mut v.on, RichText::new("Scan automatically").font(theme::semibold(13.5)));
+                    ui.add_enabled_ui(v.on, |ui| {
+                        let label = |m: u32| {
+                            let base = if m < 60 { format!("{m} minutes") } else if m == 60 { "1 hour".into() } else if m < 1440 { format!("{} hours", m / 60) } else { "1 day".into() };
+                            if m == v.rec.0 { format!("{base} (recommended)") } else { base }
+                        };
+                        ui.horizontal(|ui| {
+                            ui.label("Every");
+                            egui::ComboBox::from_id_salt("sched-every").selected_text(label(v.s.every_min)).show_ui(ui, |ui| {
+                                for m in schedule::CHOICES {
+                                    ui.selectable_value(&mut v.s.every_min, m, label(m));
+                                }
+                            });
+                        });
+                        ui.add(egui::Label::new(RichText::new(v.rec.1.as_str()).color(t.faint).size(12.0)).wrap());
+                        ui.add_space(4.0);
+                        ui.label("What to scan:");
+                        let mut remove: Option<usize> = None;
+                        for (i, r) in v.s.roots.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(visible(r)).monospace());
+                                if v.s.roots.len() > 1 && ui.small_button("Remove").clicked() {
+                                    remove = Some(i);
+                                }
+                            });
+                        }
+                        if let Some(i) = remove {
+                            v.s.roots.remove(i);
+                        }
+                        if let Some(sum) = &self.summary
+                            && !v.s.roots.iter().any(|r| r.eq_ignore_ascii_case(&sum.root))
+                            && ui.small_button(format!("Add {}", visible(&sum.root))).clicked()
+                        {
+                            v.s.roots.push(sum.root.clone());
+                        }
+                        ui.checkbox(&mut v.s.on_battery, "Also when the laptop runs on battery");
+                        ui.checkbox(&mut v.s.only_idle, "Only when the PC has been idle for 5 minutes");
+                    });
+                    ui.add_space(6.0);
+                    let state = if v.installed { "On: a Windows scheduled task runs it for your account." } else { "Off." };
+                    ui.label(RichText::new(state).color(if v.installed { t.accent } else { t.muted }));
+                    if let Some(m) = &v.msg {
+                        ui.add(egui::Label::new(RichText::new(m.as_str()).color(theme::WARN)).wrap());
+                    }
+                    if !v.runs.is_empty() {
+                        ui.add_space(4.0);
+                        ui.label(RichText::new("Recent background scans").font(theme::semibold(13.0)));
+                        egui::Grid::new("sched-runs").num_columns(5).striped(true).spacing([12.0, 3.0]).show(ui, |ui| {
+                            for r in v.runs.iter().rev().take(6) {
+                                ui.label(RichText::new(remember::age_text(r.time)).color(t.muted));
+                                ui.label(visible(&r.root));
+                                match &r.error {
+                                    Some(e) => {
+                                        ui.label(RichText::new("failed").color(theme::WARN)).on_hover_text(e.as_str());
+                                        ui.label("");
+                                        ui.label("");
+                                    }
+                                    None => {
+                                        ui.label(format!("{:.1} s", r.secs));
+                                        ui.label(RichText::new(format!("peak {} memory", fmt_bytes(r.peak_ram))).color(t.muted));
+                                        let d = r.delta.map_or_else(String::new, |d| format!("{}{}", if d >= 0 { "+" } else { "−" }, fmt_bytes(d.unsigned_abs() as u64)));
+                                        ui.label(d);
+                                    }
+                                }
+                                ui.end_row();
+                            }
+                        });
+                    }
+                }
                 Dialog::Memory => {
                     self.footprint.sample();
                     let f = self.footprint;
@@ -3385,10 +3533,26 @@ impl XylemApp {
                         }
                         return;
                     }
+                    Dialog::Schedule(v) => {
+                        let b = egui::Button::new(RichText::new("Save").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
+                        if ui.add(b).clicked() {
+                            action = Some("schedule-save");
+                        }
+                        if ui.add_enabled(!v.s.roots.is_empty(), egui::Button::new("Scan once now")).on_hover_text("One background scan right away, like the schedule would run it").clicked() {
+                            action = Some("schedule-run");
+                        }
+                        if ui.button("Close").clicked() {
+                            close = true;
+                        }
+                        return;
+                    }
                     Dialog::Memory => {
                         let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
                         if ui.add(ok).clicked() {
                             close = true;
+                        }
+                        if ui.button("Scheduled scans…").clicked() {
+                            action = Some("open-schedule");
                         }
                         if ui.add_enabled(self.scanned.is_some() && self.job.is_none(), egui::Button::new("Free memory now")).on_hover_text("Closes the scan on screen; it stays saved and reopens in about a second").clicked() {
                             action = Some("free-memory");
@@ -3528,6 +3692,24 @@ impl XylemApp {
             Some("vhdx-go") => {
                 if let Some(Dialog::Vhdx(path, _, _)) = self.dialog.take() {
                     self.run_tool_job("Compacting the virtual disk (diskpart)".into(), move || xylem_session::power::compact_vhdx(std::path::Path::new(&path)));
+                }
+            }
+            Some("open-schedule") => self.open_schedule(),
+            Some(a @ ("schedule-save" | "schedule-run")) => {
+                if let Some(Dialog::Schedule(v)) = &mut self.dialog {
+                    let exe = std::env::current_exe().map_err(|e| e.to_string());
+                    let r = match (a, exe) {
+                        (_, Err(e)) => Err(e),
+                        ("schedule-run", Ok(exe)) => schedule::save(&v.s).and_then(|()| schedule::run_now(&exe)),
+                        (_, Ok(exe)) => if v.on { schedule::install(&v.s, &exe) } else { schedule::remove() },
+                    };
+                    v.installed = schedule::installed();
+                    v.msg = Some(match (r, a) {
+                        (Err(e), _) => format!("Didn't work: {e}"),
+                        (Ok(()), "schedule-run") => "Scanning in the background now. Its result shows up here and in What changed when it's done.".into(),
+                        (Ok(()), _) if v.on => format!("Saved. Next background scan within {}.", if v.s.every_min < 60 { format!("{} minutes", v.s.every_min) } else { format!("{} h", v.s.every_min / 60) }),
+                        (Ok(()), _) => "Saved. Automatic scans are off.".into(),
+                    });
                 }
             }
             Some("free-memory") => {

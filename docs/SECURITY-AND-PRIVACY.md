@@ -12,11 +12,12 @@
 | collects **telemetry** or needs an account | No |
 | **changes** anything | Only when you confirm: moving items to the Recycle Bin, compressing a folder (undoable), or one of Windows' own tools you start from it. Ways to save space only suggests |
 | runs **as admin** | Never the window. Only a short-lived helper, after the Windows prompt, for Fast scan or disk compaction |
-| runs **in the background** or at startup | No. Live updates and alerts stop when you close it |
+| runs **in the background** or at startup | Only if you turn on scheduled scans: then Windows' Task Scheduler starts a normal scan (no admin, no window) every 30 min or more, which exits when done. Live updates and alerts stop when you close Xylem |
 | keeps **data on your PC** | Settings, remembered scans, a deletion log (see the end of this page). Nothing leaves your PC |
 
 ## What Xylem reads
 - **Scanning** reads names, sizes, attributes, last-modified dates and created dates (when a file arrived on this PC). Drives are opened read-only (`GENERIC_READ`); the scanning code contains no write calls. Last-opened dates aren't read.
+- **Scheduled scans** (off until you turn them on) are the same read-only folder walk, started by a Task Scheduler task that runs as you with least privilege. They never ask for admin, never run Fast scan, and write only Xylem's own files (the remembered scan and a small log in `%LOCALAPPDATA%\Xylem`). The task is removed when you turn them off or uninstall Xylem.
 - **Ways to save space** works only from the scan in memory: it opens no file and changes nothing. Its buttons lead to the usual dialogs (Compress, the delete review, Windows' own tools).
 - **The duplicate finder** (View → Find duplicate files, only when you start it) compares files of the same size by their contents. It skips online-only cloud files (reading them would download them) and treats hardlinks as one file.
 - **Live updates** use Windows' change notifications for the scanned folder while the app is open. They read nothing else, and they stop when the app closes.

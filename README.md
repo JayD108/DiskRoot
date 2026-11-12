@@ -44,6 +44,7 @@ Most tools only answer the first one, and the friendly ones are slow on big driv
 - **Fast compression, built in:** right-click a folder → **Compress…**. Xylem's own engine drives Windows' file compression on many files at once (about 15× faster than `compact.exe` in our tests), skips files that won't shrink, shows real progress, can be stopped, and **Uncompress** undoes it. Files stay where they are and open as usual.
 - **Power tools, all opt-in:** export a cleanup plan as a PowerShell script to review, and shrink WSL/Docker virtual disks with a guided, checked compaction.
 - **Careful deleting:** only to the Recycle Bin, only after you confirm. Windows and system folders are locked. You get warnings for OneDrive folders, Git repositories and very large deletes, and a history of everything you deleted. Mark several items (Ctrl+click) to remove them in one go. Hardlinked files are flagged, because deleting one name frees nothing.
+- **Scans by itself, if you want:** scheduled scans every 30 minutes or more (it recommends how often), no admin, no window, nothing left running. When you open Xylem it tells you what changed while you were away.
 - **Light on your PC:** the status bar shows Xylem's own RAM and CPU; free its memory with one click (your scan stays saved), and scan gently so other programs stay fast.
 - **Private:** no network connections, no accounts, no telemetry. One small program (~8 MB).
 

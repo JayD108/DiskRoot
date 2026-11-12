@@ -104,10 +104,14 @@ jobs:
           $env:Path = [Environment]::ExpandEnvironmentVariables($machinePath)
           $cmd = Get-Command xylem-cli -ErrorAction SilentlyContinue
           if (-not $cmd -or $cmd.Source -ne "$dir\xylem-cli.exe") { throw "xylem-cli not found by name" }
+          # A scheduled-scan task like the app creates; the uninstaller must remove it.
+          & "$env:SystemRoot\System32\schtasks.exe" /create /tn "Xylem scheduled scan (ci)" /tr "$dir\xylem.exe --scheduled-scan" /sc daily /f
+          if ($LASTEXITCODE) { throw "couldn't create the test task" }
           Start-Process "$dir\uninstall.exe" -ArgumentList '/S' -Wait
           for ($i = 0; $i -lt 60 -and (Test-Path $dir); $i++) { Start-Sleep 1 }
           if (Test-Path $dir) { throw "install folder left behind" }
           if (Test-Path $key) { throw "uninstall entry left behind" }
+          if (Get-ScheduledTask -TaskName 'Xylem scheduled scan*' -ErrorAction SilentlyContinue) { throw "scheduled-scan task left behind" }
           foreach ($k in "Directory","Directory\Background","Drive") { if (Test-Path "HKLM:\Software\Classes\$k\shell\Xylem") { throw "right-click entry left behind ($k)" } }
           if (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Xylem.lnk") { throw "shortcut left behind" }
           $after = (Get-Item $envKey).GetValue('Path', '', 'DoNotExpandEnvironmentNames')

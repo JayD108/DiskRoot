@@ -10,6 +10,7 @@ pub mod compress;
 pub mod dupes;
 pub mod similar;
 pub mod savings;
+pub mod schedule;
 pub mod elevate;
 pub mod helper;
 pub mod integrity;
