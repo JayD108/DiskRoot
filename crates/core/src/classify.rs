@@ -625,6 +625,11 @@ impl Classification {
         self.bits[id as usize] & MATCHED_HERE != 0
     }
 
+    /// Inside (or at) a place protected as a whole tree, e.g. C:\Windows.
+    pub fn in_protected_tree(&self, id: u32) -> bool {
+        self.bits[id as usize] & IN_PROT != 0
+    }
+
     pub fn heap_bytes(&self) -> Vec<(&'static str, usize)> {
         vec![
             ("cls.cat", self.cat.capacity()),

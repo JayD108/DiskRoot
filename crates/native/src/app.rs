@@ -15,6 +15,7 @@ use eframe::egui::{
 use xylem_session::compress::{self, Level};
 use xylem_session::integrity::{Integrity, SignatureState};
 use xylem_session::similar;
+use xylem_session::savings::{self, TipAction};
 use xylem_session::remember::{self, Changes, PrevSizes};
 use xylem_session::safety::{DeleteWarnings, LogEntry, visible};
 use xylem_session::{Action, DeleteOut, FileRow, ItemInfo, Leftover, PendingDelete, RulesStatus, Safety, Scanned, Shape, Summary, TypeRow};
@@ -117,8 +118,30 @@ enum Dialog {
     Vhdx(String, u64, bool),
     /// View > Leftovers.
     Leftovers(Vec<Leftover>),
+    /// View > Ways to save space.
+    Savings(Box<SavingsView>),
     /// Explains a Windows tool before starting it.
     Tool(Action),
+}
+
+/// Ways to save space: what could be compressed (tab 0) and other ways (tab 1).
+struct SavingsView {
+    tab: u8,
+    /// "Not changed for at least" this many days.
+    min_days: u16,
+    sugg: savings::Suggestions,
+    tips: Vec<savings::Tip>,
+}
+
+/// Smallest rough saving (Maximum) a compress suggestion must reach.
+const SAVINGS_MIN: u64 = 100 << 20;
+
+/// What a click in Ways to save space asks for (done after the dialog is drawn).
+enum SavingsGo {
+    Compress(u32, Level),
+    Vhdx(u32),
+    Open(TipAction),
+    Mark(Vec<u32>),
 }
 
 /// The Compress dialog: what would be packed (and unpacked), and the level.
@@ -971,8 +994,16 @@ impl XylemApp {
                     }
                     ui.close();
                 }
+                if ui
+                    .add_enabled(self.scanned.is_some(), egui::Button::new("Ways to save space…"))
+                    .on_hover_text("What could be compressed (big, not changed for a while), and other ways to get space back")
+                    .clicked()
+                {
+                    self.open_savings();
+                    ui.close();
+                }
                 if ui.add_enabled(self.scanned.is_some(), egui::Button::new("Find duplicate files…")).clicked() {
-                    self.dialog = Some(Dialog::Dupes(Box::new(DupesView { min_mb: 10, running: None, groups: None })));
+                    self.open_dupes();
                     ui.close();
                 }
                 if ui.add_enabled(self.scanned.is_some(), egui::Button::new("Largest files & file types…")).clicked() {
@@ -984,9 +1015,7 @@ impl XylemApp {
                     .on_hover_text("Folders that look like copies of each other, and folders with similar names (project, project_v2, project - Copy)")
                     .clicked()
                 {
-                    if let Some(s) = &self.scanned {
-                        self.dialog = Some(Dialog::Similar(Box::new(s.similar_folders())));
-                    }
+                    self.open_similar();
                     ui.close();
                 }
                 if ui
@@ -994,12 +1023,7 @@ impl XylemApp {
                     .on_hover_text("Old installers, archives and disk images in Downloads, and Windows upgrade leftovers")
                     .clicked()
                 {
-                    if let Some(s) = &self.scanned {
-                        let mut list = s.leftovers(300);
-                        list.extend(s.orphan_hints(&xylem_session::orphans::Programs::installed(), 50 << 20, 90));
-                        list.sort_by_key(|l| std::cmp::Reverse(l.on_disk));
-                        self.dialog = Some(Dialog::Leftovers(list));
-                    }
+                    self.open_leftovers();
                     ui.close();
                 }
                 ui.separator();
@@ -1118,6 +1142,14 @@ impl XylemApp {
             if bc != self.settings.by_category {
                 self.settings.by_category = bc;
                 self.regroup();
+            }
+            ui.separator();
+            if ui
+                .add_enabled(self.scanned.is_some(), egui::Button::new("Save space"))
+                .on_hover_text("Ways to save space: what could be compressed, and other ways to get space back")
+                .clicked()
+            {
+                self.open_savings();
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if shield_button(ui, &t).on_hover_text("Security & privacy: what Xylem does with your disk").clicked() {
@@ -1615,12 +1647,56 @@ impl XylemApp {
 
     /// Opens the Compress dialog for a folder, or says why it can't be done.
     fn ask_compress(&mut self, n: u32) {
+        self.ask_compress_at(n, Level::Fast);
+    }
+
+    /// The Compress dialog with `level` preselected.
+    fn ask_compress_at(&mut self, n: u32, level: Level) {
         let Some(s) = &self.scanned else { return };
         let path = s.info(n).map(|i| i.path).unwrap_or_default();
         self.dialog = Some(match (s.compress_plan(n, false), s.compress_plan(n, true)) {
-            (Ok(plan), Ok(undo)) => Dialog::Compress(Box::new(CompressAsk { path, plan, undo, level: Level::Fast })),
+            (Ok(plan), Ok(undo)) => Dialog::Compress(Box::new(CompressAsk { path, plan, undo, level })),
             (Err(e), _) | (_, Err(e)) => Dialog::Message("Xylem won't compress this".into(), e),
         });
+    }
+
+    /// View > Ways to save space (from the scan alone, well under a second on a full drive).
+    fn open_savings(&mut self) {
+        if let Some(s) = &self.scanned {
+            let min_days = 180;
+            let sugg = s.compress_suggestions(min_days, SAVINGS_MIN, 200);
+            let tips = s.space_tips();
+            self.dialog = Some(Dialog::Savings(Box::new(SavingsView { tab: 0, min_days, sugg, tips })));
+        }
+    }
+
+    fn open_similar(&mut self) {
+        if let Some(s) = &self.scanned {
+            self.dialog = Some(Dialog::Similar(Box::new(s.similar_folders())));
+        }
+    }
+
+    fn open_leftovers(&mut self) {
+        if let Some(s) = &self.scanned {
+            let mut list = s.leftovers(300);
+            list.extend(s.orphan_hints(&xylem_session::orphans::Programs::installed(), 50 << 20, 90));
+            list.sort_by_key(|l| std::cmp::Reverse(l.on_disk));
+            self.dialog = Some(Dialog::Leftovers(list));
+        }
+    }
+
+    fn open_dupes(&mut self) {
+        self.dialog = Some(Dialog::Dupes(Box::new(DupesView { min_mb: 10, running: None, groups: None })));
+    }
+
+    /// The Compact dialog for a WSL/Docker virtual disk.
+    fn ask_vhdx(&mut self, n: u32) {
+        if let Some(s) = &self.scanned
+            && let Ok(i) = s.info(n)
+        {
+            let busy = xylem_session::power::in_use(std::path::Path::new(&i.path));
+            self.dialog = Some(Dialog::Vhdx(i.path, i.on_disk, busy));
+        }
     }
 
     /// Runs the compression engine on a worker thread; the progress dialog
@@ -2290,14 +2366,7 @@ impl XylemApp {
                 match a {
                     "reveal" => self.reveal_in_explorer(n),
                     "compress" => self.ask_compress(n),
-                    "vhdx" => {
-                        if let Some(s) = &self.scanned
-                            && let Ok(i) = s.info(n)
-                        {
-                            let busy = xylem_session::power::in_use(std::path::Path::new(&i.path));
-                            self.dialog = Some(Dialog::Vhdx(i.path, i.on_disk, busy));
-                        }
-                    }
+                    "vhdx" => self.ask_vhdx(n),
                     "delete-marked" => self.ask_delete_many(),
                     "clear-marks" => {
                         self.marked.clear();
@@ -2409,13 +2478,14 @@ impl XylemApp {
         let mut confirm: Option<u32> = None;
         let mut action: Option<&'static str> = None;
         let mut jump: Option<String> = None;
-        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_));
+        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_) | Dialog::Savings(_));
         let mut leftover_marks: Option<Vec<u32>> = None;
         let mut tool_start: Option<(Action, bool)> = None;
         let mut dupes_start = false;
         let mut dupes_mark: Option<Vec<u32>> = None;
         let mut requery: Option<String> = None;
         let mut jump_node: Option<u32> = None;
+        let mut savings_go: Option<SavingsGo> = None;
         // One window id per dialog kind, so a dialog never inherits another
         // one's remembered size.
         let kind = std::mem::discriminant(&*d);
@@ -2821,6 +2891,135 @@ impl XylemApp {
                     ui.add_space(4.0);
                     ui.add(egui::Label::new(RichText::new("Xylem never deletes from here. Check what a copy is before removing it: two folders can look alike and still differ inside.").color(t.muted).size(11.5)).wrap());
                 }
+                Dialog::Savings(v) => {
+                    ui.label(RichText::new("Ways to save space").font(theme::semibold(16.0)));
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut v.tab, 0, format!("Compress ({})", v.sugg.items.len()));
+                        ui.selectable_value(&mut v.tab, 1, format!("Other ways ({})", v.tips.len()));
+                    });
+                    ui.separator();
+                    let today = xylem_session::today_days();
+                    if v.tab == 0 {
+                        if let Some(why) = &v.sugg.not_possible {
+                            ui.add(egui::Label::new(RichText::new(why.as_str()).color(t.muted)).wrap());
+                        } else {
+                            ui.horizontal(|ui| {
+                                ui.label("Not changed for at least");
+                                let before = v.min_days;
+                                for (d, label) in [(90u16, "3 months"), (180, "6 months"), (365, "1 year")] {
+                                    ui.radio_value(&mut v.min_days, d, label);
+                                }
+                                if before != v.min_days
+                                    && let Some(s) = &self.scanned
+                                {
+                                    v.sugg = s.compress_suggestions(v.min_days, SAVINGS_MIN, 200);
+                                }
+                            });
+                            let n = v.sugg.items.len();
+                            let summary = if n == 0 {
+                                "Nothing big enough found: no folder or file here would save 100 MB or more.".to_owned()
+                            } else {
+                                format!(
+                                    "{} could save about {} with Fast, {} with Maximum. Rough estimates: the real result depends on the data. Biggest saving first; click a name to show it in the tree.",
+                                    if n == 1 { "1 place".to_owned() } else { format!("{n} places") },
+                                    fmt_bytes(v.sugg.total(Level::Fast)),
+                                    fmt_bytes(v.sugg.total(Level::Max))
+                                )
+                            };
+                            ui.add(egui::Label::new(RichText::new(summary).color(t.muted)).wrap());
+                            ui.add_space(4.0);
+                            egui::ScrollArea::vertical().id_salt("savings-compress").max_height(360.0).show(ui, |ui| {
+                                for c in &v.sugg.items {
+                                    ui.horizontal(|ui| {
+                                        let fast = c.estimate(Level::Fast);
+                                        ui.add_sized(vec2(78.0, 18.0), egui::Label::new(RichText::new(format!("~{}", fmt_bytes(fast))).color(t.accent)));
+                                        ui.add_sized(vec2(70.0, 18.0), egui::Label::new(RichText::new(fmt_bytes(c.on_disk)).color(t.muted)));
+                                        ui.add_sized(vec2(90.0, 18.0), egui::Label::new(RichText::new(xylem_session::age_text(today, c.mtime)).color(t.faint).size(11.5)));
+                                        let level = c.suggested(today);
+                                        let w = (ui.available_width() - 100.0).max(80.0);
+                                        ui.allocate_ui_with_layout(vec2(w, 18.0), Layout::left_to_right(Align::Center), |ui| {
+                                            ui.set_min_width(w);
+                                            let r = ui.add(egui::Label::new(visible(&c.path)).truncate().sense(Sense::click()));
+                                            let hover = format!(
+                                                "{}\n{} on disk, {} of it can be packed\nAbout {} saved with Fast, {} with Maximum (suggested: {})\nNewest file changed {}\n\nClick to show it in the tree",
+                                                visible(&c.path),
+                                                fmt_bytes(c.on_disk),
+                                                fmt_bytes(c.packable),
+                                                fmt_bytes(fast),
+                                                fmt_bytes(c.estimate(Level::Max)),
+                                                level.label(),
+                                                xylem_session::date_text(c.mtime)
+                                            );
+                                            if r.on_hover_text(hover).clicked() {
+                                                jump_node = Some(c.node);
+                                            }
+                                        });
+                                        let tip = format!("Opens the Compress dialog with {} chosen", level.label());
+                                        if ui.small_button("Compress…").on_hover_text(tip).clicked() {
+                                            savings_go = Some(SavingsGo::Compress(c.node, level));
+                                        }
+                                    });
+                                }
+                            });
+                            ui.add_space(6.0);
+                            ui.add(egui::Label::new(RichText::new("Judged by the newest file inside. Windows doesn't reliably record when a file was last opened, so this means \"not changed since\", not \"not used since\". Compressed files still open as usual. Zip or 7z archives save more, but the files can't be opened until unpacked, so Xylem doesn't make them.").color(t.muted).size(11.5)).wrap());
+                        }
+                    } else {
+                        ui.add(egui::Label::new(RichText::new("Biggest first, from this scan. Xylem doesn't delete anything from here: each way says how, or opens the right place.").color(t.muted)).wrap());
+                        ui.add_space(4.0);
+                        egui::ScrollArea::vertical().id_salt("savings-tips").max_height(400.0).show(ui, |ui| {
+                            for (ti, tip) in v.tips.iter().enumerate() {
+                                let size = tip.bytes.map_or_else(|| "size unknown".to_owned(), fmt_bytes);
+                                egui::CollapsingHeader::new(format!("{size} · {}", tip.title)).id_salt(("tip", ti)).default_open(ti == 0).show(ui, |ui| {
+                                    ui.add(egui::Label::new(RichText::new(tip.how.as_str()).color(t.muted)).wrap());
+                                    for p in tip.places.iter().take(30) {
+                                        ui.horizontal(|ui| {
+                                            ui.add_sized(vec2(70.0, 18.0), egui::Label::new(RichText::new(fmt_bytes(p.bytes)).color(t.muted)));
+                                            let age = if p.mtime > 0 { xylem_session::age_text(today, p.mtime) } else { String::new() };
+                                            ui.add_sized(vec2(90.0, 18.0), egui::Label::new(RichText::new(age).color(t.faint).size(11.5)));
+                                            let w = (ui.available_width() - if p.vhdx { 90.0 } else { 0.0 }).max(80.0);
+                                            ui.allocate_ui_with_layout(vec2(w, 18.0), Layout::left_to_right(Align::Center), |ui| {
+                                                ui.set_min_width(w);
+                                                let r = ui.add(egui::Label::new(visible(&p.path)).truncate().sense(Sense::click()));
+                                                let hover = match &p.note {
+                                                    Some(n) => format!("{}\n\n{n}\n\nClick to show it in the tree", visible(&p.path)),
+                                                    None => format!("{}\n\nClick to show it in the tree", visible(&p.path)),
+                                                };
+                                                if r.on_hover_text(hover).clicked() {
+                                                    jump_node = Some(p.node);
+                                                }
+                                            });
+                                            if p.vhdx && ui.small_button("Compact…").clicked() {
+                                                savings_go = Some(SavingsGo::Vhdx(p.node));
+                                            }
+                                        });
+                                    }
+                                    if tip.places.len() > 30 {
+                                        ui.label(RichText::new(format!("…and {} smaller places", tip.places.len() - 30)).color(t.faint).size(11.5));
+                                    }
+                                    let marks: Vec<u32> = tip.places.iter().filter(|p| p.markable).map(|p| p.node).collect();
+                                    if tip.button.is_some() || !marks.is_empty() {
+                                        ui.horizontal(|ui| {
+                                            if let Some((label, act)) = tip.button
+                                                && ui.button(label).clicked()
+                                            {
+                                                savings_go = Some(SavingsGo::Open(act));
+                                            }
+                                            if !marks.is_empty()
+                                                && ui
+                                                    .button(format!("Mark the {} safe ones for review", marks.len()))
+                                                    .on_hover_text("Selects them in the tree for one delete review. Nothing is deleted until you confirm.")
+                                                    .clicked()
+                                            {
+                                                savings_go = Some(SavingsGo::Mark(marks));
+                                            }
+                                        });
+                                    }
+                                });
+                            }
+                        });
+                    }
+                }
                 Dialog::Vhdx(path, size, busy) => {
                     ui.label(RichText::new("Compact a virtual disk").font(theme::semibold(16.0)));
                     ui.label(RichText::new(visible(path)).monospace().color(t.muted));
@@ -3162,6 +3361,29 @@ impl XylemApp {
                 let _ = tx.send(xylem_session::dupes::find(cands, &c2, &p2));
             });
             dv.running = Some((prog, cancel, rx));
+        }
+        if let Some(go) = savings_go {
+            match go {
+                SavingsGo::Compress(n, level) => self.ask_compress_at(n, level),
+                SavingsGo::Vhdx(n) => self.ask_vhdx(n),
+                SavingsGo::Open(TipAction::Tool(a)) => {
+                    self.dialog = None;
+                    self.start_tool(a, false);
+                }
+                SavingsGo::Open(TipAction::Similar) => self.open_similar(),
+                SavingsGo::Open(TipAction::Leftovers) => self.open_leftovers(),
+                SavingsGo::Open(TipAction::Dupes) => self.open_dupes(),
+                SavingsGo::Mark(ids) => {
+                    self.dialog = None;
+                    if self.settings.by_category {
+                        self.settings.by_category = false;
+                        self.regroup();
+                    }
+                    self.marked = ids.into_iter().collect();
+                    self.rows = None;
+                    self.say(format!("{} places marked · press Delete to review them", self.marked.len()));
+                }
+            }
         }
         if let Some((a, confirmed)) = tool_start {
             self.dialog = None;

@@ -9,6 +9,7 @@
 pub mod compress;
 pub mod dupes;
 pub mod similar;
+pub mod savings;
 pub mod elevate;
 pub mod helper;
 pub mod integrity;
@@ -618,34 +619,35 @@ It may be left over from an uninstalled program, or belong to one that's install
                 c.0 += 1;
                 c.1 += alloc;
             };
-            if fl & (flags::CLOUD | flags::LINK | flags::SPARSE) != 0 {
-                add(&mut plan.skipped_already);
-                continue;
-            }
-            let full = size.div_ceil(4096) * 4096;
             if undo {
+                if fl & (flags::CLOUD | flags::LINK | flags::SPARSE) != 0 {
+                    add(&mut plan.skipped_already);
+                    continue;
+                }
                 // Windows-compressed files take less space than their size
                 // (NTFS-compressed ones are a different thing: left alone).
+                let full = size.div_ceil(4096) * 4096;
                 if fl & flags::COMPRESSED == 0 && alloc < full {
                     plan.needs_free += full - alloc;
                 } else {
                     continue;
                 }
             } else {
-                let ext = idx.name(x).rsplit_once('.').map_or("", |e| e.1);
-                if fl & flags::COMPRESSED != 0 || alloc < full / 10 * 9 {
-                    add(&mut plan.skipped_already);
-                    continue;
+                match compress::verdict(idx.name(x), fl, size, alloc) {
+                    compress::Verdict::Already => {
+                        add(&mut plan.skipped_already);
+                        continue;
+                    }
+                    compress::Verdict::Tiny => {
+                        add(&mut plan.skipped_tiny);
+                        continue;
+                    }
+                    compress::Verdict::Format => {
+                        add(&mut plan.skipped_formats);
+                        continue;
+                    }
+                    compress::Verdict::Pack(e) => estimate += e,
                 }
-                if alloc <= 4096 {
-                    add(&mut plan.skipped_tiny);
-                    continue;
-                }
-                if compress::incompressible(ext) {
-                    add(&mut plan.skipped_formats);
-                    continue;
-                }
-                estimate += alloc as f64 * compress::ratio(ext);
             }
             plan.bytes += alloc;
             plan.files.push(compress::PlanFile { node: x, path: PathBuf::from(idx.path(x)), size, alloc });

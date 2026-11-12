@@ -148,7 +148,7 @@ impl Plan {
     pub fn estimate(&self, level: Level) -> u64 {
         match level {
             Level::Max => self.estimate_max,
-            Level::Fast => (self.estimate_max as f64 * FAST_SHARE_OF_MAX) as u64,
+            Level::Fast => fast_estimate(self.estimate_max),
         }
     }
 }
@@ -204,22 +204,70 @@ pub fn incompressible(ext: &str) -> bool {
         "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "avif", "jxl", "mp4", "mkv", "mov", "avi", "webm", "m4v", "wmv", "mpg", "mpeg",
         "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "zip", "7z", "rar", "gz", "tgz", "xz", "txz", "bz2", "tbz2", "zst", "lz4", "br",
         "lzma", "cab", "jar", "apk", "whl", "nupkg", "msi", "msix", "appx", "vsix", "crx", "xpi", "epub", "docx", "xlsx", "pptx", "odt",
-        "ods", "odp", "pdf", "iso", "dmg", "wim", "esd", "vhdx", "vhd", "safetensors", "npz", "parquet",
+        "ods", "odp", "pdf", "iso", "dmg", "wim", "esd", "vhdx", "vhd", "gguf",
     ];
     let e = ext.to_ascii_lowercase();
     NONE.contains(&e.as_str())
 }
 
 /// Rough share LZX saves for files of this extension (estimates only; the
-/// real result depends on the data).
+/// real result depends on the data). Measured on real data where noted
+/// (11 Nov 2026, 5,519 files of a 140 GB ML dataset, and R&D E9).
 pub fn ratio(ext: &str) -> f64 {
     if incompressible(ext) {
-        0.0
-    } else if matches!(ext.to_ascii_lowercase().as_str(), "exe" | "dll" | "sys" | "node" | "pyd" | "so") {
-        0.4
-    } else {
-        0.5
+        return 0.0;
     }
+    match ext.to_ascii_lowercase().as_str() {
+        // Model weights: measured .pt 6.9% (31.6 GB).
+        "pt" | "pth" | "ckpt" | "safetensors" | "onnx" | "h5" | "hdf5" | "keras" | "tflite" | "pb" | "bin" => 0.07,
+        // Float arrays: measured .npy 12.7% (118.5 GB), .npz 13.9% (np.savez stores them uncompressed).
+        "npy" | "npz" | "mat" | "tfrecord" | "arrow" | "feather" => 0.13,
+        // EEG recordings (16-bit samples): measured .edf 37.8% (LZX), 32.6% (Fast).
+        "edf" | "bdf" => 0.38,
+        // Columnar files compress inside already, but less than you'd think: measured 40% on small ones.
+        "parquet" | "orc" | "avro" => 0.3,
+        "exe" | "dll" | "sys" | "node" | "pyd" | "so" => 0.4,
+        _ => 0.5,
+    }
+}
+
+/// What the engine would do with one file, decided from the scan alone
+/// (used by the Compress dialog and by Ways to save space, so they agree).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Verdict {
+    /// Already compressed (by Windows or NTFS), sparse, a cloud placeholder or a link.
+    Already,
+    /// One cluster or less: nothing to save.
+    Tiny,
+    /// Photos, videos, archives and other packed formats.
+    Format,
+    /// Worth packing; rough saving with Maximum, in bytes.
+    Pack(f64),
+}
+
+pub fn verdict(name: &str, fl: u8, size: u64, alloc: u64) -> Verdict {
+    use xylem_core::flags;
+    if fl & (flags::CLOUD | flags::LINK | flags::SPARSE | flags::COMPRESSED) != 0 {
+        return Verdict::Already;
+    }
+    // Windows-compressed files take less space than their size.
+    let full = size.div_ceil(4096) * 4096;
+    if alloc < full / 10 * 9 {
+        return Verdict::Already;
+    }
+    if alloc <= 4096 {
+        return Verdict::Tiny;
+    }
+    let ext = name.rsplit_once('.').map_or("", |e| e.1);
+    if incompressible(ext) {
+        return Verdict::Format;
+    }
+    Verdict::Pack(alloc as f64 * ratio(ext))
+}
+
+/// Fast's rough saving from Maximum's.
+pub fn fast_estimate(max: u64) -> u64 {
+    (max as f64 * FAST_SHARE_OF_MAX) as u64
 }
 
 /// Worker threads: every core but two (the window and the rest of the PC
@@ -641,7 +689,8 @@ mod tests {
         assert!(entropy(&[7u8; 4096]) < 0.01);
         let all: Vec<u8> = (0..=255u8).cycle().take(256 * 64).collect();
         assert!((entropy(&all) - 8.0).abs() < 1e-9);
-        assert!(incompressible("JPG") && incompressible("npz") && !incompressible("npy"));
+        // npz: np.savez stores arrays uncompressed (measured 13.9% saved); np.savez_compressed ones look random and the entropy check skips them.
+        assert!(incompressible("JPG") && incompressible("gguf") && !incompressible("npz") && !incompressible("npy"));
         assert_eq!(ratio("zip"), 0.0);
         assert!((1..=16).contains(&default_threads()));
         let p = Plan { estimate_max: 1000, ..Plan::default() };

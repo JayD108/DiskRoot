@@ -29,6 +29,7 @@ Most tools only answer the first one, and the friendly ones are slow on big driv
 - **Your drive at a glance:** a strip at the bottom shows used and free space and your 5 biggest space users. The start screen shows every drive with a fill bar.
 - **Instant reopen and "what changed":** your last scan opens in under a second (a whole 1.5 TB drive in ~0.4 s). After a rescan, Xylem points at the exact folders that grew or shrank, both in a list and in a Change column right in the tree.
 - **Clear pictures:** a tree-table with size bars, next to a sunburst or a treemap. Light and dark themes, full keyboard navigation.
+- **Ways to save space:** one click shows what could be compressed (big folders whose files haven't changed in months), and other ways to get space back on your PC, each with its size and how to do it.
 - **Similar folders:** finds folders that look like copies of each other, and projects with similar names (`project`, `project_v2`, `project - Copy`).
 - **Find what to clean:** the largest files (with search), sizes by file type, and an opt-in duplicate finder that keeps the original-looking copy.
 - **Clean up with confidence:** "Mark all" for things that are safe to clear (every `node_modules`, Rust `target`, cache), a Leftovers view (old installers and archives in Downloads, Windows upgrade leftovers, app data of uninstalled programs), and buttons for Windows' own cleanups (DISM, System Protection, Storage settings). Add your own categories with custom rules.
