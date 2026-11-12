@@ -43,6 +43,7 @@ To undo, remove the folder from Settings → System → About → Advanced syste
 xylem-cli scan [OPTIONS] <PATH>     scan a drive or folder and report
 xylem-cli history [OPTIONS] <PATH>  size history the app keeps of a drive or folder
 xylem-cli health [--json]           drive health: SSD wear, data written, temperature, errors
+xylem-cli writes [--secs N] [--json] who's writing: top programs and each drive's write counter
 xylem-cli --version                 print the version
 xylem-cli --help                    list commands
 xylem-cli scan --help               list scan options
@@ -102,6 +103,20 @@ Disk 0 · C: · WD PC SN8000S SDEQNRG-2T00-1002 · NVMe SSD · firmware 63100100
   Supports TRIM (lets the drive erase freed space early: faster, less wear)
 
 Windows sends TRIM to SSDs (on).
+```
+
+### `writes`
+
+Measures for `--secs` seconds (default 10, at most 3600), then lists the programs that wrote the most (`--top`, default 15) and each drive's own counter. Read-only, no admin. "Written" counts everything a program writes (files, pipes, some network), so compare it with the drive line.
+
+```
+> xylem-cli writes --secs 5 --top 3
+Drive C: (disk 0): 4.16 MB written (853 KB/s)
+
+   Written     Per sec  Program   (writes include pipes and some network, not only disk)
+   3.75 MB    767 KB/s  Antigravity IDE.exe
+    190 KB   38.0 KB/s  PhoneExperienceHost.exe
+    160 KB   31.9 KB/s  chrome.exe
 ```
 
 ## 4. Examples

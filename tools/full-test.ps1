@@ -183,10 +183,10 @@ $list = { Get-ChildItem "$hd\data" -Recurse -Force | ForEach-Object { if ($_.PSI
 New-Item -ItemType Directory -Force "$hd\data\sub" | Out-Null
 [IO.File]::WriteAllBytes("$hd\data\sub\a.bin", (New-Object byte[] 3000000))
 @{ every_min = 30; roots = @("$hd\data"); on_battery = $true; warn_free_gb = 0 } | ConvertTo-Json | Out-File -Encoding utf8 "$hd\r\Xylem\schedule.json"
-$p1 = Start-Process $exe -ArgumentList "--scheduled-scan" -PassThru -WindowStyle Hidden; $e1 = $p1.WaitForExit(60000) -and $p1.ExitCode -eq 0
+$p1 = Start-Process $exe -ArgumentList "--scheduled-scan" -PassThru -WindowStyle Hidden; $e1 = $p1.WaitForExit(180000) -and $p1.ExitCode -eq 0
 [IO.File]::WriteAllBytes("$hd\data\sub\b.bin", (New-Object byte[] 5000000))
 $beforeData = & $list
-$p2 = Start-Process $exe -ArgumentList "--scheduled-scan" -PassThru -WindowStyle Hidden; $e2 = $p2.WaitForExit(60000) -and $p2.ExitCode -eq 0
+$p2 = Start-Process $exe -ArgumentList "--scheduled-scan" -PassThru -WindowStyle Hidden; $e2 = $p2.WaitForExit(180000) -and $p2.ExitCode -eq 0
 $afterData = & $list
 $untouched = (Compare-Object $beforeData $afterData).Count -eq 0
 # Paths may come back in the long or the short (8.3) form of %TEMP%.

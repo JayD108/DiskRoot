@@ -25,6 +25,7 @@ pub mod orphans;
 pub mod power;
 pub mod warn;
 pub mod watch;
+pub mod writes;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, RwLock};

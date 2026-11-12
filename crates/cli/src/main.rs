@@ -26,6 +26,22 @@ enum Cmd {
     /// Drive health: SSD wear, data written, temperature, errors (the
     /// drives' own reports; read-only, no admin)
     Health(HealthArgs),
+    /// Who's writing: top programs by bytes written over a few seconds,
+    /// and each drive's own write counter (read-only, no admin)
+    Writes(WritesArgs),
+}
+
+#[derive(Args)]
+struct WritesArgs {
+    /// How long to measure, in seconds
+    #[arg(long, default_value_t = 10)]
+    secs: u64,
+    /// How many programs to list
+    #[arg(long, default_value_t = 15)]
+    top: usize,
+    /// Print JSON instead of text
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -99,6 +115,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Cmd::Writes(args) => match run_writes(&args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        },
         Cmd::Health(args) => match run_health(&args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -114,6 +137,54 @@ fn main() -> ExitCode {
             }
         },
     }
+}
+
+fn run_writes(args: &WritesArgs) -> Result<(), String> {
+    use xylem_session::{health, writes};
+    if args.secs == 0 || args.secs > 3600 {
+        return Err("--secs must be 1 to 3600".into());
+    }
+    let mut disks: Vec<(u32, Vec<String>)> = Vec::new();
+    for d in xylem_session::drives() {
+        if let Some(n) = health::disk_of(&d) {
+            let l = d.trim_end_matches('\\').to_owned();
+            match disks.iter_mut().find(|x| x.0 == n) {
+                Some(x) => x.1.push(l),
+                None => disks.push((n, vec![l])),
+            }
+        }
+    }
+    let mut s = writes::Sampler::new(&disks.iter().map(|d| d.0).collect::<Vec<_>>());
+    if !args.json {
+        eprintln!("Measuring writes for {} s…", args.secs);
+    }
+    std::thread::sleep(std::time::Duration::from_secs(args.secs));
+    s.tick();
+    let secs = s.seconds.max(0.001);
+    let top = s.top(args.top);
+    if args.json {
+        let out = serde_json::json!({
+            "seconds": s.seconds,
+            "idle_seconds": s.idle_seconds,
+            "drives": disks.iter().map(|(n, l)| serde_json::json!({"disk": n, "letters": l, "bytes_written": s.disk_totals.get(n).copied().unwrap_or(0)})).collect::<Vec<_>>(),
+            "programs": top.iter().map(|t| serde_json::json!({"name": t.name, "bytes_written": t.active + t.idle, "bytes_per_sec": (t.active + t.idle) as f64 / secs, "while_idle": t.idle})).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&out).expect("valid JSON"));
+        return Ok(());
+    }
+    for (n, l) in &disks {
+        let b = s.disk_totals.get(n).copied().unwrap_or(0);
+        println!("Drive {} (disk {n}): {} written ({}/s)", l.join(" "), bytes(b), bytes((b as f64 / secs) as u64));
+    }
+    println!("\n{:>10}  {:>10}  Program   (writes include pipes and some network, not only disk)", "Written", "Per sec");
+    for t in &top {
+        let w = t.active + t.idle;
+        println!("{:>10}  {:>8}/s  {}", bytes(w), bytes((w as f64 / secs) as u64), t.name);
+    }
+    if top.is_empty() {
+        println!("  nothing written");
+    }
+    Ok(())
 }
 
 fn run_health(args: &HealthArgs) -> Result<(), String> {

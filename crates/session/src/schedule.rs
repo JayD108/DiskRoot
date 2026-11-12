@@ -85,6 +85,12 @@ pub struct Run {
     /// A warning shown after this run (low space, fast growth).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
+    /// Top writing programs in the 30 s before the scan (first root of a run only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub writers: Vec<crate::writes::Writer>,
+    /// No key or mouse input during that sample (for 5+ minutes).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idle: bool,
 }
 
 fn roaming() -> Option<PathBuf> {
@@ -276,6 +282,8 @@ fn run_scheduled() -> i32 {
     };
     // Drive health: one small daily note (a few storage queries, no admin).
     crate::health::record_daily(&crate::health::drives());
+    // Who writes while nobody is looking: 30 s, before Xylem itself reads anything.
+    let (mut writers, idle) = crate::writes::sample_for(30, 5);
     for root in &s.roots {
         let t = Instant::now();
         let r = scan_and_remember(root);
@@ -288,7 +296,7 @@ fn run_scheduled() -> i32 {
             Err(e) => (0, None, Some(e)),
         };
         let warning = if error.is_none() { crate::warn::after_scan(root, s.warn_free_gb, s.warn_grow_gb, now_secs()) } else { None };
-        append_run(&Run { time: now_secs(), root: root.clone(), secs, peak_ram, files, delta, error, warning });
+        append_run(&Run { time: now_secs(), root: root.clone(), secs, peak_ram, files, delta, error, warning, writers: std::mem::take(&mut writers), idle });
     }
     if s.weekly_report {
         let _ = crate::warn::weekly(&s.roots, now_secs());

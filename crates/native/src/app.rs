@@ -132,6 +132,8 @@ enum Dialog {
     Growth(Box<GrowthView>),
     /// View > Drive health.
     Health(Box<HealthView>),
+    /// View > Who's writing.
+    Writers(Box<WritersView>),
     /// Explains a Windows tool before starting it.
     Tool(Action),
 }
@@ -189,6 +191,53 @@ impl HealthView {
             let t = health::trend(&snaps, &d);
             (d, t)
         }).collect(), trim: health::trim_enabled() }
+    }
+}
+
+/// View > Who's writing: a live sample (every 2 s while open), what
+/// background scans saw while the PC was idle, and folder hotspots.
+struct WritersView {
+    sampler: xylem_session::writes::Sampler,
+    last: Instant,
+    /// (disk number, its letters).
+    disks: Vec<(u32, String)>,
+    /// From scheduled runs in the last 7 days: (program, average bytes/s
+    /// while idle, in how many idle samples it showed up), and how many
+    /// idle samples there were.
+    away: Vec<(String, f64, usize)>,
+    away_runs: usize,
+}
+
+impl WritersView {
+    fn open() -> Self {
+        let mut disks: Vec<(u32, String)> = Vec::new();
+        for d in xylem_session::drives() {
+            if let Some(n) = health::disk_of(&d) {
+                let l = d.trim_end_matches('\\').to_owned();
+                match disks.iter_mut().find(|x| x.0 == n) {
+                    Some(x) => {
+                        x.1.push(' ');
+                        x.1.push_str(&l);
+                    }
+                    None => disks.push((n, l)),
+                }
+            }
+        }
+        let week = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()).saturating_sub(7 * 86_400);
+        let idle_runs: Vec<schedule::Run> = schedule::runs().into_iter().filter(|r| r.time >= week && r.idle && !r.writers.is_empty()).collect();
+        let mut sum: std::collections::HashMap<String, (f64, usize)> = std::collections::HashMap::new();
+        for r in &idle_runs {
+            for w in &r.writers {
+                let e = sum.entry(w.name.clone()).or_default();
+                e.0 += w.rate;
+                e.1 += 1;
+            }
+        }
+        let n = idle_runs.len().max(1) as f64;
+        let mut away: Vec<(String, f64, usize)> = sum.into_iter().map(|(k, (r, c))| (k, r / n, c)).collect();
+        away.sort_by(|a, b| b.1.total_cmp(&a.1));
+        away.truncate(8);
+        Self { sampler: xylem_session::writes::Sampler::new(&disks.iter().map(|d| d.0).collect::<Vec<_>>()), last: Instant::now(), disks, away, away_runs: idle_runs.len() }
     }
 }
 
@@ -322,6 +371,9 @@ pub struct XylemApp {
     links_cache: Option<(u32, Vec<String>)>,
     /// Size history of the scanned root (folders of 1 MB or more).
     hist: Option<Arc<History>>,
+    /// Live updates: how often each folder changed (relative path) since `hot_since`.
+    hot: std::collections::HashMap<String, u32>,
+    hot_since: Instant,
     /// The selected folder's size at each history point: (node, series).
     hist_cache: Option<(u32, Vec<(u64, u64)>)>,
     /// The Xylem logo (start screen, About), uploaded once.
@@ -413,6 +465,8 @@ impl XylemApp {
             marked: BTreeSet::new(),
             links_cache: None,
             hist: None,
+            hot: std::collections::HashMap::new(),
+            hot_since: Instant::now(),
             hist_cache: None,
             logo: cc.egui_ctx.load_texture(
                 "xylem-logo",
@@ -701,6 +755,8 @@ impl XylemApp {
     /// Live updates: (re)starts watching the scan root.
     fn start_watch(&mut self) {
         self.watcher = None;
+        self.hot.clear();
+        self.hot_since = Instant::now();
         self.live_new.clear();
         self.live_overflow = false;
         if !self.settings.live_updates {
@@ -737,6 +793,13 @@ impl XylemApp {
         }
         if paths.is_empty() {
             return;
+        }
+        // Folder hotspots (Who's writing): count changes per folder.
+        if self.hot.len() < 50_000 {
+            for p in &paths {
+                let folder = p.rfind('\\').map_or("", |i| &p[..i]);
+                *self.hot.entry(folder.to_owned()).or_default() += 1;
+            }
         }
         let root_key = self.root_key();
         let Some(s) = &mut self.scanned else { return };
@@ -1207,6 +1270,10 @@ impl XylemApp {
                     .clicked()
                 {
                     self.open_growth();
+                    ui.close();
+                }
+                if ui.button("Who's writing…").on_hover_text("Which programs write to your drives right now and while the PC is idle, and which folders change most (no admin)").clicked() {
+                    self.dialog = Some(Dialog::Writers(Box::new(WritersView::open())));
                     ui.close();
                 }
                 if ui.button("Drive health…").on_hover_text("How worn your SSDs are, how much was written to them, temperature and errors (the drives' own reports; no admin)").clicked() {
@@ -2837,7 +2904,7 @@ impl XylemApp {
         let mut confirm: Option<u32> = None;
         let mut action: Option<&'static str> = None;
         let mut jump: Option<String> = None;
-        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_) | Dialog::Savings(_) | Dialog::Schedule(_) | Dialog::Growth(_) | Dialog::Health(_));
+        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_) | Dialog::Savings(_) | Dialog::Schedule(_) | Dialog::Growth(_) | Dialog::Health(_) | Dialog::Writers(_));
         let mut leftover_marks: Option<Vec<u32>> = None;
         let mut tool_start: Option<(Action, bool)> = None;
         let mut dupes_start = false;
@@ -2943,6 +3010,72 @@ impl XylemApp {
                             }
                         });
                     }
+                }
+                Dialog::Writers(v) => {
+                    if v.last.elapsed() >= Duration::from_secs(2) {
+                        v.sampler.tick();
+                        v.last = Instant::now();
+                    }
+                    ctx.request_repaint_after(Duration::from_secs(2));
+                    let rate = |b: f64| if b < 1024.0 { "0".to_owned() } else { format!("{}/s", fmt_bytes(b as u64)) };
+                    ui.label(RichText::new("Who's writing").font(theme::semibold(16.0)));
+                    ui.add(egui::Label::new(RichText::new("Programs writing right now, measured every 2 s while this window is open. \"Writes\" counts everything a program writes (files, and also pipes and some network), so the drive's own counter is shown too: when the drive is busy while you're idle and one program leads, that's the one.").color(t.muted)).wrap());
+                    ui.add_space(4.0);
+                    for (n, letters) in &v.disks {
+                        let now = v.sampler.disks.iter().find(|d| d.0 == *n).map_or(0.0, |d| d.1);
+                        let total = v.sampler.disk_totals.get(n).copied().unwrap_or(0);
+                        ui.label(RichText::new(format!("Drive {letters} · writing {} now · {} since this window opened", rate(now), fmt_bytes(total))).font(theme::semibold(13.0)));
+                    }
+                    let secs = v.sampler.seconds;
+                    ui.label(RichText::new(format!("Measured for {:.0} s ({:.0} s of it idle: no key or mouse for 5 min)", secs, v.sampler.idle_seconds)).color(t.faint).size(12.0));
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical().id_salt("writers-scroll").max_height(520.0).show(ui, |ui| {
+                    let top = v.sampler.top(8);
+                    if top.is_empty() {
+                        ui.label(RichText::new(if secs < 1.0 { "Measuring…" } else { "Nothing written yet." }).color(t.faint));
+                    } else {
+                        egui::Grid::new("writers").num_columns(4).striped(true).spacing([14.0, 4.0]).show(ui, |ui| {
+                            for h in ["Program", "Now", "While you used the PC", "While idle"] {
+                                ui.label(RichText::new(h).color(t.muted).size(12.0));
+                            }
+                            ui.end_row();
+                            for w in &top {
+                                ui.label(&w.name);
+                                ui.label(rate(w.now));
+                                ui.label(fmt_bytes(w.active));
+                                ui.label(RichText::new(fmt_bytes(w.idle)).color(if w.idle > 100 << 20 { theme::WARN } else { t.text }));
+                                ui.end_row();
+                            }
+                        });
+                    }
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("While you were away (background scans, last 7 days)").font(theme::semibold(13.0)));
+                    if v.away_runs == 0 {
+                        ui.add(egui::Label::new(RichText::new("No idle samples yet. Each scheduled scan first measures 30 s of writes; turn on View → Scheduled scans to catch programs that write while nobody is using the PC.").color(t.faint)).wrap());
+                    } else {
+                        ui.label(RichText::new(format!("{} idle samples of 30 s; average while idle:", v.away_runs)).color(t.muted).size(12.0));
+                        for (name, r, c) in &v.away {
+                            ui.label(format!("{name}: {} (≈ {} a day) · in {c} of {} samples", rate(*r), fmt_bytes((*r * 86_400.0) as u64), v.away_runs));
+                        }
+                    }
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Folders changed most often").font(theme::semibold(13.0)));
+                    if self.watcher.is_none() {
+                        ui.label(RichText::new("Needs live updates on and a scan on screen (it watches the scanned folder while Xylem is open).").color(t.faint));
+                    } else {
+                        let mut hot: Vec<(&String, &u32)> = self.hot.iter().collect();
+                        hot.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+                        let root = self.summary.as_ref().map(|s| s.root.trim_end_matches('\\').to_owned()).unwrap_or_default();
+                        ui.label(RichText::new(format!("Changes Windows reported under {} in the last {} (counts, not bytes):", visible(&root), remember::gap_text(self.hot_since.elapsed().as_secs()))).color(t.muted).size(12.0));
+                        if hot.is_empty() {
+                            ui.label(RichText::new("None yet.").color(t.faint));
+                        }
+                        for (folder, n) in hot.into_iter().take(8) {
+                            let shown = if folder.is_empty() { root.clone() } else { format!("{root}\\{folder}") };
+                            ui.label(format!("{n} × {}", visible(&shown)));
+                        }
+                    }
+                    });
                 }
                 Dialog::Health(v) => {
                     let (drives, trim) = (&v.drives, &v.trim);
@@ -3836,6 +3969,16 @@ impl XylemApp {
                         }
                         if ui.button("Close").clicked() {
                             close = true;
+                        }
+                        return;
+                    }
+                    Dialog::Writers(_) => {
+                        let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
+                        if ui.add(ok).clicked() {
+                            close = true;
+                        }
+                        if ui.button("Drive health…").clicked() {
+                            action = Some("health-refresh");
                         }
                         return;
                     }

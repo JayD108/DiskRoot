@@ -253,6 +253,17 @@ pub fn disk_of(letter: &str) -> Option<u32> {
     u32_at(&dev.ioctl(IOCTL_STORAGE_GET_DEVICE_NUMBER, &[], 12).ok()?, 4)
 }
 
+/// Bytes written to physical disk `n` since boot (`IOCTL_DISK_PERFORMANCE`,
+/// no access rights needed).
+pub fn disk_written(n: u32) -> Option<u64> {
+    const IOCTL_DISK_PERFORMANCE: u32 = 0x0007_0020;
+    let dev = Dev::open(&format!(r"\\.\PhysicalDrive{n}"))?;
+    // DISK_PERFORMANCE: BytesRead (i64), BytesWritten (i64), ...
+    let out = dev.ioctl(IOCTL_DISK_PERFORMANCE, &[], 128).ok()?;
+    let w = i64::from_le_bytes(out.get(8..16)?.try_into().ok()?);
+    u64::try_from(w).ok()
+}
+
 /// Every physical disk Windows lists, with its letters and health report.
 pub fn drives() -> Vec<Drive> {
     let mut by_disk: std::collections::BTreeMap<u32, Vec<String>> = std::collections::BTreeMap::new();

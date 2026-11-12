@@ -46,7 +46,7 @@ Most tools only answer the first one, and the friendly ones are slow on big driv
 - **Careful deleting:** only to the Recycle Bin, only after you confirm. Windows and system folders are locked. You get warnings for OneDrive folders, Git repositories and very large deletes, and a history of everything you deleted. Mark several items (Ctrl+click) to remove them in one go. Hardlinked files are flagged, because deleting one name frees nothing.
 - **Scans by itself, if you want:** scheduled scans every 30 minutes or more (it recommends how often), no admin, no window, nothing left running. When you open Xylem it tells you what changed while you were away.
 - **History and forecast:** a size chart for every folder, what grew in the last day, week or month, and "C: would be full in about 40–70 days" once there's a week of scans. Optional Windows notification when a drive runs low (at most once a day).
-- **Drive health:** how worn each SSD is, how much was written to it, temperature and errors, in plain words (the drive's own report; no admin). Warns when an SSD is nearly full.
+- **Drive health:** how worn each SSD is, how much was written to it, temperature and errors, in plain words (the drive's own report; no admin). Warns when an SSD is nearly full, and shows **who's writing**: the programs wearing the drive, also while the PC is idle.
 - **Light on your PC:** the status bar shows Xylem's own RAM and CPU; free its memory with one click (your scan stays saved), and scan gently so other programs stay fast.
 - **Private:** no network connections, no accounts, no telemetry. One small program (~8 MB).
 
