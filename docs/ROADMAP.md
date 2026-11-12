@@ -16,7 +16,9 @@
 | v0.1.0 | Scanners, the app, categories, safe delete | Released (unsigned) |
 | v0.2.0 | Instant reopen, "what changed", lower memory, finding space, UI refresh, Phases 8–10 below, a hardened admin helper | Released (unsigned) |
 | v0.3.0 | Own fast compression engine (right-click Compress), Similar folders, real size of compressed files in the normal scan, "what changed" knows the scan method | Released (unsigned) |
-| v0.4.0 | Ways to save space (what to compress, other ways to get space back), arrival dates ("changed or added"), measured compression estimates, cache rules safe only in app data, compression research call | Next |
+| v0.4.0 | Ways to save space (what to compress, other ways to get space back), arrival dates ("changed or added"), measured compression estimates, cache rules safe only in app data, compression research call | Released (unsigned) |
+| v0.4.1 | One download with the CLI on PATH, always-latest download links | Released (unsigned) |
+| v0.5.0 | Home, Drive health and Who's writing (no admin), scheduled scans, size history and forecast, warnings, Where every GB is, hardlinks once in the folder walk, smarter categories (projects, owners, teach Xylem), Xylem's own RAM/CPU | Ready, waiting for the final test and the owner's go |
 | 1.0 | Signed, tested on more hardware | Planned |
 
 ## Done
