@@ -2,10 +2,10 @@
 
 **DiskRoot {{VERSION}}**: a fast disk space analyzer for Windows 10/11. It shows what fills your drive, what each thing is, and whether it's safe to delete.
 
-## New name: Xylem is now DiskRoot
-- Same app, new name. The command-line tool is now **`droot`** (was `xylem-cli`): `droot scan C:\`, `droot health`, `droot writes`, `droot history`.
-- **Upgrading:** run the DiskRoot installer. It removes the old Xylem install first (its files, shortcuts, right-click entry, PATH entry and scheduled task). On first start DiskRoot moves your settings and saved scans from the Xylem folders. If you used scheduled scans, open View → Scheduled scans and press Save once to turn them back on.
-- Downloads are now `diskroot-setup.exe` and `diskroot-portable.zip`.
+## New in 0.6.0
+- **DiskRoot.** New name, same promises: offline, read-only scanning, nothing changes without your OK. The command-line tool is **`droot`**: `droot scan C:\`, `droot health`, `droot writes`, `droot history`.
+- **Upgrading from an earlier version:** just run the installer. It removes the previous version first (files, shortcuts, right-click entry, PATH entry, scheduled task) and keeps your settings and saved scans, which DiskRoot picks up on its first start. If you used scheduled scans, open View → Scheduled scans and press Save once.
+- Downloads: `diskroot-setup.exe` and `diskroot-portable.zip`.
 
 ## New in 0.5.1
 Fixes from a full audit of 0.5.0, before anything new:

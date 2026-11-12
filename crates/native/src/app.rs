@@ -521,8 +521,8 @@ impl Footprint {
 impl DiskRootApp {
     pub fn new(cc: &eframe::CreationContext<'_>, start: Option<String>) -> Self {
         theme::install_fonts(&cc.egui_ctx);
-        // DiskRoot used to be called Xylem: move its settings and saved scans first.
-        let migrated = diskroot_session::migrate_from_xylem();
+        // Upgrading from the previous version: move its settings and saved scans first.
+        let migrated = diskroot_session::migrate_previous();
         let settings = Settings::load();
         theme::apply(&cc.egui_ctx, if settings.dark { Theme::Dark } else { Theme::Light });
         let mut app = Self {
@@ -594,12 +594,12 @@ impl DiskRootApp {
             app.start_reopen();
         }
         if migrated.moved {
-            app.say("Welcome to DiskRoot (formerly Xylem): your settings and saved scans came along.");
+            app.say("Welcome to DiskRoot: your settings and saved scans from the previous version came along.");
         }
         if migrated.schedule_to_restore && app.dialog.is_none() {
             app.dialog = Some(Dialog::Message(
                 "Scheduled scans".into(),
-                "Xylem is now called DiskRoot. Your schedule is saved, but the old scheduled task ran the old program, so it was removed. To keep scanning automatically, open View → Scheduled scans and press Save.".into(),
+                "Your schedule from the previous version is saved, but its scheduled task ran the old program, so it was removed. To keep scanning automatically, open View → Scheduled scans and press Save.".into(),
             ));
         }
         // Started with "Run as administrator": say so. Everything still works
@@ -3783,7 +3783,7 @@ impl DiskRootApp {
                         });
                     });
                     ui.add_space(6.0);
-                    ui.label(RichText::new("DiskRoot gets to the root of what fills your drive: from the raw file table up to plain-English answers. (It began as Xylem, after the plant tissue that carries water up from the roots.)").color(t.muted));
+                    ui.label(RichText::new("DiskRoot gets to the root of what fills your drive: from the raw file table up to plain-English answers.").color(t.muted));
                 }
                 Dialog::Welcome => {
                     ui.label(RichText::new("Welcome to DiskRoot").font(theme::semibold(16.0)));

@@ -14,7 +14,7 @@
 
 Unicode true
 !ifndef VERSION
-  !define VERSION "0.5.1"
+  !define VERSION "0.6.0"
 !endif
 !ifndef SRCDIR
   !define SRCDIR "..\target\release"
@@ -93,14 +93,14 @@ FunctionEnd
 
 Section "DiskRoot (required)" SecApp
   SectionIn RO
-  ; Upgrading from Xylem (this app's old name): run the old install's own
-  ; uninstaller first (silently). It removes Xylem's files, shortcuts,
+  ; Upgrading from the previous version (before the rename): run its own
+  ; uninstaller first (silently). It removes its files, shortcuts,
   ; right-click entry, PATH entry and scheduled task; the user's settings and
   ; saved scans stay, and DiskRoot moves them to its folders when it starts.
   ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Xylem" "InstallLocation"
   ${If} $0 != ""
   ${AndIf} ${FileExists} "$0\uninstall.exe"
-    DetailPrint "Removing Xylem (DiskRoot's old name) from $0"
+    DetailPrint "Removing the previous version from $0"
     ExecWait '"$0\uninstall.exe" /S _?=$0'
     Delete "$0\uninstall.exe"
     RMDir "$0"

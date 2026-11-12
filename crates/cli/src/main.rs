@@ -107,8 +107,8 @@ enum By {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    // DiskRoot used to be called Xylem: history and health notes move along.
-    let _ = diskroot_session::migrate_from_xylem();
+    // Upgrading from the previous version: history and health notes move along.
+    let _ = diskroot_session::migrate_previous();
     match cli.cmd {
         Cmd::Scan(args) => match run_scan(&args) {
             Ok(()) => ExitCode::SUCCESS,

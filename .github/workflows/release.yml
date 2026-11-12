@@ -119,7 +119,7 @@ jobs:
           if ($after -ne $pathBefore) { throw "PATH not restored exactly: '$after' vs '$pathBefore'" }
           "install/uninstall OK"
 
-      - name: Test upgrade from Xylem (the old name)
+      - name: Test upgrade from the previous version (0.5.1, before the rename)
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -148,7 +148,7 @@ jobs:
           for ($i = 0; $i -lt 60 -and (Test-Path "$env:ProgramFiles\DiskRoot"); $i++) { Start-Sleep 1 }
           $after = (Get-Item $envKey).GetValue('Path', '', 'DoNotExpandEnvironmentNames')
           if ($after -ne $pathBefore) { throw "PATH not restored exactly after the upgrade test" }
-          "upgrade from Xylem OK"
+          "upgrade from the previous version OK"
 
       - name: Upload installer (unsigned)
         id: upload-setup

@@ -281,7 +281,11 @@ pub fn scan(path: &str) -> Result<Scanned, String> {
     Ok(Scanned::new(s.index, s.stats, mode_text(&used)))
 }
 
-/// What moving from the old name (Xylem) did.
+/// The app's name before 0.6.0: upgrades look for its folders, its
+/// scheduled task and its install under this name.
+pub const PREVIOUS_NAME: &str = "Xylem";
+
+/// What upgrading from the previous version did.
 #[derive(Debug, Default)]
 pub struct Migrated {
     /// Settings and saved scans were moved to the DiskRoot folders.
@@ -292,20 +296,20 @@ pub struct Migrated {
     pub schedule_to_restore: bool,
 }
 
-/// DiskRoot used to be called Xylem. Once: moves `%APPDATA%\Xylem` and
-/// `%LOCALAPPDATA%\Xylem` to the DiskRoot folders (a rename, nothing is
-/// copied; skipped if a DiskRoot folder already exists or the old one is
-/// in use), and removes the old Xylem scheduled task.
-pub fn migrate_from_xylem() -> Migrated {
+/// Upgrading from the previous version (before the rename), once: moves its
+/// folders in %APPDATA% and %LOCALAPPDATA% to the DiskRoot folders (a
+/// rename, nothing is copied; skipped if a DiskRoot folder already exists or
+/// the old one is in use), and removes its scheduled task.
+pub fn migrate_previous() -> Migrated {
     let mut m = Migrated::default();
     // Done once per user: a marker in DiskRoot's own folder.
-    let marker = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("DiskRoot").join("migrated-from-xylem"));
+    let marker = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("DiskRoot").join("upgraded"));
     if marker.as_ref().is_some_and(|p| p.exists()) {
         return m;
     }
     for var in ["APPDATA", "LOCALAPPDATA"] {
         let Some(base) = std::env::var_os(var).map(PathBuf::from) else { continue };
-        let (old, new) = (base.join("Xylem"), base.join("DiskRoot"));
+        let (old, new) = (base.join(PREVIOUS_NAME), base.join("DiskRoot"));
         if old.is_dir() && !new.exists() && std::fs::rename(&old, &new).is_ok() {
             m.moved = true;
         }
@@ -313,10 +317,10 @@ pub fn migrate_from_xylem() -> Migrated {
     m.old_task_removed = schedule::remove_old_task();
     m.schedule_to_restore = (m.moved || m.old_task_removed) && schedule::load().is_some() && !schedule::installed();
     // Only when nothing is left behind (an old folder in use moves next time).
-    let left = ["APPDATA", "LOCALAPPDATA"].iter().any(|v| std::env::var_os(v).is_some_and(|d| PathBuf::from(d).join("Xylem").is_dir()));
+    let left = ["APPDATA", "LOCALAPPDATA"].iter().any(|v| std::env::var_os(v).is_some_and(|d| PathBuf::from(d).join(PREVIOUS_NAME).is_dir()));
     if let Some(p) = marker.filter(|_| !left) {
         let _ = std::fs::create_dir_all(p.parent().expect("has a parent"));
-        let _ = std::fs::write(p, b"DiskRoot was called Xylem; its folders were moved here.
+        let _ = std::fs::write(p, b"Settings from the previous version were moved here.
 ");
     }
     m

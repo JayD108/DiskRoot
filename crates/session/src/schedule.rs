@@ -186,12 +186,12 @@ pub fn install(s: &Schedule, exe: &Path) -> Result<(), String> {
     r.map(|_| ())
 }
 
-/// The task an older version made when this app was still called Xylem.
+/// The task the previous version (before the rename) made.
 fn old_task_name() -> String {
-    task_name().replacen("DiskRoot", "Xylem", 1)
+    task_name().replacen("DiskRoot", crate::PREVIOUS_NAME, 1)
 }
 
-/// Removes the old Xylem task (it runs the old xylem.exe). Returns whether
+/// Removes the previous version's task (it runs the old program). Returns whether
 /// there was one.
 pub fn remove_old_task() -> bool {
     schtasks(&["/query", "/tn", &old_task_name()]).is_ok() && schtasks(&["/delete", "/tn", &old_task_name(), "/f"]).is_ok()
@@ -291,7 +291,7 @@ pub fn run_if_scheduled(args: &[String]) -> Option<i32> {
 }
 
 fn run_scheduled() -> i32 {
-    let _ = crate::migrate_from_xylem();
+    let _ = crate::migrate_previous();
     // One run at a time per user (a slow scan must not pile up).
     let name: Vec<u16> = "Local\\DiskRootScheduledScan".encode_utf16().chain([0]).collect();
     // SAFETY: NUL-terminated name; the handle is closed at the end.

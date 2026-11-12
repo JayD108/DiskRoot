@@ -42,7 +42,7 @@ One program, `diskroot.exe`, plays three roles: the app, the Fast-scan helper an
 
 ## The name
 
-> **DiskRoot** gets to the *root* of what fills your drive: it reads the drive from the bottom (the raw file table) and carries the answer all the way up to plain English. It started as **Xylem**, after the plant tissue that pulls water up from the deepest roots to the canopy, and that picture still fits:
+> **DiskRoot** gets to the *root* of what fills your drive: it reads the drive from the bottom (the raw file table) and carries the answer all the way up to plain English. Like a plant, it works from the roots up:
 
 | A plant | DiskRoot |
 |---|---|
