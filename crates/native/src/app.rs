@@ -392,6 +392,10 @@ pub struct XylemApp {
     links_cache: Option<(u32, Vec<String>)>,
     /// Size history of the scanned root (folders of 1 MB or more).
     hist: Option<Arc<History>>,
+    /// Which program or game folders belong to ("Belongs to"); loaded once
+    /// on a background thread at start.
+    owners: Option<Arc<xylem_session::owners::Owners>>,
+    owners_rx: Option<Receiver<xylem_session::owners::Owners>>,
     /// Live updates: how often each folder changed (relative path) since `hot_since`.
     hot: std::collections::HashMap<String, u32>,
     hot_since: Instant,
@@ -486,6 +490,14 @@ impl XylemApp {
             marked: BTreeSet::new(),
             links_cache: None,
             hist: None,
+            owners: None,
+            owners_rx: {
+                let (tx, rx) = mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(xylem_session::owners::Owners::load());
+                });
+                Some(rx)
+            },
             hot: std::collections::HashMap::new(),
             hot_since: Instant::now(),
             hist_cache: None,
@@ -1889,6 +1901,21 @@ impl XylemApp {
                                             }
                                         }
                                     });
+                                    ui.menu_button("This is…", |ui| {
+                                        ui.label(RichText::new("Teach Xylem what this folder is (a category in your own rules; never a safety label)").color(t.faint).size(11.5));
+                                        const ACTS: [&str; 5] = ["teach-0", "teach-1", "teach-2", "teach-3", "teach-4"];
+                                        for (k, (label, _, _)) in xylem_session::TEACH.iter().enumerate() {
+                                            if ui.button(*label).clicked() {
+                                                ctx_action = Some((i, ACTS[k]));
+                                                ui.close();
+                                            }
+                                        }
+                                        ui.separator();
+                                        if ui.button("Forget what I taught here").clicked() {
+                                            ctx_action = Some((i, "untaught"));
+                                            ui.close();
+                                        }
+                                    });
                                 }
                             });
                         }
@@ -1941,6 +1968,25 @@ impl XylemApp {
                         a if a.starts_with("alert-") => {
                             let gb: u64 = a[6..].parse().unwrap_or(1);
                             self.add_alert(n, gb << 30);
+                        }
+                        a if a.starts_with("teach-") || a == "untaught" => {
+                            let Some(path) = self.scanned.as_ref().and_then(|s| s.info(n).ok()).map(|i| i.path) else { return };
+                            let r = match a.strip_prefix("teach-").and_then(|k| k.parse::<usize>().ok()) {
+                                Some(k) => xylem_session::teach(&path, k).map(|()| format!("Taught: {} is \"{}\". It's a rule in your own rules file (File > Custom rules).", visible(&path), xylem_session::TEACH[k].2)),
+                                None => xylem_session::forget_taught(&path).map(|gone| if gone { format!("Forgot what you taught about {}.", visible(&path)) } else { "Nothing taught here.".into() }),
+                            };
+                            match r {
+                                Ok(msg) => {
+                                    self.reload_rules();
+                                    let wanted = a.strip_prefix("teach-").and_then(|k| k.parse::<usize>().ok()).map(|k| xylem_session::TEACH[k].2);
+                                    let now = self.scanned.as_ref().and_then(|s| s.info(n).ok().and_then(|i| s.rules().subs.get(i.sub as usize).map(|x| x.name.clone())));
+                                    match (wanted, now) {
+                                        (Some(w), Some(now)) if now != w => self.say(format!("Saved, but a built-in rule already classifies this folder as \"{now}\", and built-in rules come first. Your rule applies elsewhere it matches.")),
+                                        _ => self.say(msg),
+                                    }
+                                }
+                                Err(e) => self.dialog = Some(Dialog::Message("Couldn't save your rule".into(), e)),
+                            }
                         }
                         _ => self.ask_delete(n),
                     }
@@ -2716,6 +2762,11 @@ impl XylemApp {
                                         ui.label(RichText::new(text).color(if d > 0 { theme::WARN } else { t.muted }))
                                             .on_hover_text("From the scans Xylem remembered (folders of 1 MB or more). View → Size history for more.");
                                     });
+                                    ui.end_row();
+                                }
+                                if let Some(owner) = self.owners.as_ref().and_then(|o| o.of(&info.path)) {
+                                    key(ui, "Belongs to");
+                                    ui.label(owner).on_hover_text("From Windows' list of installed programs, Steam's game manifests or the Epic Games Launcher (read on this PC, nothing online)");
                                     ui.end_row();
                                 }
                                 key(ui, "Category");
@@ -4482,6 +4533,12 @@ impl eframe::App for XylemApp {
         let ctx = ui.ctx().clone();
         self.poll_job(&ctx);
         self.poll_remember(&ctx);
+        if let Some(rx) = &self.owners_rx
+            && let Ok(o) = rx.try_recv()
+        {
+            self.owners = Some(Arc::new(o));
+            self.owners_rx = None;
+        }
         self.poll_watch(&ctx);
         self.check_minimized(&ctx);
         if std::mem::take(&mut self.attention) {

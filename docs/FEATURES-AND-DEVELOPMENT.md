@@ -77,7 +77,11 @@ This page explains every feature of Xylem 0.2: **what it does, how to use it, an
 ### Categories and notes
 - **What it does:** every file gets a category and a sub-type (about 60 sub-types), and known places get a plain-English note, e.g. *"node_modules: JavaScript dependencies of a project. Safe to delete; 'npm install' brings them back."*
 - **Underneath:** 119 folder/file rules, 92 file extensions and marker files, all in a data file (`rules.json`) compiled into the program. One pass over the whole tree classifies ~2 million items in about 0.15 s: a matching rule decides a folder, everything inside inherits it, deeper rules win.
-- **Marker files:** a folder holding `CACHEDIR.TAG` (the standard mark that build tools such as Rust's cargo put in their output folders) is recognised as *Build output*.
+- **Marker files:** a folder holding `CACHEDIR.TAG` (the standard mark that build tools such as Rust's cargo put in their output folders) is recognised as *Build output*; one holding `pyvenv.cfg` as a Python environment; `tokenizer_config.json` as a downloaded AI model.
+- **Projects:** a folder holding `package.json`, `Cargo.toml`, `pyproject.toml` / `requirements.txt` / `setup.py`, `*.sln` / `*.csproj`, `pom.xml`, `build.gradle(.kts)`, `CMakeLists.txt`, `go.mod` or `*.uproject` is *Dev stuff → Code projects* ("check first": it's your work), with a note naming the kind of project. Its known rebuildable parts are *Build output* (safe to clear): `bin`/`obj`/`.vs` (.NET), `Intermediate`/`DerivedDataCache` (Unreal), Gradle's `build`/`.gradle`, Maven's `target`, CMake build folders, `.next`/`.turbo`/... (JavaScript), `.pytest_cache`/`.mypy_cache`/... (Python). Photos, videos and data files inside keep their own category. Markers count only in your own places, so a package inside `node_modules` (it has a `package.json` too) stays `node_modules`.
+- **Data files:** `.csv`, `.tsv`, `.jsonl`, `.ndjson`, `.arff` join *Datasets*; database files (`.dbf`, `.mdf`, `.ldf`, `.ibd`, `.sqlite`) are *Databases*; `.tmp` is *Temporary files*; `.partial`, `.crdownload`, `.part`, `.incomplete` are *Unfinished downloads*.
+- **Measured:** on the developer's C: (1.56 TB of files), "Unclassified" went from 22.8 GB to 1.6 GB (−93%) and all of "Other" from 4.5% to 3.0% (most of what's left is Archives & disk images, a real category). Classifying 1.8M items: 0.15 s, +4% for the new markers.
+- **Belongs to:** the details pane names the program or game a folder belongs to, from Windows' list of installed programs (install folders), Steam's library and game manifests, and the Epic Games Launcher's manifests: "Steam game: Resident Evil 4", "Installed program: Visual Studio Community 2022". Read on this PC, once, in the background.
 
 ### Safety labels
 Every known place has one of:
@@ -92,6 +96,7 @@ Windows, Program Files, ProgramData, user profile roots, the Recycle Bin, NTFS m
 ### Custom rules (File → Custom rules)
 - **What it does:** add your own categories, e.g. every `Projects\*\out` folder as *Dev stuff → My build output*, or `.blend` files as *Media → 3D scenes*.
 - **Use it:** **Edit rules** creates `%APPDATA%\Xylem\rules.json` with an example and opens it in Notepad; **Reload** applies it to the current scan straight away.
+- **Teach Xylem (right-click a folder → This is…):** *My project*, *A dataset*, *A game*, *Photos and videos I keep* or *Backups*. Xylem adds that one rule to your rules file (pattern = the folder's path below the drive, so it matches that path on any drive) and applies it right away; **Forget what I taught here** removes it. Rules you wrote by hand are never touched, and a broken rules file is reported, not overwritten. If a built-in rule already classifies the folder, Xylem says so (built-in rules come first).
 - **Limits on purpose:** your rules can set a category, a sub-type and a note, nothing else. They never apply where a built-in rule matches or inside a protected place, so they can't unlock anything. Fields like `protect` or `safety` are refused with an error. At most 500 rules, 256 KB.
 
 ---

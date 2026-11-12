@@ -98,6 +98,18 @@ Measured 12 Nov 2026 on the C: drive below (two real remembered scans 1.5 h apar
 | Load the history | 20 ms |
 | Simulated month, a scan every 4 h (26k folders, 300 change each time) | 1.5 MB, 40 points after thinning |
 
+## What stays in "Other"
+
+13 Nov 2026, the C: drive below (remembered index, read-only; `xylem-rnd` E15):
+
+| | Before smarter categories | After |
+|---|---|---|
+| Unclassified | 22.8 GB | 1.6 GB |
+| All of "Other" (incl. archives, installers) | 70.7 GB (4.5%) | 46.4 GB (3.0%) |
+| Classify 1.98M items | 128 ms | 141 ms |
+
+Biggest moves: `.tmp` 7.7 GB, model weights (`.bin` next to `tokenizer_config.json`) 5.0 GB, `.csv` 4.1 GB, Oracle `.dbf` 1.5 GB, `.partial` 1.5 GB, `.jsonl` 1.1 GB.
+
 ## Method
 - **Machine:** one laptop: Intel Core Ultra 9 275HX (24 threads), NVMe SSD, Windows 11 Home. Drive C: is 1.86 TB with ~1.55 TB used, ~1.67M files and ~317k folders visible without admin (~2.0M items with admin).
 - **Same drive, warm cache, tools interleaved round-robin** so a busy moment on the disk doesn't hit just one tool.

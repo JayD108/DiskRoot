@@ -24,6 +24,7 @@ pub mod safety;
 pub mod tools;
 pub mod offenders;
 pub mod orphans;
+pub mod owners;
 pub mod power;
 pub mod warn;
 pub mod watch;
@@ -114,6 +115,78 @@ pub fn create_example_rules() -> Result<PathBuf, String> {
         std::fs::write(&p, EXAMPLE_RULES).map_err(|e| e.to_string())?;
     }
     Ok(p)
+}
+
+/// "This is…" choices for teaching Xylem a folder: (menu label, category, sub-type).
+pub const TEACH: [(&str, &str, &str); 5] = [
+    ("My project", "dev", "My projects"),
+    ("A dataset", "ai", "My datasets"),
+    ("A game", "apps", "My games"),
+    ("Photos and videos I keep", "media", "My photos and videos"),
+    ("Backups", "docs", "Backups"),
+];
+
+const TAUGHT: &str = "Taught in Xylem";
+
+/// The rule pattern for a folder: its path below the drive, anchored
+/// ("C:\Users\me\proj" -> "/Users/me/proj"; such a rule matches that path on
+/// any drive).
+pub fn teach_pattern(path: &str) -> Option<String> {
+    let rest = path.get(2..).filter(|_| path.as_bytes().get(1) == Some(&b':'))?;
+    let p = rest.replace('\\', "/").trim_end_matches('/').to_owned();
+    (p.len() > 1).then_some(p)
+}
+
+fn edit_user_rules(p: &Path, f: impl FnOnce(&mut Vec<serde_json::Value>) -> Result<(), String>) -> Result<(), String> {
+    if !p.exists() {
+        std::fs::create_dir_all(p.parent().ok_or("no folder")?).map_err(|e| e.to_string())?;
+        std::fs::write(p, EXAMPLE_RULES).map_err(|e| e.to_string())?;
+    }
+    let text = std::fs::read_to_string(p).map_err(|e| e.to_string())?;
+    let mut v: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| format!("your rules file isn't valid JSON ({e}); fix it first (File > Custom rules)"))?;
+    let rules = v.get_mut("rules").and_then(|r| r.as_array_mut()).ok_or("your rules file has no \"rules\" list")?;
+    f(rules)?;
+    let out = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
+    // The same limits the loader enforces; checked before writing.
+    Rules::builtin().with_user_rules(&out).map_err(|e| format!("not saved: {e}"))?;
+    let tmp = p.with_extension("tmp");
+    std::fs::write(&tmp, out).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, p).map_err(|e| e.to_string())
+}
+
+/// Adds (or replaces) a rule saying what the folder at `path` is. Only a
+/// category: user rules never set safety or protection.
+pub fn teach(path: &str, choice: usize) -> Result<(), String> {
+    teach_at(&user_rules_path().ok_or("APPDATA isn't set")?, path, choice)
+}
+
+fn teach_at(file: &Path, path: &str, choice: usize) -> Result<(), String> {
+    let (_, cat, sub) = *TEACH.get(choice).ok_or("unknown choice")?;
+    let pattern = teach_pattern(path).ok_or("only folders on a drive can be taught")?;
+    let today = date_text(today_days());
+    edit_user_rules(file, |rules| {
+        rules.retain(|r| r["match"].as_str().is_none_or(|m| !m.eq_ignore_ascii_case(&pattern)));
+        rules.push(serde_json::json!({ "match": pattern, "kind": "dir", "cat": cat, "sub": sub, "note": format!("{TAUGHT} on {today}.") }));
+        Ok(())
+    })
+}
+
+/// Removes the taught rule for `path`, if there is one. Rules you wrote
+/// by hand are left alone.
+pub fn forget_taught(path: &str) -> Result<bool, String> {
+    forget_taught_at(&user_rules_path().ok_or("APPDATA isn't set")?, path)
+}
+
+fn forget_taught_at(file: &Path, path: &str) -> Result<bool, String> {
+    let pattern = teach_pattern(path).ok_or("not a folder on a drive")?;
+    let mut removed = false;
+    edit_user_rules(file, |rules| {
+        let before = rules.len();
+        rules.retain(|r| !(r["match"].as_str().is_some_and(|m| m.eq_ignore_ascii_case(&pattern)) && r["note"].as_str().is_some_and(|n| n.starts_with(TAUGHT))));
+        removed = rules.len() != before;
+        Ok(())
+    })?;
+    Ok(removed)
 }
 
 const EXAMPLE_RULES: &str = r#"{
@@ -1315,6 +1388,37 @@ pub fn reveal(path: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn teaching_writes_a_category_only_rule_and_can_be_undone() {
+        let file = std::env::temp_dir().join(format!("xylem-teach-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&file);
+        assert_eq!(teach_pattern(r"C:\Users\me\proj\"), Some("/Users/me/proj".into()));
+        assert_eq!(teach_pattern(r"C:\"), None);
+        teach_at(&file, r"C:\Users\me\proj", 0).unwrap();
+        teach_at(&file, r"C:\Users\me\proj", 1).unwrap(); // replaces, doesn't add
+        let text = std::fs::read_to_string(&file).unwrap();
+        let rules = Rules::builtin().with_user_rules(&text).unwrap();
+        assert_eq!(rules.user_rules(), 2, "the example rule + one taught rule");
+        assert!(text.contains("My datasets") && !text.contains("My projects"));
+        assert!(!text.contains("safety"), "never a safety label");
+        let mut idx = Index::new("C:\\");
+        let u = idx.push(0, "Users", 0, 0, xylem_core::flags::DIR);
+        let me = idx.push(u, "me", 0, 0, xylem_core::flags::DIR);
+        let proj = idx.push(me, "proj", 0, 0, xylem_core::flags::DIR);
+        idx.push(proj, "x.dat", 10, 10, 0);
+        idx.compute_totals();
+        let c = Classification::run(&idx, &rules);
+        assert_eq!(rules.subs[c.sub[proj as usize] as usize].name, "My datasets");
+        assert!(forget_taught_at(&file, r"C:\Users\me\proj").unwrap());
+        assert!(!forget_taught_at(&file, r"C:\Users\me\proj").unwrap(), "already gone");
+        assert!(!forget_taught_at(&file, r"C:\Projects\a\out").unwrap(), "hand-written rules stay");
+        // A broken file is reported, not overwritten.
+        std::fs::write(&file, "{ not json").unwrap();
+        assert!(teach_at(&file, r"C:\Users\me\proj", 0).unwrap_err().contains("isn't valid JSON"));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{ not json");
+        let _ = std::fs::remove_file(&file);
+    }
 
     fn demo() -> Scanned {
         let mut idx = Index::new("C:\\");

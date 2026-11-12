@@ -135,6 +135,45 @@ impl Programs {
     }
 }
 
+/// (InstallLocation, DisplayName) of every program in the Uninstall keys
+/// that names its folder. Read-only.
+pub fn install_locations() -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (root, path) in [
+        (HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+    ] {
+        let mut h: Hkey = null_mut();
+        // SAFETY: NUL-terminated path, valid out pointer; closed below.
+        if unsafe { RegOpenKeyExW(root, wide(path).as_ptr(), 0, KEY_READ, &mut h) } != 0 {
+            continue;
+        }
+        let mut i = 0u32;
+        loop {
+            let mut name = [0u16; 256];
+            let mut len = name.len() as u32;
+            // SAFETY: buffer and its length in characters.
+            if unsafe { RegEnumKeyExW(h, i, name.as_mut_ptr(), &mut len, null_mut(), null_mut(), null_mut(), null_mut()) } != 0 {
+                break;
+            }
+            i += 1;
+            let sub: Vec<u16> = name[..len as usize].iter().copied().chain([0]).collect();
+            if let (Some(loc), Some(display)) = (get_string(h, &sub, "InstallLocation"), get_string(h, &sub, "DisplayName")) {
+                out.push((loc.trim_matches('"').to_owned(), display));
+            }
+        }
+        // SAFETY: opened above.
+        unsafe { RegCloseKey(h) };
+    }
+    out
+}
+
+/// A string value under HKEY_CURRENT_USER (e.g. Steam's install path).
+pub fn user_string(path: &str, value: &str) -> Option<String> {
+    get_string(HKEY_CURRENT_USER, &wide(path), value)
+}
+
 fn get_string(key: Hkey, sub: &[u16], value: &str) -> Option<String> {
     let mut buf = [0u16; 1024];
     let mut bytes = (buf.len() * 2) as u32;
