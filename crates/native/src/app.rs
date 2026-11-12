@@ -98,6 +98,63 @@ struct Job {
     cancel: Arc<AtomicBool>,
 }
 
+/// Ctrl+K: every command and every folder or file, one search.
+#[derive(Default)]
+struct Palette {
+    query: String,
+    sel: usize,
+    /// Name matches in the scan for `hits_for` (folders and files, biggest first).
+    hits: Vec<(FileRow, bool)>,
+    hits_for: String,
+    focused: bool,
+}
+
+/// Something the command palette (and View menu) can do.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cmd {
+    Scan,
+    FastScan,
+    Up,
+    Home,
+    SaveSpace,
+    Changes,
+    Growth,
+    Space,
+    Writers,
+    Health,
+    Schedule,
+    Dupes,
+    Files,
+    Similar,
+    Leftovers,
+    Sunburst,
+    Treemap,
+    ByLocation,
+    ByCategory,
+    ColorCategory,
+    ColorAge,
+    Focus,
+    ToggleList,
+    ToggleInspector,
+    Light,
+    Dark,
+    Export,
+    Rules,
+    Alerts,
+    DeletionHistory,
+    Memory,
+    FreeMemory,
+    Shortcuts,
+    Security,
+    About,
+}
+
+/// What was picked in the palette.
+enum Pick {
+    Cmd(Cmd),
+    Node(u32),
+}
+
 enum Dialog {
     About,
     /// First launch: what DiskRoot does and doesn't do.
@@ -467,6 +524,15 @@ pub struct DiskRootApp {
     /// The DiskRoot logo (start screen, About), uploaded once.
     logo: egui::TextureHandle,
     scroll_to_selected: bool,
+    /// Focus mode (F): only the map; the list, Inspector and drive strip hide.
+    focus: bool,
+    /// The command palette (Ctrl+K), when open.
+    palette: Option<Palette>,
+    /// Save space badge: the biggest single way to get space back (bytes, what).
+    badge: Option<(u64, String)>,
+    badge_rx: Option<Receiver<Option<(u64, String)>>>,
+    /// The scan changed (new scan, delete, compress): work the badge out again.
+    badge_dirty: bool,
     /// The user's own rules: loaded or not, and why.
     rules_status: RulesStatus,
     /// Live updates: the running watch on the scan root.
@@ -565,6 +631,11 @@ impl DiskRootApp {
             owners: None,
             savings_rx: None,
             home_rx: None,
+            focus: false,
+            palette: None,
+            badge: None,
+            badge_rx: None,
+            badge_dirty: false,
             owners_rx: {
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
@@ -661,6 +732,9 @@ impl DiskRootApp {
         self.marked.clear();
         self.links_cache = None;
         self.set_hist(None);
+        self.badge = None;
+        self.badge_rx = None;
+        self.focus = false;
         self.freed = self.settings.remember_scans.then(|| root.clone());
         self.footprint.at = None; // show the new number right away
         self.say(if self.settings.remember_scans { format!("Memory freed. Your scan of {root} is saved: open it from the start screen.") } else { "Memory freed.".to_owned() });
@@ -878,6 +952,7 @@ impl DiskRootApp {
         self.refresh_drive_bar();
         self.start_watch();
         self.check_alerts();
+        self.badge_dirty = true;
     }
 
     /// Live updates: (re)starts watching the scan root.
@@ -1038,6 +1113,7 @@ impl DiskRootApp {
 
     fn finish_delete(&mut self, node: u32, r: Result<DeleteOut, String>) {
         self.job = None;
+        self.badge_dirty = true;
         match r {
             Ok(out) if out.cancelled => self.say("Cancelled. Nothing was deleted."),
             Ok(out) => {
@@ -1449,6 +1525,23 @@ impl DiskRootApp {
                     ui.close();
                 }
                 ui.separator();
+                if ui.add(egui::Button::new("Command palette…").shortcut_text("Ctrl+K")).on_hover_text("Every command and every folder, one search").clicked() {
+                    self.palette = Some(Palette::default());
+                    ui.close();
+                }
+                let mut list = !self.settings.hide_list;
+                if ui.add(egui::Checkbox::new(&mut list, "Folder list")).on_hover_text("Show or minimize the list on the left (Ctrl+B)").changed() {
+                    self.run_cmd(ui.ctx(), Cmd::ToggleList);
+                }
+                let mut insp = !self.settings.hide_inspector;
+                if ui.add(egui::Checkbox::new(&mut insp, "Inspector")).on_hover_text("Show or minimize the details at the bottom (Ctrl+J)").changed() {
+                    self.run_cmd(ui.ctx(), Cmd::ToggleInspector);
+                }
+                let mut focus = self.focus;
+                if ui.add_enabled(self.scanned.is_some(), egui::Checkbox::new(&mut focus, "Focus on the map")).on_hover_text("Only the map (F; Esc to leave)").changed() {
+                    self.run_cmd(ui.ctx(), Cmd::Focus);
+                }
+                ui.separator();
                 let mut changed = false;
                 changed |= ui.radio_value(&mut self.settings.treemap, false, "Sunburst map").clicked();
                 changed |= ui.radio_value(&mut self.settings.treemap, true, "Treemap").clicked();
@@ -1506,6 +1599,10 @@ impl DiskRootApp {
                     self.dialog = Some(Dialog::Message(
                         "Keyboard shortcuts".into(),
                         [
+                            "Ctrl+K · Command palette: every command and every folder, one search",
+                            "F · Focus on the map (Esc to leave)",
+                            "Ctrl+B · Show or minimize the folder list",
+                            "Ctrl+J · Show or minimize the Inspector",
                             "F5 · Scan (no admin)",
                             "Ctrl+F5 · Fast scan (admin, whole NTFS drives)",
                             "Ctrl+H · Home: the drive at a glance",
@@ -1528,6 +1625,45 @@ impl DiskRootApp {
                     ui.close();
                 }
             });
+            // Right: DiskRoot's own footprint, Free memory, Focus, Security.
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let t = self.tokens();
+                if shield_button(ui, &t).on_hover_text("Security & privacy: what DiskRoot does with your disk").clicked() {
+                    self.open_security();
+                }
+                if ui
+                    .add(egui::Button::new(RichText::new("Commands").size(11.5)).shortcut_text(RichText::new("Ctrl+K").size(11.0)).small())
+                    .on_hover_text("Every command and every folder, one search (Ctrl+K)")
+                    .clicked()
+                {
+                    self.palette = Some(Palette::default());
+                }
+                if ui
+                    .add_enabled(self.scanned.is_some(), egui::Button::new(RichText::new("Free memory").size(11.5)).small())
+                    .on_hover_text("Drop the scan from memory. It stays saved on this PC and reopens in about a second.")
+                    .clicked()
+                {
+                    self.free_memory();
+                }
+                self.footprint.sample();
+                let f = self.footprint;
+                let r = ui
+                    .add(egui::Label::new(RichText::new(format!("●  RAM {} · CPU {:.0}%", fmt_bytes(f.ram), f.cpu_pct)).color(t.muted).size(11.5)).sense(Sense::click()))
+                    .on_hover_text(format!(
+                        "DiskRoot's own use of this PC.\nRAM in use: {} (peak {}, private {}).\nCPU: {:.1}% of the whole processor.\nClick to see what uses the memory.",
+                        fmt_bytes(f.ram),
+                        fmt_bytes(f.peak),
+                        fmt_bytes(f.private),
+                        f.cpu_pct
+                    ))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if r.clicked() {
+                    self.dialog = Some(Dialog::Memory);
+                }
+                if self.scanned.is_some() && ui.selectable_label(self.focus, RichText::new("Focus").size(11.5)).on_hover_text("Only the map (F; Esc to leave)").clicked() {
+                    self.focus = !self.focus;
+                }
+            });
         });
     }
 
@@ -1544,7 +1680,14 @@ impl DiskRootApp {
     fn toolbar(&mut self, ui: &mut Ui) {
         let t = self.tokens();
         ui.horizontal_centered(|ui| {
-            ui.add(TextEdit::singleline(&mut self.path).desired_width(190.0).hint_text("C:\\ or a folder"));
+            // Narrow window (down to the 960 px minimum): shorter labels and
+            // spacing, so everything incl. the filter box still fits.
+            let compact = ui.available_width() < 1180.0;
+            if compact {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                ui.spacing_mut().button_padding.x = 5.0;
+            }
+            ui.add(TextEdit::singleline(&mut self.path).desired_width(if compact { 100.0 } else { 160.0 }).hint_text("C:\\ or a folder"));
             ui.menu_button("▾", |ui| {
                 for d in self.drives.clone() {
                     if ui.button(&d).clicked() {
@@ -1557,7 +1700,7 @@ impl DiskRootApp {
             if ui.add_enabled(!busy, egui::Button::new("▶  Scan")).on_hover_text("Scan this drive or folder (F5)").clicked() {
                 self.start_scan(false);
             }
-            let fast = egui::Button::new(RichText::new("⚡  Fast scan").color(t.accent_ink)).fill(t.accent);
+            let fast = egui::Button::new(RichText::new(if compact { "⚡ Fast scan" } else { "⚡  Fast scan" }).color(t.accent_ink)).fill(t.accent);
             if ui
                 .add_enabled(!busy, fast)
                 .on_hover_text("Reads the drive's Master File Table, read-only. Windows asks for admin permission. (Ctrl+F5)")
@@ -1573,8 +1716,8 @@ impl DiskRootApp {
                 }
             ui.separator();
             let mut tm = self.settings.treemap;
-            ui.selectable_value(&mut tm, false, "◎ Sunburst");
-            ui.selectable_value(&mut tm, true, "▦ Treemap");
+            ui.selectable_value(&mut tm, false, if compact { "Sunburst" } else { "◎ Sunburst" });
+            ui.selectable_value(&mut tm, true, if compact { "Treemap" } else { "▦ Treemap" });
             if tm != self.settings.treemap {
                 self.settings.treemap = tm;
                 self.settings.save();
@@ -1595,18 +1738,23 @@ impl DiskRootApp {
             if (ui.add_enabled(self.scanned.is_some(), egui::Button::new("Home")).on_hover_text("Everything important on one screen (Ctrl+H)").clicked() || home_key) && self.scanned.is_some() {
                 self.open_home();
             }
-            if ui
-                .add_enabled(self.scanned.is_some(), egui::Button::new("Save space"))
-                .on_hover_text("Ways to save space: what could be compressed, and other ways to get space back")
-                .clicked()
-            {
+            let mut job = egui::text::LayoutJob::default();
+            let body = ui.style().text_styles.get(&egui::TextStyle::Button).cloned().unwrap_or_else(|| theme::regular(13.0));
+            job.append("Save space", 0.0, egui::TextFormat { font_id: body, color: t.text, valign: Align::Center, ..Default::default() });
+            let tip = match &self.badge {
+                Some((b, what)) => {
+                    job.append(&format!(" {} ", fmt_bytes(*b)), 7.0, egui::TextFormat { font_id: theme::semibold(11.5), color: t.accent_ink, background: t.accent, valign: Align::Center, ..Default::default() });
+                    format!("Ways to save space. The biggest single one: {what}, {}. Click for all of them.", fmt_bytes(*b))
+                }
+                None => "Ways to save space: what could be compressed, and other ways to get space back".to_owned(),
+            };
+            if ui.add_enabled(self.scanned.is_some(), egui::Button::new(job)).on_hover_text(tip).clicked() {
                 self.open_savings();
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if shield_button(ui, &t).on_hover_text("Security & privacy: what DiskRoot does with your disk").clicked() {
-                    self.open_security();
-                }
-                let r = ui.add(TextEdit::singleline(&mut self.filter).desired_width(200.0).hint_text("Filter by name  (Ctrl+F)"));
+                // Whatever room is left (the window can be narrow).
+                let w = (ui.available_width() - 4.0).clamp(90.0, 220.0);
+                let r = ui.add(TextEdit::singleline(&mut self.filter).desired_width(w).hint_text("Filter by name  (Ctrl+F)"));
                 if ui.input(|i| i.modifiers.ctrl && i.key_pressed(Key::F)) {
                     r.request_focus();
                 }
@@ -1639,23 +1787,8 @@ impl DiskRootApp {
             // left and is shortened (full text on hover) instead of overlapping.
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let muted = |s: String| RichText::new(s).color(t.muted).size(11.5);
-                ui.label(RichText::new("●  Read-only").color(t.accent).size(11.5));
-                ui.separator();
-                self.footprint.sample();
-                let f = self.footprint;
-                let r = ui
-                    .add(egui::Label::new(muted(format!("DiskRoot {} · {:.0}% CPU", fmt_bytes(f.ram), f.cpu_pct))).sense(Sense::click()))
-                    .on_hover_text(format!(
-                        "DiskRoot's own use of this PC.\nRAM in use: {} (peak {}, private {}).\nCPU: {:.1}% of the whole processor.\nClick to see what uses the memory, or to free it.",
-                        fmt_bytes(f.ram),
-                        fmt_bytes(f.peak),
-                        fmt_bytes(f.private),
-                        f.cpu_pct
-                    ))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                if r.clicked() {
-                    self.dialog = Some(Dialog::Memory);
-                }
+                ui.label(RichText::new("●  Read-only · no network").color(t.accent).size(11.5))
+                    .on_hover_text("Scanning only reads. DiskRoot has no network code: it never connects anywhere.");
                 if self.watcher.is_some() {
                     ui.separator();
                     if self.live_overflow {
@@ -2419,6 +2552,7 @@ impl DiskRootApp {
 
     /// After compressing: new sizes into the tree, and a plain summary.
     fn finish_compress(&mut self, r: compress::Report) {
+        self.badge_dirty = true;
         if let Some(s) = &mut self.scanned
             && !r.new_alloc.is_empty()
         {
@@ -2622,6 +2756,7 @@ impl DiskRootApp {
 
     fn finish_delete_many(&mut self, results: Vec<(u32, Result<DeleteOut, String>)>) {
         self.job = None;
+        self.badge_dirty = true;
         self.marked.clear();
         let (mut done, mut freed, mut failed) = (0, 0u64, Vec::new());
         if let Some(s) = &mut self.scanned {
@@ -4901,10 +5036,35 @@ impl DiskRootApp {
     }
 
     fn keyboard(&mut self, ctx: &egui::Context) {
-        if self.dialog.is_some() || self.job.is_some() {
+        if self.dialog.is_some() || self.job.is_some() || self.palette.is_some() {
             return;
         }
+        let (pal, list, insp) = ctx.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::CTRL, Key::K),
+                i.consume_key(egui::Modifiers::CTRL, Key::B),
+                i.consume_key(egui::Modifiers::CTRL, Key::J),
+            )
+        });
+        if pal {
+            self.palette = Some(Palette::default());
+            return;
+        }
+        if list {
+            self.run_cmd(ctx, Cmd::ToggleList);
+        }
+        if insp {
+            self.run_cmd(ctx, Cmd::ToggleInspector);
+        }
         let typing = ctx.egui_wants_keyboard_input();
+        if !typing && self.scanned.is_some() {
+            let (f, esc) = ctx.input(|i| (i.key_pressed(Key::F) && i.modifiers.is_none(), i.key_pressed(Key::Escape)));
+            if f {
+                self.focus = !self.focus;
+            } else if esc && self.focus {
+                self.focus = false;
+            }
+        }
         let (f5, ctrl, back, up, down, left, right, enter, del) = ctx.input(|i| {
             (
                 i.key_pressed(Key::F5),
@@ -4960,6 +5120,352 @@ impl DiskRootApp {
             // Space marks / unmarks the selected row (like Ctrl+click).
             if !self.marked.remove(&n) {
                 self.marked.insert(n);
+            }
+        }
+    }
+
+    /// Every command for the palette: (label, shortcut, command), only the
+    /// ones that can run now.
+    fn commands(&self) -> Vec<(&'static str, &'static str, Cmd)> {
+        let scan = self.scanned.is_some();
+        let idle = self.job.is_none();
+        let mut v: Vec<(&'static str, &'static str, Cmd, bool)> = vec![
+            ("Scan", "F5", Cmd::Scan, idle),
+            ("Fast scan (MFT, admin)", "Ctrl+F5", Cmd::FastScan, idle),
+            ("Up one folder", "Backspace", Cmd::Up, self.map.as_ref().is_some_and(|m| m.up.is_some())),
+            ("Home: the drive at a glance", "Ctrl+H", Cmd::Home, scan),
+            ("Ways to save space", "", Cmd::SaveSpace, scan),
+            ("What changed since the previous scan", "", Cmd::Changes, self.changes.is_some()),
+            ("Size history", "", Cmd::Growth, self.summary.is_some()),
+            ("Where every GB is", "", Cmd::Space, scan),
+            ("Who's writing to my drives", "", Cmd::Writers, true),
+            ("Drive health", "", Cmd::Health, true),
+            ("Scheduled scans", "", Cmd::Schedule, true),
+            ("Find duplicate files", "", Cmd::Dupes, scan),
+            ("Largest files & file types", "", Cmd::Files, scan),
+            ("Similar folders", "", Cmd::Similar, scan),
+            ("Leftovers", "", Cmd::Leftovers, scan),
+            ("Switch to Sunburst", "", Cmd::Sunburst, self.settings.treemap),
+            ("Switch to Treemap", "", Cmd::Treemap, !self.settings.treemap),
+            ("Group by location", "", Cmd::ByLocation, self.settings.by_category),
+            ("Group by category", "", Cmd::ByCategory, !self.settings.by_category),
+            ("Colour by category", "", Cmd::ColorCategory, self.settings.color_by_age),
+            ("Colour by age (last modified)", "", Cmd::ColorAge, !self.settings.color_by_age),
+            (if self.focus { "Leave focus" } else { "Focus on the map" }, "F", Cmd::Focus, scan),
+            (if self.settings.hide_list { "Show the folder list" } else { "Minimize the folder list" }, "Ctrl+B", Cmd::ToggleList, true),
+            (if self.settings.hide_inspector { "Show the Inspector" } else { "Minimize the Inspector" }, "Ctrl+J", Cmd::ToggleInspector, true),
+            ("Light theme", "", Cmd::Light, self.settings.dark),
+            ("Dark theme", "", Cmd::Dark, !self.settings.dark),
+            ("Export to CSV", "", Cmd::Export, scan && idle),
+            ("Custom rules", "", Cmd::Rules, true),
+            ("Size alerts", "", Cmd::Alerts, true),
+            ("Deletion history", "", Cmd::DeletionHistory, true),
+            ("Memory and CPU", "", Cmd::Memory, true),
+            ("Free memory", "", Cmd::FreeMemory, scan),
+            ("Keyboard shortcuts", "", Cmd::Shortcuts, true),
+            ("Security & privacy", "", Cmd::Security, true),
+            ("About DiskRoot", "", Cmd::About, true),
+        ];
+        v.retain(|c| c.3);
+        v.into_iter().map(|(l, k, c, _)| (l, k, c)).collect()
+    }
+
+    fn run_cmd(&mut self, ctx: &egui::Context, c: Cmd) {
+        match c {
+            Cmd::Scan => self.start_scan(false),
+            Cmd::FastScan => self.start_scan(true),
+            Cmd::Up => {
+                if let Some(k) = self.map.as_ref().and_then(|m| m.up.clone()) {
+                    self.go_to(k);
+                }
+            }
+            Cmd::Home => self.open_home(),
+            Cmd::SaveSpace => self.open_savings(),
+            Cmd::Changes => {
+                if let Some(ch) = &self.changes {
+                    self.dialog = Some(Dialog::Changes(Box::new(ch.clone())));
+                }
+            }
+            Cmd::Growth => self.open_growth(),
+            Cmd::Space => self.open_space(),
+            Cmd::Writers => self.dialog = Some(Dialog::Writers(Box::new(WritersView::open()))),
+            Cmd::Health => self.open_health(),
+            Cmd::Schedule => self.open_schedule(),
+            Cmd::Dupes => self.open_dupes(),
+            Cmd::Files => self.open_files(),
+            Cmd::Similar => self.open_similar(),
+            Cmd::Leftovers => self.open_leftovers(),
+            Cmd::Sunburst | Cmd::Treemap => {
+                self.settings.treemap = c == Cmd::Treemap;
+                self.settings.save();
+                if let Some(m) = &mut self.map {
+                    m.cached = None;
+                }
+            }
+            Cmd::ByLocation | Cmd::ByCategory => {
+                self.settings.by_category = c == Cmd::ByCategory;
+                self.regroup();
+            }
+            Cmd::ColorCategory | Cmd::ColorAge => {
+                self.settings.color_by_age = c == Cmd::ColorAge;
+                self.settings.save();
+                self.map = None;
+                self.rows = None;
+            }
+            Cmd::Focus => self.focus = !self.focus && self.scanned.is_some(),
+            Cmd::ToggleList => {
+                self.settings.hide_list = !self.settings.hide_list;
+                self.settings.save();
+            }
+            Cmd::ToggleInspector => {
+                self.settings.hide_inspector = !self.settings.hide_inspector;
+                self.settings.save();
+            }
+            Cmd::Light | Cmd::Dark => {
+                self.settings.dark = c == Cmd::Dark;
+                theme::apply(ctx, if self.settings.dark { Theme::Dark } else { Theme::Light });
+                self.settings.save();
+                if let Some(m) = &mut self.map {
+                    m.cached = None;
+                }
+            }
+            Cmd::Export => self.start_export(),
+            Cmd::Rules => self.dialog = Some(Dialog::Rules),
+            Cmd::Alerts => self.dialog = Some(Dialog::Alerts),
+            Cmd::DeletionHistory => self.open_history(),
+            Cmd::Memory => self.dialog = Some(Dialog::Memory),
+            Cmd::FreeMemory => self.free_memory(),
+            Cmd::Shortcuts => {
+                // Same text as Help > Keyboard shortcuts.
+                self.dialog = Some(Dialog::Message(
+                    "Keyboard shortcuts".into(),
+                    [
+                        "Ctrl+K · Command palette: every command and every folder, one search",
+                        "F · Focus on the map (Esc to leave)",
+                        "Ctrl+B · Show or minimize the folder list",
+                        "Ctrl+J · Show or minimize the Inspector",
+                        "F5 · Scan (no admin) · Ctrl+F5 · Fast scan (admin)",
+                        "Ctrl+H · Home · Ctrl+F · Filter by name",
+                        "↑ / ↓ / → / ← / Enter · Move in the tree, open and close folders",
+                        "Backspace · Up one folder",
+                        "Space or Ctrl+click · Mark / unmark · Delete · Move to the Recycle Bin (always asks first)",
+                        "Esc · Close a window",
+                    ]
+                    .join("\n"),
+                ));
+            }
+            Cmd::Security => self.open_security(),
+            Cmd::About => self.dialog = Some(Dialog::About),
+        }
+    }
+
+    /// The command palette window (Ctrl+K).
+    fn palette_ui(&mut self, ctx: &egui::Context) {
+        let Some(mut pal) = self.palette.take() else { return };
+        let t = self.tokens();
+        // Folder and file matches: worked out again only when the words change.
+        let q = pal.query.trim().to_lowercase();
+        if q != pal.hits_for {
+            pal.hits = match &self.scanned {
+                Some(s) if q.chars().count() >= 2 => s.find_names(&q, 40),
+                _ => Vec::new(),
+            };
+            pal.hits_for = q.clone();
+        }
+        let words: Vec<&str> = q.split_whitespace().collect();
+        let cmds: Vec<_> = self.commands().into_iter().filter(|(l, _, _)| {
+            let l = l.to_lowercase();
+            words.iter().all(|w| l.contains(w))
+        }).collect();
+        let total = cmds.len() + pal.hits.len();
+        let (down, up, enter) = ctx.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowDown),
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowUp),
+                i.consume_key(egui::Modifiers::NONE, Key::Enter),
+            )
+        });
+        if down && pal.sel + 1 < total {
+            pal.sel += 1;
+        }
+        if up && pal.sel > 0 {
+            pal.sel -= 1;
+        }
+        pal.sel = pal.sel.min(total.saturating_sub(1));
+        let mut pick: Option<Pick> = None;
+        if enter && total > 0 {
+            pick = Some(if pal.sel < cmds.len() { Pick::Cmd(cmds[pal.sel].2) } else { Pick::Node(pal.hits[pal.sel - cmds.len()].0.id) });
+        }
+        let resp = Modal::new(egui::Id::unique("diskroot-palette")).show(ctx, |ui| {
+            ui.set_width(560.0);
+            let r = ui.add(TextEdit::singleline(&mut pal.query).desired_width(f32::INFINITY).hint_text("Type a command or a folder name…"));
+            if !pal.focused {
+                r.request_focus();
+                pal.focused = true;
+            }
+            if r.changed() {
+                pal.sel = 0;
+            }
+            ui.add_space(6.0);
+            let mut sel_rect = None;
+            ScrollArea::vertical().max_height(380.0).auto_shrink([false, true]).show(ui, |ui| {
+                let row = |ui: &mut Ui, selected: bool, left: &str, right: String, group: &str| {
+                    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
+                    let p = ui.painter();
+                    if selected || resp.hovered() {
+                        p.rect_filled(rect, CornerRadius::same(4), if selected { t.sel } else { t.hover });
+                    }
+                    p.text(pos2(rect.min.x + 8.0, rect.center().y), Align2::LEFT_CENTER, group, theme::regular(10.5), t.faint);
+                    let name = map::fit(p, left, 13.0, rect.width() - 190.0).unwrap_or_default();
+                    p.text(pos2(rect.min.x + 62.0, rect.center().y), Align2::LEFT_CENTER, name, theme::regular(13.0), t.text);
+                    p.text(pos2(rect.max.x - 8.0, rect.center().y), Align2::RIGHT_CENTER, right, theme::regular(11.5), t.muted);
+                    (resp, rect)
+                };
+                for (i, (label, key, c)) in cmds.iter().enumerate() {
+                    let (r, rect) = row(ui, i == pal.sel, label, (*key).to_owned(), "Command");
+                    if i == pal.sel {
+                        sel_rect = Some(rect);
+                    }
+                    if r.clicked() {
+                        pick = Some(Pick::Cmd(*c));
+                    }
+                }
+                for (j, (f, dir)) in pal.hits.iter().enumerate() {
+                    let i = cmds.len() + j;
+                    let (r, rect) = row(ui, i == pal.sel, &f.name, fmt_bytes(f.on_disk), if *dir { "Folder" } else { "File" });
+                    let r = r.on_hover_text(visible(&f.path));
+                    if i == pal.sel {
+                        sel_rect = Some(rect);
+                    }
+                    if r.clicked() {
+                        pick = Some(Pick::Node(f.id));
+                    }
+                }
+                if let Some(rect) = sel_rect.filter(|_| down || up) {
+                    ui.scroll_to_rect(rect, None);
+                }
+                if total == 0 {
+                    ui.label(RichText::new(if self.scanned.is_none() && words.len() == 1 { "No command matches. Scan a drive to search folders too." } else { "Nothing matches." }).color(t.muted));
+                }
+            });
+            ui.add_space(4.0);
+            ui.label(RichText::new("↑ ↓ to move · Enter to run · Esc to close").color(t.faint).size(11.0));
+        });
+        let close = resp.should_close() || pick.is_some();
+        if !close {
+            self.palette = Some(pal);
+        }
+        match pick {
+            Some(Pick::Cmd(c)) => self.run_cmd(ctx, c),
+            Some(Pick::Node(n)) => {
+                self.reveal_node(n, None);
+                self.tree_focus = true;
+            }
+            None => {}
+        }
+    }
+
+    /// The Inspector's title bar: what's selected, its safety label, quick
+    /// actions, and minimize / show.
+    fn inspector_bar(&mut self, ui: &mut Ui) {
+        let t = self.tokens();
+        let mut act: Option<(&'static str, u32)> = None;
+        ui.horizontal(|ui| {
+            ui.set_height(28.0);
+            ui.label(RichText::new("INSPECTOR").color(t.faint).size(10.5));
+            ui.add_space(6.0);
+            if let (Some(s), Some(key)) = (&self.scanned, &self.selected) {
+                let row = self.rows.as_ref().and_then(|r| r.iter().find(|r| &r.key == key));
+                let (name, bytes, cat) = match (key, row) {
+                    (_, Some(r)) => (r.name.clone(), r.bytes, r.cat),
+                    (Key_::Node(n), None) => s.info(*n).map(|i| (i.name, i.on_disk, i.cat)).unwrap_or_default(),
+                    _ => (String::new(), 0, 0),
+                };
+                let (rect, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
+                ui.painter().rect_filled(rect, CornerRadius::same(2), theme::cat_color(cat));
+                ui.add(egui::Label::new(RichText::new(visible(&name)).font(theme::semibold(12.5))).truncate());
+                ui.label(RichText::new(fmt_bytes(bytes)).color(t.muted));
+                if let Key_::Node(n) = key
+                    && *n != 0
+                {
+                    let rule = s.info(*n).ok().and_then(|i| s.rules().info.get(i.rule as usize).cloned());
+                    let (label, color) = match s.safety(*n) {
+                        None if rule.as_ref().is_some_and(|r| r.user) => ("Your rule", t.muted),
+                        Some(Safety::Green) => ("Safe to clear", theme::cat_color(2)),
+                        Some(Safety::Yellow) => ("Check first", theme::cat_color(6)),
+                        Some(Safety::Red) => ("Don't delete by hand", theme::cat_color(5)),
+                        None => ("Unknown", t.muted),
+                    };
+                    ui.label(RichText::new(label).color(color).size(11.5));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let hide = if self.settings.hide_inspector { "Show ▴" } else { "Minimize ▾" };
+                        if ui.small_button(hide).on_hover_text("Show or minimize the Inspector (Ctrl+J)").clicked() {
+                            act = Some(("toggle", 0));
+                        }
+                        let busy = self.job.is_some();
+                        if ui.add_enabled(!busy && label != "Don't delete by hand", egui::Button::new("Recycle Bin…").small()).on_hover_text("Move to the Recycle Bin (asks first, re-checks on disk)").clicked() {
+                            act = Some(("delete", *n));
+                        }
+                        if ui.add_enabled(!busy, egui::Button::new("Compress…").small()).on_hover_text("Windows' own file compression: same files, less space, undoable").clicked() {
+                            act = Some(("compress", *n));
+                        }
+                        if !self.marked.is_empty() {
+                            ui.label(RichText::new(format!("{} marked", self.marked.len())).color(theme::WARN).size(11.5));
+                        }
+                    });
+                    return;
+                }
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let hide = if self.settings.hide_inspector { "Show ▴" } else { "Minimize ▾" };
+                if ui.small_button(hide).on_hover_text("Show or minimize the Inspector (Ctrl+J)").clicked() {
+                    act = Some(("toggle", 0));
+                }
+            });
+        });
+        match act {
+            Some(("toggle", _)) => self.run_cmd(ui.ctx(), Cmd::ToggleInspector),
+            Some(("delete", n)) => self.ask_delete(n),
+            Some(("compress", n)) => self.ask_compress(n),
+            _ => {}
+        }
+    }
+
+    /// The minimized folder list: a thin strip that brings it back.
+    fn list_strip(&mut self, ui: &mut Ui) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(4.0);
+            if ui.button("›").on_hover_text("Show the folder list (Ctrl+B)").clicked() {
+                self.run_cmd(ui.ctx(), Cmd::ToggleList);
+            }
+        });
+    }
+
+    /// Save space badge: the biggest single way to get space back, worked
+    /// out on a worker thread after each scan, delete or compress.
+    fn poll_badge(&mut self) {
+        if std::mem::take(&mut self.badge_dirty) {
+            self.badge = None;
+            self.badge_rx = self.scanned.as_ref().map(|s| {
+                let s = s.clone(); // cheap: shared parts
+                let ctx = self.egui_ctx.clone();
+                let (tx, rx) = mpsc::channel();
+                std::thread::spawn(move || {
+                    let best = s.space_tips().into_iter().filter_map(|t| t.bytes.map(|b| (b, t.title))).max_by_key(|x| x.0).filter(|x| x.0 >= 100 << 20);
+                    let _ = tx.send(best);
+                    ctx.request_repaint();
+                });
+                rx
+            });
+        }
+        if let Some(rx) = &self.badge_rx {
+            match rx.try_recv() {
+                Ok(b) => {
+                    self.badge = b;
+                    self.badge_rx = None;
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => self.badge_rx = None,
             }
         }
     }
@@ -5023,6 +5529,7 @@ impl DiskRootApp {
             self.owners_rx = None;
         }
         self.poll_watch(&ctx);
+        self.poll_badge();
         self.check_minimized(&ctx);
         if std::mem::take(&mut self.attention) {
             ctx.send_viewport_cmd(ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational));
@@ -5040,30 +5547,69 @@ impl DiskRootApp {
             .frame(Frame::new().fill(t.win).inner_margin(Margin::symmetric(10, 2)).stroke(Stroke::new(1.0, t.line)))
             .exact_size(26.0)
             .show(ui, |ui| self.status_bar(ui));
-        if self.drive_bar.is_some() {
+        // Studio layout: the map in the middle, the folder list on the left,
+        // the Inspector under the map. Both docks resize and minimize
+        // (Ctrl+B, Ctrl+J); Focus (F) shows only the map.
+        let empty = self.scanned.is_none();
+        let focus = self.focus && !empty;
+        if self.drive_bar.is_some() && !focus {
             egui::Panel::bottom("drivebar")
                 .frame(Frame::new().fill(t.win).inner_margin(Margin { left: 10, right: 10, top: 4, bottom: 4 }))
                 .exact_size(34.0)
                 .show_separator_line(false)
                 .show(ui, |ui| self.drive_strip(ui));
         }
-        egui::Panel::bottom("details")
-            .frame(Frame::new().fill(t.win).inner_margin(Margin { left: 6, right: 6, top: 0, bottom: 6 }))
-            .exact_size(184.0)
-            .show_separator_line(false)
-            .show(ui, |ui| self.details_pane(ui));
-        let w = ctx.content_rect().width();
-        egui::Panel::right("map")
-            .frame(Frame::new().fill(t.win).inner_margin(Margin { left: 0, right: 6, top: 6, bottom: 6 }))
-            .default_size(w * 0.43)
-            .size_range(320.0..=w * 0.7)
-            .resizable(true)
-            .show_separator_line(false)
-            .show(ui, |ui| self.map_pane(ui));
-        egui::CentralPanel::default()
-            .frame(Frame::new().fill(t.win).inner_margin(Margin { left: 6, right: 6, top: 6, bottom: 6 }))
-            .show(ui, |ui| self.tree_pane(ui));
+        if empty {
+            egui::CentralPanel::default().frame(Frame::new().fill(t.win).inner_margin(Margin::same(6))).show(ui, |ui| {
+                Self::pane_frame(&t).show(ui, |ui| {
+                    ui.set_min_size(ui.available_size());
+                    self.start_screen(ui, &t);
+                });
+            });
+        } else {
+            let area = ctx.content_rect();
+            if !focus {
+                if self.settings.hide_list {
+                    egui::Panel::left("list-min")
+                        .frame(Frame::new().fill(t.win).inner_margin(Margin { left: 6, right: 0, top: 6, bottom: 6 }))
+                        .exact_size(34.0)
+                        .show_separator_line(false)
+                        .show(ui, |ui| self.list_strip(ui));
+                } else {
+                    egui::Panel::left("list")
+                        .frame(Frame::new().fill(t.win).inner_margin(Margin { left: 6, right: 0, top: 6, bottom: 6 }))
+                        .default_size(area.width() * 0.4)
+                        .size_range(300.0..=(area.width() * 0.6).max(320.0))
+                        .resizable(true)
+                        .show_separator_line(false)
+                        .show(ui, |ui| self.tree_pane(ui));
+                }
+                let frame = Frame::new().fill(t.win).inner_margin(Margin { left: 6, right: 6, top: 0, bottom: 6 });
+                if self.settings.hide_inspector {
+                    egui::Panel::bottom("inspector-min").frame(frame).exact_size(36.0).show_separator_line(false).show(ui, |ui| {
+                        Self::pane_frame(&t).inner_margin(Margin::symmetric(10, 2)).show(ui, |ui| self.inspector_bar(ui));
+                    });
+                } else {
+                    egui::Panel::bottom("inspector")
+                        .frame(frame)
+                        .default_size((area.height() * 0.28).clamp(150.0, 250.0))
+                        .size_range(120.0..=(area.height() * 0.5).max(140.0))
+                        .resizable(true)
+                        .show_separator_line(false)
+                        .show(ui, |ui| {
+                            Self::pane_frame(&t).inner_margin(Margin { left: 10, right: 10, top: 2, bottom: 0 }).show(ui, |ui| {
+                                ui.set_min_width(ui.available_width());
+                                self.inspector_bar(ui);
+                            });
+                            ui.add_space(4.0);
+                            ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.details_pane(ui));
+                        });
+                }
+            }
+            egui::CentralPanel::default().frame(Frame::new().fill(t.win).inner_margin(Margin::same(6))).show(ui, |ui| self.map_pane(ui));
+        }
 
+        self.palette_ui(&ctx);
         self.dialogs(&ctx);
         self.update_title(&ctx);
     }

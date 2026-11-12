@@ -22,7 +22,8 @@ use eframe::egui::{
 use eframe::epaint::{Primitive, textures::TexturesDelta};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use egui_winit::accesskit_winit;
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowId};
 
 // ---------------------------------------------------------------------------
@@ -391,6 +392,17 @@ fn blend(dst: u32, s: C4) -> u32 {
 // Window loop (winit + egui-winit + softbuffer)
 // ---------------------------------------------------------------------------
 
+/// Screen readers (AccessKit) talk to the window through the event loop.
+pub enum UserEvent {
+    AccessKit(accesskit_winit::Event),
+}
+
+impl From<accesskit_winit::Event> for UserEvent {
+    fn from(e: accesskit_winit::Event) -> Self {
+        Self::AccessKit(e)
+    }
+}
+
 type MakeApp = Box<dyn FnOnce(&egui::Context) -> crate::app::DiskRootApp>;
 
 struct Runner {
@@ -410,6 +422,9 @@ struct Runner {
     info: ViewportInfo,
     repaint_at: Option<Instant>,
     error: Option<String>,
+    proxy: EventLoopProxy<UserEvent>,
+    /// The window opens hidden (AccessKit needs that) and is shown after the first frame.
+    shown: bool,
 }
 
 impl Runner {
@@ -485,17 +500,22 @@ impl Runner {
             self.prev = prims;
             self.prev_key = key;
         }
+        if !self.shown {
+            self.shown = true;
+            window.set_visible(true);
+        }
         self.raster.free_textures(&out.textures_delta);
         out.textures_delta.clear();
     }
 }
 
-impl ApplicationHandler for Runner {
+impl ApplicationHandler<UserEvent> for Runner {
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
         }
-        let window = match egui_winit::create_window(&self.ctx, el, &self.builder) {
+        let builder = self.builder.clone().with_visible(false);
+        let window = match egui_winit::create_window(&self.ctx, el, &builder) {
             Ok(w) => Rc::new(w),
             Err(e) => {
                 self.error = Some(format!("couldn't open the window: {e}"));
@@ -503,7 +523,7 @@ impl ApplicationHandler for Runner {
                 return;
             }
         };
-        let state = egui_winit::State::new(
+        let mut state = egui_winit::State::new(
             self.ctx.clone(),
             ViewportId::ROOT,
             el,
@@ -511,6 +531,8 @@ impl ApplicationHandler for Runner {
             None,
             Some(8192),
         );
+        // Screen readers and UI Automation, like the OpenGL path (eframe).
+        state.init_accesskit(el, &window, self.proxy.clone());
         let surface = softbuffer::Context::new(window.clone())
             .and_then(|c| softbuffer::Surface::new(&c, window.clone()));
         match surface {
@@ -526,8 +548,26 @@ impl ApplicationHandler for Runner {
             self.app = Some(make(&self.ctx));
         }
         self.state = Some(state);
-        window.request_redraw();
         self.window = Some(window);
+        // A hidden window gets no redraw events: draw the first frame now,
+        // which also shows the window.
+        self.paint(el);
+    }
+
+    fn user_event(&mut self, _el: &ActiveEventLoop, event: UserEvent) {
+        let UserEvent::AccessKit(e) = event;
+        let (Some(window), Some(state)) = (&self.window, self.state.as_mut()) else { return };
+        match e.window_event {
+            accesskit_winit::WindowEvent::InitialTreeRequested => {
+                self.ctx.enable_accesskit();
+                window.request_redraw();
+            }
+            accesskit_winit::WindowEvent::ActionRequested(req) => {
+                state.on_accesskit_action_request(req);
+                window.request_redraw();
+            }
+            accesskit_winit::WindowEvent::AccessibilityDeactivated => self.ctx.disable_accesskit(),
+        }
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -572,7 +612,7 @@ impl ApplicationHandler for Runner {
 
 /// Runs DiskRoot drawn on the CPU.
 pub fn run(builder: ViewportBuilder, make: MakeApp) -> Result<(), String> {
-    let el = EventLoop::new().map_err(|e| e.to_string())?;
+    let el = EventLoop::<UserEvent>::with_user_event().build().map_err(|e| e.to_string())?;
     let mut r = Runner {
         ctx: egui::Context::default(),
         builder,
@@ -588,6 +628,8 @@ pub fn run(builder: ViewportBuilder, make: MakeApp) -> Result<(), String> {
         info: ViewportInfo::default(),
         repaint_at: None,
         error: None,
+        proxy: el.create_proxy(),
+        shown: false,
     };
     el.run_app(&mut r).map_err(|e| e.to_string())?;
     r.error.map_or(Ok(()), Err)

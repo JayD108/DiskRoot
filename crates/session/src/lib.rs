@@ -1320,6 +1320,50 @@ It may be left over from an uninstalled program, or belong to one that's install
             .collect()
     }
 
+    /// Folders and files whose name contains `query` (case-insensitive),
+    /// biggest first (a folder counts with everything inside). For the
+    /// command palette: one pass, no allocation per name for ASCII queries.
+    pub fn find_names(&self, query: &str, limit: usize) -> Vec<(FileRow, bool)> {
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+        let q = query.trim().to_lowercase();
+        if q.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        let ascii = q.is_ascii();
+        let qb = q.as_bytes();
+        let matches = |name: &str| {
+            if ascii {
+                name.len() >= qb.len() && name.as_bytes().windows(qb.len()).any(|w| w.eq_ignore_ascii_case(qb))
+            } else {
+                name.to_lowercase().contains(&q)
+            }
+        };
+        let idx = &self.index;
+        let mut heap: BinaryHeap<Reverse<(u64, u32)>> = BinaryHeap::with_capacity(limit + 1);
+        for id in 1..idx.len() as u32 {
+            if idx.flags(id) & flags::DELETED != 0 {
+                continue;
+            }
+            let a = idx.alloc(id);
+            if heap.len() == limit && heap.peek().is_some_and(|Reverse((m, _))| a <= *m) {
+                continue;
+            }
+            if !matches(idx.name(id)) {
+                continue;
+            }
+            heap.push(Reverse((a, id)));
+            if heap.len() > limit {
+                heap.pop();
+            }
+        }
+        let mut v: Vec<(u64, u32)> = heap.into_iter().map(|Reverse(x)| x).collect();
+        v.sort_unstable_by_key(|&(a, id)| (Reverse(a), id));
+        v.into_iter()
+            .map(|(a, id)| (FileRow { id, name: idx.name(id).to_owned(), path: idx.path(id), on_disk: a, cat: self.cls.cat[id as usize], mtime: idx.mtime(id) }, idx.is_dir(id)))
+            .collect()
+    }
+
     /// Files that could be duplicates: same size (≥ `min_size`), at least
     /// two of them, not cloud placeholders. From the scan only: no file is
     /// opened here. Biggest sizes first.
@@ -1632,6 +1676,18 @@ mod tests {
         assert!(s.prepare_delete(7).is_err());
         assert!(s.prepare_delete(4).is_ok(), "node_modules can be deleted");
         assert!(s.prepare_delete(0).is_err(), "never the scan root");
+    }
+
+    #[test]
+    fn finds_names_biggest_first() {
+        let s = demo();
+        let hits = s.find_names("M", 10);
+        let names: Vec<_> = hits.iter().map(|(r, _)| r.name.as_str()).collect();
+        assert_eq!(names, ["me", "movie.mp4", "node_modules"], "case-insensitive, biggest first (a folder counts with its contents): {names:?}");
+        assert!(hits.iter().any(|(r, dir)| r.name == "me" && *dir));
+        assert_eq!(s.find_names("MOVIE", 1).len(), 1);
+        assert!(s.find_names("  ", 10).is_empty());
+        assert!(s.find_names("zzz", 10).is_empty());
     }
 
     #[test]
