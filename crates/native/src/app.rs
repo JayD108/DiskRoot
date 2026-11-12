@@ -2223,13 +2223,18 @@ impl XylemApp {
                     let Ok(info) = s.info(*n) else { return };
                     let rule = s.rules().info.get(info.rule as usize);
                     let tool = rule.and_then(|r| r.action);
-                    let (label, color, note) = match rule.and_then(|r| r.safety) {
+                    let (label, color, note) = match s.safety(*n) {
                         None if rule.is_some_and(|r| r.user) => (
                             "Your rule",
                             t.muted,
                             Some(rule.and_then(|r| r.note.clone()).unwrap_or_else(|| "Classified by your own rule. Check what it is before removing it.".into())),
                         ),
                         Some(Safety::Green) => ("Safe to clear", theme::cat_color(2), rule.and_then(|r| r.note.clone())),
+                        Some(Safety::Yellow) if rule.is_some_and(|r| r.safety == Some(Safety::Green)) => (
+                            "Check first",
+                            theme::cat_color(6),
+                            Some("A cache folder inside your own files, not an app's. It's probably rebuildable, but check what made it first: rebuilding a project's cache can take long.".into()),
+                        ),
                         Some(Safety::Yellow) => ("Check first", theme::cat_color(6), rule.and_then(|r| r.note.clone())),
                         Some(Safety::Red) => ("Don't delete by hand", theme::cat_color(5), rule.and_then(|r| r.note.clone())),
                         None => ("Unknown", t.muted, Some("No rule for this yet. Check what it is before removing it.".into())),

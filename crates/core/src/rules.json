@@ -13,6 +13,7 @@
     "Extensions: strong=true wins even inside strong folders (model files are always AI).",
     "app: programs using the place; the delete dialog warns while one runs.",
     "action: a Windows tool for the place: dism-cleanup | system-protection | storage-settings.",
+    "apps_only: true for bare names projects use too ('Cache'): safe only inside app data, 'check first' elsewhere.",
     "markers: a folder holding a file with this name is classified by the marker."
   ],
   "rules": [
@@ -151,9 +152,9 @@
       "note": "Bun cache. Clear with: bun pm cache rm" },
     { "match": "AppData/Local/deno", "kind": "dir", "cat": "dev", "sub": "Package caches", "safety": "green",
       "note": "Deno cache. Clear with: deno clean" },
-    { "match": "cache2", "kind": "dir", "cat": "temp", "sub": "Browser cache", "safety": "green", "note": "Browser cache. Rebuilt automatically." },
-    { "match": "Cache", "kind": "dir", "cat": "temp", "sub": "App caches", "safety": "green", "note": "Cached data. Apps rebuild it when needed." },
-    { "match": "Caches", "kind": "dir", "cat": "temp", "sub": "App caches", "safety": "green", "note": "Cached data. Apps rebuild it when needed." },
+    { "match": "cache2", "kind": "dir", "apps_only": true, "cat": "temp", "sub": "Browser cache", "safety": "green", "note": "Browser cache. Rebuilt automatically." },
+    { "match": "Cache", "kind": "dir", "apps_only": true, "cat": "temp", "sub": "App caches", "safety": "green", "note": "Cached data. Apps rebuild it when needed." },
+    { "match": "Caches", "kind": "dir", "apps_only": true, "cat": "temp", "sub": "App caches", "safety": "green", "note": "Cached data. Apps rebuild it when needed." },
     { "match": "Code Cache", "kind": "dir", "cat": "temp", "sub": "App caches", "safety": "green", "note": "Compiled script cache. Rebuilt automatically." },
     { "match": "GPUCache", "kind": "dir", "cat": "temp", "sub": "GPU shader cache", "safety": "green", "note": "GPU shader cache. Rebuilt automatically." },
     { "match": "DawnCache", "kind": "dir", "cat": "temp", "sub": "GPU shader cache", "safety": "green" },

@@ -443,6 +443,14 @@ impl Scanned {
         out
     }
 
+    /// The safety label for a node: its rule's, with an "apps only" rule
+    /// ("Cache") downgraded to "check first" in the user's own files.
+    pub fn safety(&self, node: u32) -> Option<Safety> {
+        let r = *self.cls.rule.get(node as usize)?;
+        let info = self.rules.info.get(r as usize)?;
+        xylem_core::classify::safety_at(info, &self.index.path(self.cls.anchor[node as usize]))
+    }
+
     /// The rules this scan was classified with (for notes and labels).
     pub fn rules(&self) -> &Rules {
         &self.rules
@@ -469,7 +477,7 @@ impl Scanned {
                 n != 0
                     && self.index.flags(n) & flags::DELETED == 0
                     && self.cls.matched_here(n)
-                    && self.rules.info.get(r as usize).is_some_and(|i| i.safety == Some(Safety::Green) && !i.user)
+                    && self.rules.info.get(r as usize).is_some_and(|i| xylem_core::classify::safety_at(i, &self.index.path(n)) == Some(Safety::Green) && !i.user)
                     && self.cls.protection(&self.index, &self.rules, n).is_none()
             })
             .collect()

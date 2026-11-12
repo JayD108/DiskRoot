@@ -201,7 +201,7 @@ impl Scanned {
         // cache, not an app's) is probably rebuildable, but maybe only by
         // hours of work: never offered as "safe".
         for p in &mut caches {
-            if own_files(&p.path) {
+            if xylem_core::classify::in_own_files(&p.path) {
                 p.markable = false;
                 p.note = Some("A cache folder inside your own files, not an app's. Check what made it before clearing it: rebuilding a project's cache can take long.".into());
             }
@@ -406,7 +406,7 @@ impl Scanned {
             note: if with_note { info.and_then(|i| i.note.clone()) } else { None },
             markable: n != 0
                 && self.cls.matched_here(n)
-                && info.is_some_and(|i| i.safety == Some(Safety::Green) && !i.user)
+                && info.is_some_and(|i| xylem_core::classify::safety_at(i, &self.index.path(n)) == Some(Safety::Green) && !i.user)
                 && self.cls.protection(&self.index, &self.rules, n).is_none(),
             vhdx,
         }
@@ -449,14 +449,6 @@ impl Scanned {
             button: None,
         })
     }
-}
-
-/// Outside the places apps and Windows keep their data (AppData, dot
-/// folders like .gradle or .cargo, ProgramData, Windows).
-fn own_files(path: &str) -> bool {
-    let p = path.to_ascii_lowercase();
-    let system = p.len() > 3 && (p[3..].starts_with("windows\\") || p[3..].starts_with("programdata\\") || p[3..].starts_with("$recycle.bin"));
-    !(system || p.contains("\\appdata\\") || p.contains("\\."))
 }
 
 fn tip(title: &str, places: Vec<Place>, how: &str, button: Option<(&'static str, TipAction)>) -> Tip {
@@ -585,6 +577,10 @@ mod tests {
         let safe: Vec<(u32, bool)> = caches.places.iter().map(|p| (p.node, p.markable)).collect();
         assert_eq!(safe, vec![(proj_cache, false), (app_cache, true)], "a project's own cache is never offered as safe");
         assert!(caches.places[0].note.as_deref().unwrap().contains("your own files"));
+        // Same answer everywhere (details pane, Mark all): "check first" in a project, "safe" in AppData.
+        assert_eq!((s.safety(proj_cache), s.safety(app_cache)), (Some(Safety::Yellow), Some(Safety::Green)));
+        let all_caches = s.rules().subs.iter().position(|x| x.name == "App caches").unwrap();
+        assert_eq!(s.markable(&format!("sub:{all_caches}")), vec![app_cache], "Mark all leaves the project's cache alone");
         let big = find("Big files not changed");
         assert_eq!(big.places.iter().map(|p| p.node).collect::<Vec<_>>(), vec![movie]);
         assert!(tips.iter().all(|t| t.bytes != Some(0)), "empty tips are dropped");

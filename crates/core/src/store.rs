@@ -259,7 +259,9 @@ mod fuzz {
         let mut idx = Index::new("C:\\");
         let d = idx.push(0, "dir", 0, 0, flags::DIR);
         for i in 0..20 {
-            idx.push(d, &format!("f{i}.bin"), i * 100, 4096, 0);
+            let f = idx.push(d, &format!("f{i}.bin"), i * 100, 4096, 0);
+            idx.set_mtime(f, 19_000 + i as u16);
+            idx.set_added(f, 20_000 - i as u16);
         }
         idx.compute_totals();
         let mut good = Vec::new();
@@ -286,6 +288,10 @@ mod fuzz {
             }
             if round % 5 == 0 {
                 b.truncate((next() as usize) % (b.len() + 1));
+            }
+            // Older format versions read the same bytes with fewer date columns.
+            if round % 7 == 0 && b.len() > 7 {
+                b[7] = b"123"[(next() % 3) as usize];
             }
             if let Ok((back, _, _)) = Index::load_checked(&mut b.as_slice(), b.len() as u64) {
                 // Anything accepted must be a structurally valid tree.

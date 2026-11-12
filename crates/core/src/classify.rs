@@ -126,6 +126,10 @@ struct RawRule {
     #[serde(default)]
     app: Vec<String>,
     action: Option<Action>,
+    /// A bare folder name ("Cache") that apps use but projects use too:
+    /// "safe" only inside app data, "check first" in the user's own files.
+    #[serde(default)]
+    apps_only: bool,
 }
 
 #[derive(Deserialize)]
@@ -189,6 +193,27 @@ pub struct RuleInfo {
     pub action: Option<Action>,
     /// One of the user's own rules.
     pub user: bool,
+    /// Safe only inside app data (see [`safety_at`]).
+    pub apps_only: bool,
+}
+
+/// Outside the places apps and Windows keep their data: not AppData, not
+/// a dot folder (.gradle, .cache), not ProgramData, Windows or the Recycle Bin.
+pub fn in_own_files(path: &str) -> bool {
+    let p = path.to_ascii_lowercase().replace('/', "\\");
+    let rest = p.get(3..).unwrap_or("");
+    let system = rest.starts_with("windows\\") || rest.starts_with("programdata\\") || rest.starts_with("$recycle.bin") || rest.starts_with("program files");
+    !(system || p.contains("\\appdata\\") || p.contains("\\."))
+}
+
+/// A rule's safety for a place at `path`: an `apps_only` rule's "safe to
+/// clear" becomes "check first" in the user's own files (a project's
+/// `cache` folder may take hours to rebuild).
+pub fn safety_at(info: &RuleInfo, path: &str) -> Option<Safety> {
+    match info.safety {
+        Some(Safety::Green) if info.apps_only && in_own_files(path) => Some(Safety::Yellow),
+        s => s,
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -304,7 +329,7 @@ impl Rules {
                 by_last.entry(hash_ci(last)).or_default().push(i);
             }
             rules.push(Rule { comps, anchored, kind: r.kind, sub: sub_id(&r.cat, &r.sub)?, weak: r.weak });
-            info.push(RuleInfo { safety: r.safety, note: r.note, protect: r.protect, app: r.app, action: r.action, user: false });
+            info.push(RuleInfo { safety: r.safety, note: r.note, protect: r.protect, app: r.app, action: r.action, user: false, apps_only: r.apps_only });
         }
         let mut markers = Vec::new();
         for m in raw.markers {
@@ -313,7 +338,7 @@ impl Rules {
             // Not in the name lookups: a marker rule applies only through
             // its marker file.
             rules.push(Rule { comps: Vec::new(), anchored: false, kind: Kind::Dir, sub, weak: false });
-            info.push(RuleInfo { safety: m.safety, note: m.note, protect: None, app: Vec::new(), action: None, user: false });
+            info.push(RuleInfo { safety: m.safety, note: m.note, protect: None, app: Vec::new(), action: None, user: false, apps_only: false });
         }
         if rules.len() >= NO_RULE as usize {
             return Err("rules: too many rules".into());
@@ -379,7 +404,7 @@ impl Rules {
             }
             let anchored = r.pattern.starts_with(['/', '\\']);
             self.rules.push(Rule { comps, anchored, kind: r.kind, sub, weak: false });
-            self.info.push(RuleInfo { safety: None, note: r.note, protect: None, app: Vec::new(), action: None, user: true });
+            self.info.push(RuleInfo { safety: None, note: r.note, protect: None, app: Vec::new(), action: None, user: true, apps_only: false });
         }
         for e in raw.extensions {
             clean("sub", &e.sub, 60)?;
