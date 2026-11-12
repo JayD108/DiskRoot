@@ -66,6 +66,9 @@ pub struct Suggestions {
     pub min_saving: u64,
     /// Why nothing on this drive can be compressed (not NTFS), if so.
     pub not_possible: Option<String>,
+    /// False for scans saved by Xylem 0.3 or older (no created dates):
+    /// ages then come from last-modified alone and may look too old.
+    pub has_arrival_dates: bool,
     pub secs: f64,
 }
 
@@ -122,7 +125,9 @@ impl Scanned {
         let t = Instant::now();
         let idx = &self.index;
         let n = idx.len();
-        let mut out = Suggestions { items: Vec::new(), min_days, min_saving, not_possible: None, secs: 0.0 };
+        // Folders hold the newest created date inside: 0 at the root means none at all.
+        let has_arrival_dates = idx.added(0) != 0 || idx.len() == 1;
+        let mut out = Suggestions { items: Vec::new(), min_days, min_saving, not_possible: None, has_arrival_dates, secs: 0.0 };
         if let Err(e) = compress::check_volume(Path::new(&idx.path(0))) {
             out.not_possible = Some(e);
             return out;
@@ -510,6 +515,7 @@ mod tests {
 
         let got = s.compress_suggestions(180, 64 * MB, 100);
         assert!(got.not_possible.is_none());
+        assert!(got.has_arrival_dates);
         let ids: Vec<u32> = got.items.iter().map(|c| c.node).collect();
         assert_eq!(ids, vec![big, cold], "{:?}", got.items.iter().map(|c| &c.path).collect::<Vec<_>>());
         let c = &got.items[1];

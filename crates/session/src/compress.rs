@@ -48,6 +48,7 @@ const FILE_FLAG_SEQUENTIAL_SCAN: u32 = 0x0800_0000;
 const FSCTL_SET_EXTERNAL_BACKING: u32 = 0x0009_030C;
 const FSCTL_DELETE_EXTERNAL_BACKING: u32 = 0x0009_0314;
 const FILE_ATTRIBUTE_TAG_INFO: u32 = 9;
+const FILE_STANDARD_INFO: u32 = 1;
 const IO_REPARSE_TAG_WOF: u32 = 0x8000_0017;
 
 const ATTR_DIRECTORY: u32 = 0x10;
@@ -430,6 +431,19 @@ fn open_checked(f: &PlanFile, prefix: &str, undo: bool) -> Result<OpenFile, Outc
     if !undo && (wof || attrs & (ATTR_COMPRESSED | ATTR_SPARSE) != 0) {
         return Err(Outcome::Skipped);
     }
+    // A file with other names (hardlinks) shares its data with them, and
+    // they may live outside the chosen folder (even in Windows): leave it.
+    if !undo {
+        // FILE_STANDARD_INFO: AllocationSize, EndOfFile (i64), NumberOfLinks (u32), 2 BOOLEANs.
+        let mut st = [0u64; 3];
+        // SAFETY: valid handle; 24-byte buffer holds FILE_STANDARD_INFO (22 bytes + padding).
+        if unsafe { GetFileInformationByHandleEx(h, FILE_STANDARD_INFO, st.as_mut_ptr().cast(), 24) } == 0 {
+            return Err(Outcome::Failed(win_err(unsafe { GetLastError() })));
+        }
+        if (st[2] & 0xFFFF_FFFF) > 1 {
+            return Err(Outcome::Skipped);
+        }
+    }
     match final_path(h) {
         Some(p) if p.starts_with(prefix) => Ok(file),
         _ => Err(Outcome::Skipped), // not where the scan saw it (junction?): leave it
@@ -670,6 +684,22 @@ mod tests {
         let r = run(&p, Some(Level::Max), 2, &pr);
         assert!(r.cancelled);
         assert_eq!(pr.files_done.load(Ordering::Relaxed), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hardlinked_files_are_left_alone() {
+        let (dir, files) = fixture("hardlink");
+        if check_volume(&dir).is_err() {
+            return;
+        }
+        // A second name for log.txt, as if it lived somewhere else.
+        std::fs::hard_link(&files[0].path, dir.join("other-name.txt")).unwrap();
+        let h = fnv(&files[0].path);
+        let r = run(&plan(&dir, vec![files[0].clone()]), Some(Level::Fast), 1, &Progress::default());
+        assert_eq!((r.changed_files, r.skipped.0), (0, 1), "{r:?}");
+        assert_eq!(on_disk(&files[0].path).unwrap(), files[0].alloc, "not compressed");
+        assert_eq!(fnv(&files[0].path), h);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

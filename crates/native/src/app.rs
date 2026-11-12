@@ -1758,7 +1758,7 @@ impl XylemApp {
             lines.push(format!("{} skipped: Windows doesn't allow changing them (read-only or no permission).", n(r.denied)));
         }
         if r.skipped.0 > 0 {
-            lines.push(format!("{} skipped: already in that state, changed since the scan, or not where the scan saw them.", n(r.skipped)));
+            lines.push(format!("{} skipped: already in that state, changed since the scan, not where the scan saw them, or hardlinked (sharing data with another name).", n(r.skipped)));
         }
         if r.failed.0 > 0 {
             lines.push(format!("{} failed: {}", n(r.failed), r.first_error.clone().unwrap_or_default()));
@@ -2927,6 +2927,9 @@ impl XylemApp {
                                     v.sugg = s.compress_suggestions(v.min_days, SAVINGS_MIN, 200);
                                 }
                             });
+                            if !v.sugg.has_arrival_dates {
+                                ui.label(RichText::new("This scan was saved by an older Xylem and has no arrival dates, so downloaded files may look older than they are. Press Scan for exact ages.").color(theme::WARN).size(12.0));
+                            }
                             let n = v.sugg.items.len();
                             let summary = if n == 0 {
                                 "Nothing found: no folder or file that has been unchanged this long would save 100 MB or more. Try a shorter time.".to_owned()
