@@ -236,6 +236,14 @@ pub struct Changes {
     pub after_mode: String,
 }
 
+/// Marks folder walks that count hardlinked files once (Xylem 0.5.0 and
+/// later), so "what changed" against an older walk can explain the drop.
+pub const HARDLINKS_ONCE: &str = "hardlinks once";
+
+fn with_hardlink_note(mode: &str) -> String {
+    if mode.starts_with("folder walk") && !mode.contains(HARDLINKS_ONCE) { format!("{mode} · {HARDLINKS_ONCE}") } else { mode.to_owned() }
+}
+
 /// "mft" or "walk" for a scan-mode text, `None` if unknown.
 fn method(mode: &str) -> Option<&'static str> {
     if mode.starts_with("MFT") {
@@ -254,6 +262,12 @@ impl Changes {
     /// from the method, not from files that changed.
     pub fn mixed_methods(&self) -> bool {
         matches!((method(&self.before_mode), method(&self.after_mode)), (Some(a), Some(b)) if a != b)
+    }
+
+    /// The earlier scan was a folder walk from before hardlinks were counted
+    /// once, the latest one counts them once: part of the change is that.
+    pub fn hardlink_switch(&self) -> bool {
+        self.before_mode.starts_with("folder walk") && !self.before_mode.contains(HARDLINKS_ONCE) && self.after_mode.contains(HARDLINKS_ONCE)
     }
 
     /// "Fast scan" / "folder walk" for the user, if known.
@@ -385,7 +399,7 @@ pub fn remember(idx: &Arc<Index>, stats: &ScanStats, mode: &str) -> io::Result<O
     let root = idx.name(0).to_owned();
     let (idx_path, snap_path, prev_path) = paths(&root).ok_or_else(|| io::Error::other("no LOCALAPPDATA"))?;
     fs::create_dir_all(idx_path.parent().expect("cache dir"))?;
-    let mode = mode.replace(" via admin helper", "");
+    let mode = with_hardlink_note(&mode.replace(" via admin helper", ""));
     let mut snap = Snapshot::of(idx);
     snap.mode.clone_from(&mode);
     let prev = load_snap(&snap_path).filter(|p| p.root.eq_ignore_ascii_case(&root));
@@ -408,7 +422,7 @@ pub fn remember(idx: &Arc<Index>, stats: &ScanStats, mode: &str) -> io::Result<O
 pub fn save_index(idx: &Index, stats: &ScanStats, mode: &str) -> io::Result<()> {
     let (idx_path, _, _) = paths(idx.name(0)).ok_or_else(|| io::Error::other("no LOCALAPPDATA"))?;
     fs::create_dir_all(idx_path.parent().expect("cache dir"))?;
-    let mode = mode.replace(" via admin helper", "");
+    let mode = with_hardlink_note(&mode.replace(" via admin helper", ""));
     write_atomic(&idx_path, |w| idx.save(stats, &mode, w))
 }
 
@@ -635,6 +649,13 @@ mod tests {
         reason.mode = "folder walk (MFT read needs administrator rights)".into();
         assert!(diff(&reason, &fast, 10).mixed_methods(), "walk (with reason) then Fast scan");
         assert_eq!(Changes::method_name("folder walk"), "folder walk");
+        // An old walk against a new one (hardlinks once): explained.
+        let mut new = walk.clone();
+        new.mode = with_hardlink_note("folder walk (MFT read needs administrator rights)");
+        assert!(diff(&walk, &new, 10).hardlink_switch());
+        assert!(!diff(&new, &new, 10).hardlink_switch());
+        assert!(!diff(&walk, &fast, 10).hardlink_switch(), "Fast scan: the mixed-method note covers it");
+        assert_eq!(with_hardlink_note(&new.mode), new.mode, "added once");
     }
 
     #[test]

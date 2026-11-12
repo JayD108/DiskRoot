@@ -74,6 +74,15 @@ This page explains every feature of Xylem 0.2: **what it does, how to use it, an
 ### The drive strip and the start screen
 - The strip at the bottom shows how full the drive is (used / total, %) and the 5 biggest items in the scan as coloured blocks; click one to jump there.
 - The start screen shows every drive with a fill bar.
+- Click the strip's text (whole drives) for **Where every GB is**. An SSD with less than 10% free gets a "nearly full" warning.
+
+### Home (toolbar Home, Ctrl+H)
+- **What it does:** the drive at a glance: used / free with a bar, the "full in ~N days" forecast, drive health, the top 3 changes since the previous scan, the top ways to get space back (and what compressing old data could save), and the 5 biggest items. Each opens its detail with one click (the tree, What changed, Save space, Size history, Drive health, Where every GB is). It opens when Xylem starts with a remembered scan ("Show this when Xylem starts" turns that off).
+- **Underneath:** built on a worker thread from a cheap copy of the scan (its big parts are shared, not copied), like Save space now: about 0.2 s on a whole 1.7M-file drive that no longer freezes the window.
+
+### Keyboard and screen readers
+- **Help → Keyboard shortcuts** lists them: F5, Ctrl+F5, Ctrl+H, Ctrl+F, arrows, Enter, Backspace, Space / Ctrl+click to mark, Delete, Esc.
+- Tree rows, the map ("Sunburst map of C:\. The biggest items are listed below it and in the tree") and every legend entry ("AI & data: 639 GB (42%)") have names for screen readers (checked with Windows UI Automation).
 
 ---
 

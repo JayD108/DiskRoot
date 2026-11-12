@@ -134,6 +134,8 @@ enum Dialog {
     Health(Box<HealthView>),
     /// View > Who's writing.
     Writers(Box<WritersView>),
+    /// Home: everything important on one screen.
+    Home(Box<HomeView>),
     /// View > Where every GB is.
     Space(Box<xylem_session::SpaceReport>),
     /// Folders the scan couldn't read: (scan root, paths).
@@ -149,6 +151,8 @@ struct SavingsView {
     min_days: u16,
     sugg: savings::Suggestions,
     tips: Vec<savings::Tip>,
+    /// A recompute for a new `min_days`, running on a worker thread.
+    pending: Option<Receiver<savings::Suggestions>>,
 }
 
 /// The Scheduled scans dialog: the schedule being edited, whether the
@@ -263,6 +267,47 @@ impl WritersView {
         away.sort_by(|a, b| b.1.total_cmp(&a.1));
         away.truncate(8);
         Self { sampler: xylem_session::writes::Sampler::new(&disks.iter().map(|d| d.0).collect::<Vec<_>>()), last: Instant::now(), disks, away, away_runs: idle_runs.len(), advice: write_advice() }
+    }
+}
+
+/// Home: the drive at a glance. Built on a worker thread (Save space's
+/// tips take ~0.2 s on a whole drive).
+struct HomeView {
+    root: String,
+    /// (total, free) of the volume.
+    space: Option<(u64, u64)>,
+    nearly_full: Option<String>,
+    forecast: Option<String>,
+    /// Drive health verdict for this drive, if it reports one.
+    health: Option<(health::Level, String)>,
+    /// Top 3 ways to get space back: (title, bytes).
+    tips: Vec<(String, Option<u64>)>,
+    /// What Fast compression could save on old data (rough).
+    compress: Option<u64>,
+    /// The biggest items under the root: (node, name, bytes).
+    biggest: Vec<(u32, String, u64)>,
+}
+
+impl HomeView {
+    fn build(s: &Scanned) -> Self {
+        let root = s.summary().root;
+        let space = xylem_session::disk_space(&root);
+        let is_drive = root.len() == 3 && root.ends_with(":\\");
+        let nearly_full = space.and_then(|(t, f)| health::nearly_full(&root, t, f, health::is_ssd(&root) == Some(true)));
+        let forecast = if is_drive { history::load(&root).map(|h| history::forecast(&h.points).text(root.trim_end_matches('\\'))) } else { None };
+        let health = if is_drive {
+            let n = health::disk_of(&root);
+            health::drives().into_iter().find(|d| Some(d.number) == n).map(|d| d.verdict()).filter(|v| v.0 != health::Level::Unknown)
+        } else {
+            None
+        };
+        let mut tips: Vec<(String, Option<u64>)> = s.space_tips().into_iter().map(|t| (t.title, t.bytes)).collect();
+        tips.sort_by_key(|t| std::cmp::Reverse(t.1.unwrap_or(0)));
+        tips.truncate(3);
+        let sugg = s.compress_suggestions(180, SAVINGS_MIN, 200);
+        let compress = (sugg.not_possible.is_none() && !sugg.items.is_empty()).then(|| sugg.total(Level::Fast));
+        let biggest = s.list(0, 5).map(|l| l.items.into_iter().map(|i| (i.id, i.name, i.on_disk)).collect()).unwrap_or_default();
+        Self { root, space, nearly_full, forecast, health, tips, compress, biggest }
     }
 }
 
@@ -400,6 +445,10 @@ pub struct XylemApp {
     /// on a background thread at start.
     owners: Option<Arc<xylem_session::owners::Owners>>,
     owners_rx: Option<Receiver<xylem_session::owners::Owners>>,
+    /// Save space being worked out on a worker thread.
+    savings_rx: Option<Receiver<SavingsView>>,
+    /// Home being worked out on a worker thread.
+    home_rx: Option<Receiver<HomeView>>,
     /// Live updates: how often each folder changed (relative path) since `hot_since`.
     hot: std::collections::HashMap<String, u32>,
     hot_since: Instant,
@@ -495,6 +544,8 @@ impl XylemApp {
             links_cache: None,
             hist: None,
             owners: None,
+            savings_rx: None,
+            home_rx: None,
             owners_rx: {
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
@@ -929,6 +980,9 @@ impl XylemApp {
         if !warned.is_empty() && self.dialog.is_none() {
             self.dialog = Some(Dialog::Message("While you were away".into(), warned.join("
 ")));
+        }
+        if self.settings.home_at_start && self.dialog.is_none() {
+            self.open_home();
         }
         self.remembered_at = Some(r.time);
         self.changes = changes;
@@ -1407,6 +1461,27 @@ impl XylemApp {
                     self.dialog = Some(Dialog::Memory);
                     ui.close();
                 }
+                if ui.button("Keyboard shortcuts").clicked() {
+                    self.dialog = Some(Dialog::Message(
+                        "Keyboard shortcuts".into(),
+                        [
+                            "F5 · Scan (no admin)",
+                            "Ctrl+F5 · Fast scan (admin, whole NTFS drives)",
+                            "Ctrl+H · Home: the drive at a glance",
+                            "Ctrl+F · Filter by name",
+                            "↑ / ↓ · Move in the tree",
+                            "→ / ← · Open / close a folder (← on a closed one goes to its parent)",
+                            "Enter · Open or close the selected folder",
+                            "Backspace · Up one folder",
+                            "Space or Ctrl+click · Mark / unmark (to move several to the Recycle Bin at once)",
+                            "Delete · Move the selected or marked items to the Recycle Bin (always asks first)",
+                            "Esc · Close a window",
+                        ]
+                        .join("
+"),
+                    ));
+                    ui.close();
+                }
                 if ui.button("About Xylem").clicked() {
                     self.dialog = Some(Dialog::About);
                     ui.close();
@@ -1475,6 +1550,10 @@ impl XylemApp {
                 self.regroup();
             }
             ui.separator();
+            let home_key = ui.input(|i| i.modifiers.ctrl && i.key_pressed(Key::H));
+            if (ui.add_enabled(self.scanned.is_some(), egui::Button::new("Home")).on_hover_text("Everything important on one screen (Ctrl+H)").clicked() || home_key) && self.scanned.is_some() {
+                self.open_home();
+            }
             if ui
                 .add_enabled(self.scanned.is_some(), egui::Button::new("Save space"))
                 .on_hover_text("Ways to save space: what could be compressed, and other ways to get space back")
@@ -2079,12 +2158,79 @@ impl XylemApp {
     }
 
     /// View > Ways to save space (from the scan alone, well under a second on a full drive).
+    /// Save space: worked out on a worker thread (about 0.2 s on a whole
+    /// 1.7M-file drive), shown when ready.
     fn open_savings(&mut self) {
+        if self.savings_rx.is_some() {
+            return;
+        }
         if let Some(s) = &self.scanned {
-            let min_days = 180;
-            let sugg = s.compress_suggestions(min_days, SAVINGS_MIN, 200);
-            let tips = s.space_tips();
-            self.dialog = Some(Dialog::Savings(Box::new(SavingsView { tab: 0, min_days, sugg, tips })));
+            let s = s.clone(); // cheap: shared parts
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let min_days = 180;
+                let sugg = s.compress_suggestions(min_days, SAVINGS_MIN, 200);
+                let tips = s.space_tips();
+                let _ = tx.send(SavingsView { tab: 0, min_days, sugg, tips, pending: None });
+            });
+            self.savings_rx = Some(rx);
+            self.say("Finding ways to save space…");
+        }
+    }
+
+    fn open_home(&mut self) {
+        if self.home_rx.is_some() {
+            return;
+        }
+        if let Some(s) = &self.scanned {
+            let s = s.clone();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(HomeView::build(&s));
+            });
+            self.home_rx = Some(rx);
+        }
+    }
+
+    fn poll_home(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.home_rx else { return };
+        match rx.try_recv() {
+            Ok(v) => {
+                self.home_rx = None;
+                if self.dialog.is_none() {
+                    self.dialog = Some(Dialog::Home(Box::new(v)));
+                }
+            }
+            Err(TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(50)),
+            Err(TryRecvError::Disconnected) => self.home_rx = None,
+        }
+    }
+
+    fn poll_savings(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.savings_rx {
+            match rx.try_recv() {
+                Ok(v) => {
+                    self.savings_rx = None;
+                    if self.dialog.is_none() {
+                        self.dialog = Some(Dialog::Savings(Box::new(v)));
+                    }
+                    self.say("Ready.");
+                }
+                Err(TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(50)),
+                Err(TryRecvError::Disconnected) => self.savings_rx = None,
+            }
+        }
+        if let Some(Dialog::Savings(v)) = &mut self.dialog
+            && let Some(rx) = &v.pending
+        {
+            match rx.try_recv() {
+                Ok(sugg) => {
+                    v.sugg = sugg;
+                    v.pending = None;
+                }
+                Err(TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(50)),
+                Err(TryRecvError::Disconnected) => v.pending = None,
+            }
         }
     }
 
@@ -2525,6 +2671,9 @@ impl XylemApp {
             let legend_h = if legend.is_empty() { 0.0 } else { rows * 20.0 + 14.0 };
             let avail = ui.available_size();
             let (map_rect, resp) = ui.allocate_exact_size(vec2(full, (avail.y - legend_h).max(80.0)), Sense::click());
+            // Screen readers: the map is a picture; say what it shows and where the words are.
+            let root = self.summary.as_ref().map(|s| visible(&s.root)).unwrap_or_default();
+            map_resp_info(&resp, format!("{} map of {root}. The biggest items are listed below it and in the tree.", if self.settings.treemap { "Treemap" } else { "Sunburst" }));
 
             let kind = self.kind();
             let tree_hover = self.hover_tree.as_ref().and_then(|k| self.map_index(k));
@@ -2624,6 +2773,8 @@ impl XylemApp {
                     let cy = top + (k / 2) as f32 * 20.0 + 10.0;
                     let r = Rect::from_min_size(pos2(cx, cy - 9.0), vec2(col_w - 8.0, 18.0));
                     let resp = ui.interact(r, ui.scope_id().with(("leg", k)), Sense::click());
+                    let leg_label = format!("{name}: {} ({})", fmt_bytes(*bytes), fmt_pct(*bytes, *total));
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &leg_label));
                     if resp.hovered() {
                         lp.rect_filled(r, CornerRadius::same(3), t.hover);
                     }
@@ -3020,7 +3171,7 @@ impl XylemApp {
         let mut confirm: Option<u32> = None;
         let mut action: Option<&'static str> = None;
         let mut jump: Option<String> = None;
-        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_) | Dialog::Savings(_) | Dialog::Schedule(_) | Dialog::Growth(_) | Dialog::Health(_) | Dialog::Writers(_) | Dialog::Space(_) | Dialog::Unreadable(_));
+        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_) | Dialog::Savings(_) | Dialog::Schedule(_) | Dialog::Growth(_) | Dialog::Health(_) | Dialog::Writers(_) | Dialog::Space(_) | Dialog::Unreadable(_) | Dialog::Home(_));
         let mut leftover_marks: Option<Vec<u32>> = None;
         let mut tool_start: Option<(Action, bool)> = None;
         let mut dupes_start = false;
@@ -3135,6 +3286,80 @@ impl XylemApp {
                             }
                         });
                     }
+                }
+                Dialog::Home(h) => {
+                    ui.label(RichText::new(format!("{} at a glance", visible(&h.root))).font(theme::semibold(17.0)));
+                    ui.add_space(4.0);
+                    if let Some((total, free)) = h.space {
+                        let used = total.saturating_sub(free);
+                        ui.label(RichText::new(format!("{} used of {} · {} free", fmt_bytes(used), fmt_bytes(total), fmt_bytes(free))).font(theme::semibold(13.5)));
+                        let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 14.0), Sense::hover());
+                        let p = ui.painter_at(bar);
+                        p.rect_filled(bar, CornerRadius::same(5), t.head);
+                        let frac = (used as f64 / total.max(1) as f64) as f32;
+                        p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac, bar.height())), CornerRadius::same(5), if h.nearly_full.is_some() { theme::WARN } else { t.accent });
+                    }
+                    for line in [h.nearly_full.as_ref(), h.forecast.as_ref()].into_iter().flatten() {
+                        ui.add(egui::Label::new(RichText::new(line.as_str()).color(t.muted)).wrap());
+                    }
+                    if let Some((level, text)) = &h.health {
+                        let col = match level {
+                            Health::Good => t.accent,
+                            Health::Watch => theme::WARN,
+                            _ => theme::cat_color(5),
+                        };
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Drive health:").color(t.muted));
+                            if ui.add(egui::Label::new(RichText::new(text.as_str()).color(col)).sense(Sense::click())).on_hover_text("Open Drive health").clicked() {
+                                action = Some("health-refresh");
+                            }
+                        });
+                    }
+                    ui.add_space(10.0);
+                    ui.columns(3, |cols| {
+                        cols[0].label(RichText::new("What changed").font(theme::semibold(13.5)));
+                        match &self.changes {
+                            Some(ch) if !ch.items.is_empty() => {
+                                for c in ch.items.iter().take(3) {
+                                    let name = if c.path.is_empty() { visible(&h.root) } else { visible(&c.path) };
+                                    let r = cols[0].add(egui::Label::new(format!("{} {}", fmt_delta(c.delta()), name)).truncate().sense(Sense::click()));
+                                    if r.on_hover_text("Show it in the tree").clicked() {
+                                        jump = Some(c.path.clone());
+                                    }
+                                }
+                                if ch.hardlink_switch() {
+                                    cols[0].add(egui::Label::new(RichText::new("Partly because hardlinked files now count once.").color(theme::WARN).size(12.0)).wrap());
+                                }
+                                if cols[0].small_button("All changes…").clicked() {
+                                    action = Some("home-changes");
+                                }
+                            }
+                            Some(_) => {
+                                cols[0].label(RichText::new("Nothing changed by more than 1 MB since the previous scan.").color(t.faint));
+                            }
+                            None => {
+                                cols[0].add(egui::Label::new(RichText::new("No earlier scan to compare with yet. Scan again later, or turn on scheduled scans.").color(t.faint)).wrap());
+                            }
+                        }
+                        cols[1].label(RichText::new("Get space back").font(theme::semibold(13.5)));
+                        if let Some(b) = h.compress {
+                            cols[1].label(format!("Compress old data: about {}", fmt_bytes(b)));
+                        }
+                        for (title, bytes) in &h.tips {
+                            let b = bytes.map(|b| format!(" · {}", fmt_bytes(b))).unwrap_or_default();
+                            cols[1].add(egui::Label::new(format!("{title}{b}")).truncate());
+                        }
+                        if cols[1].small_button("Save space…").clicked() {
+                            action = Some("home-savings");
+                        }
+                        cols[2].label(RichText::new("Biggest here").font(theme::semibold(13.5)));
+                        for (id, name, bytes) in &h.biggest {
+                            let r = cols[2].add(egui::Label::new(format!("{} {}", fmt_bytes(*bytes), name)).truncate().sense(Sense::click()));
+                            if r.on_hover_text("Show it in the tree").clicked() {
+                                jump_node = Some(*id);
+                            }
+                        }
+                    });
                 }
                 Dialog::Space(r) => {
                     let drive = r.root.trim_end_matches('\\').to_owned();
@@ -3598,6 +3823,10 @@ impl XylemApp {
                             .color(theme::WARN),
                         );
                     }
+                    if ch.hardlink_switch() {
+                        ui.add_space(4.0);
+                        ui.add(egui::Label::new(RichText::new("This version of Xylem counts hardlinked files once (the same data under two names, mostly in Windows' WinSxS); the previous scan counted every name. Part of this drop is that, not deleted files.").color(theme::WARN)).wrap());
+                    }
                     ui.add_space(4.0);
                     let total = i128::from(ch.after_total) - i128::from(ch.before_total);
                     ui.label(format!("{} → {}  ({})", fmt_bytes(ch.before_total), fmt_bytes(ch.after_total), fmt_delta(total)));
@@ -3908,7 +4137,15 @@ impl XylemApp {
                                 if before != v.min_days
                                     && let Some(s) = &self.scanned
                                 {
-                                    v.sugg = s.compress_suggestions(v.min_days, SAVINGS_MIN, 200);
+                                    let (s, days) = (s.clone(), v.min_days);
+                                    let (tx, rx) = mpsc::channel();
+                                    std::thread::spawn(move || {
+                                        let _ = tx.send(s.compress_suggestions(days, SAVINGS_MIN, 200));
+                                    });
+                                    v.pending = Some(rx);
+                                }
+                                if v.pending.is_some() {
+                                    ui.label(RichText::new("Updating…").color(t.faint));
                                 }
                             });
                             if !v.sugg.has_arrival_dates {
@@ -4209,6 +4446,22 @@ impl XylemApp {
                         }
                         return;
                     }
+                    Dialog::Home(_) => {
+                        let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
+                        if ui.add(ok).clicked() {
+                            close = true;
+                        }
+                        if ui.button("Where every GB is…").clicked() {
+                            action = Some("home-space");
+                        }
+                        if ui.button("Size history…").clicked() {
+                            action = Some("home-history");
+                        }
+                        if ui.checkbox(&mut self.settings.home_at_start, "Show this when Xylem starts").changed() {
+                            self.settings.save();
+                        }
+                        return;
+                    }
                     Dialog::Space(r) => {
                         let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
                         if ui.add(ok).clicked() {
@@ -4429,6 +4682,18 @@ impl XylemApp {
                 }
             }
             Some("show-unreadable") => self.open_unreadable(),
+            Some("home-changes") => {
+                self.dialog = self.changes.clone().map(|c| Dialog::Changes(Box::new(c)));
+            }
+            Some("home-savings") => {
+                self.dialog = None;
+                self.open_savings();
+            }
+            Some("home-space") => self.open_space(),
+            Some("home-history") => {
+                self.dialog = None;
+                self.open_growth();
+            }
             Some("space-fast-scan") => {
                 self.dialog = None;
                 self.start_scan(true);
@@ -4672,6 +4937,8 @@ impl eframe::App for XylemApp {
         let ctx = ui.ctx().clone();
         self.poll_job(&ctx);
         self.poll_remember(&ctx);
+        self.poll_savings(&ctx);
+        self.poll_home(&ctx);
         if let Some(rx) = &self.owners_rx
             && let Ok(o) = rx.try_recv()
         {
@@ -4810,6 +5077,11 @@ fn size_chart(ui: &mut Ui, t: &Tokens, pts: &[(u64, u64)], size: egui::Vec2, axi
             remember::age_text(when)
         ));
     }
+}
+
+/// Gives the map's response a description for screen readers.
+fn map_resp_info(resp: &egui::Response, label: String) {
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, &label));
 }
 
 fn rel_of(root: &str, path: &str) -> Option<String> {

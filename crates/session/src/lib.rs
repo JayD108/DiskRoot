@@ -498,13 +498,14 @@ pub struct LiveResult {
 }
 
 /// One scan, classified, ready to answer UI questions.
+#[derive(Clone)]
 pub struct Scanned {
     /// Shared so the "remember this scan" thread can save it while the UI
     /// uses it; a delete copies it only if that save is still running.
     index: Arc<Index>,
-    children: Children,
-    cls: Classification,
-    cats: CatStats,
+    children: Arc<Children>,
+    cls: Arc<Classification>,
+    cats: Arc<CatStats>,
     stats: ScanStats,
     mode: String,
     classify_ms: f64,
@@ -528,7 +529,7 @@ impl Scanned {
             (children.join().expect("Children::build doesn't panic"), cls, cats)
         });
         let classify_ms = t.elapsed().as_secs_f64() * 1000.0;
-        Self { index: Arc::new(index), children, cls, cats, stats, mode, classify_ms, removed_dirs: 0, rules }
+        Self { index: Arc::new(index), children: Arc::new(children), cls: Arc::new(cls), cats: Arc::new(cats), stats, mode, classify_ms, removed_dirs: 0, rules }
     }
 
     /// An online-only cloud placeholder (e.g. OneDrive "Free up space").
@@ -576,8 +577,8 @@ impl Scanned {
     /// Classifies again with the current rules (after a rules reload).
     pub fn reclassify(&mut self) {
         self.rules = rules();
-        self.cls = Classification::run(&self.index, &self.rules);
-        self.cats = CatStats::compute(&self.index, &self.cls, self.rules.subs.len());
+        self.cls = Arc::new(Classification::run(&self.index, &self.rules));
+        self.cats = Arc::new(CatStats::compute(&self.index, &self.cls, self.rules.subs.len()));
     }
 
     /// "Mark all" for a sub-type ("sub:N"): its places that a rule labelled
@@ -795,7 +796,7 @@ It may be left over from an uninstalled program, or belong to one that's install
                 idx.resize_file(n, size, alloc, 0);
             }
         }
-        self.cats = CatStats::compute(&self.index, &self.cls, self.rules.subs.len());
+        self.cats = Arc::new(CatStats::compute(&self.index, &self.cls, self.rules.subs.len()));
     }
 
     /// View > Similar folders: likely copies and folders with similar names.
@@ -1188,7 +1189,7 @@ It may be left over from an uninstalled program, or belong to one that's install
             stack.extend(self.children.live(&self.index, x));
         }
         Arc::make_mut(&mut self.index).remove_subtree(node, &self.children);
-        self.cats = CatStats::compute(&self.index, &self.cls, self.rules.subs.len());
+        self.cats = Arc::new(CatStats::compute(&self.index, &self.cls, self.rules.subs.len()));
     }
 
     /// The `limit` largest files (size on disk), optionally only those whose
@@ -1353,7 +1354,7 @@ It may be left over from an uninstalled program, or belong to one that's install
             idx.remove_subtree(n, &self.children);
             res.removed += 1;
         }
-        self.cats = CatStats::compute(&self.index, &self.cls, self.rules.subs.len());
+        self.cats = Arc::new(CatStats::compute(&self.index, &self.cls, self.rules.subs.len()));
         res
     }
 

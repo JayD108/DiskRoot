@@ -27,6 +27,8 @@ pub struct Settings {
     pub free_when_minimized: bool,
     /// Scan in Windows' background mode so other programs stay fast.
     pub gentle_scan: bool,
+    /// Open Home (the overview) when Xylem starts with a remembered scan.
+    pub home_at_start: bool,
 }
 
 /// A size alert on a folder (checked after scans and live updates while
@@ -43,7 +45,7 @@ pub struct Alert {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { dark: false, treemap: false, by_category: false, last_path: "C:\\".into(), seen_notice: false, remember_scans: true, color_by_age: false, live_updates: true, alerts: Vec::new(), free_when_minimized: false, gentle_scan: false }
+        Self { dark: false, treemap: false, by_category: false, last_path: "C:\\".into(), seen_notice: false, remember_scans: true, color_by_age: false, live_updates: true, alerts: Vec::new(), free_when_minimized: false, gentle_scan: false, home_at_start: true }
     }
 }
 

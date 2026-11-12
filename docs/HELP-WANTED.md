@@ -68,8 +68,8 @@ How to measure: [CONTRIBUTING.md → How to contribute research](../CONTRIBUTING
 
 | # | What | Why | Where |
 |---|---|---|---|
-| U1 | **Screen-reader access to the map** and to menu items | The sunburst/treemap is mouse-only; menu popups aren't exposed to UI Automation | `crates/native` (egui + AccessKit) |
-| U2 | **Run Ways to save space off the UI thread** on huge drives | ~0.5 s on 1.7M files today; would grow on 10M | `app.rs` `open_savings` |
+| U1 | **Screen-reader access to menus** (the map, its legend and tree rows have names since 0.5.0) and testing with NVDA / Narrator | Menu popups aren't exposed to UI Automation yet | `crates/native` (egui + AccessKit) |
+| U2 | ~~Run Ways to save space off the UI thread~~ Done in 0.5.0 (worker thread). Still on the UI thread: Similar folders and Leftovers (~20 ms on 1.7M files) | Only matters on much bigger drives | `app.rs` |
 | U3 | **Translations** of the UI and the rule notes | English only | `rules.json`, `app.rs` |
 
 ## 5. Measurements anyone can help with
