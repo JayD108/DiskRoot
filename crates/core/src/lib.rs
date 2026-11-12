@@ -241,9 +241,9 @@ impl Index {
             return Err("node 0 must be a root folder".into());
         }
         u32::try_from(n).map_err(|_| "more than 4 billion nodes")?;
-        for i in 1..n {
-            if c.parent[i] as usize >= i {
-                return Err(format!("node {i} has parent {} (must be smaller)", c.parent[i]));
+        for (i, &p) in c.parent.iter().enumerate().take(n).skip(1) {
+            if p as usize >= i {
+                return Err(format!("node {i} has parent {p} (must be smaller)"));
             }
         }
         for i in 0..n {
