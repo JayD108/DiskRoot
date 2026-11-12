@@ -1,4 +1,4 @@
-<img src="https://raw.githubusercontent.com/JayD108/DiskRoot/main/docs/logo/diskroot-logo-512.png" alt="DiskRoot" width="96">
+<img src="https://raw.githubusercontent.com/JayD108/DiskRoot/main/docs/logo/diskroot-logo.png" alt="DiskRoot" width="96">
 
 **DiskRoot {{VERSION}}**: a fast disk space analyzer for Windows 10/11. It shows what fills your drive, what each thing is, and whether it's safe to delete.
 
