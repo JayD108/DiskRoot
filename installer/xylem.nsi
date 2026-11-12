@@ -14,7 +14,7 @@
 
 Unicode true
 !ifndef VERSION
-  !define VERSION "0.4.1"
+  !define VERSION "0.5.0"
 !endif
 !ifndef SRCDIR
   !define SRCDIR "..\target\release"

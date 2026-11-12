@@ -2,7 +2,22 @@
 
 **Xylem {{VERSION}}**: a fast disk space analyzer for Windows 10/11. It shows what fills your drive, what each thing is, and whether it's safe to delete.
 
-## New in 0.4.1
+## New in 0.5.0
+Xylem now shows not only what fills your drive, but how the drive is doing and what wears it, and it can keep watch by itself. Everything still works without admin, offline, read-only.
+
+- **Home (Ctrl+H):** the drive at a glance when Xylem opens: how full, when it would be full, drive health, what changed, the top ways to get space back, the biggest items.
+- **Drive health (View → Drive health):** each SSD's own report in plain words: % of rated life used, data written and read, temperature, spare blocks, errors, TRIM. Writes per day over time, an honest life estimate (a range, only once there's data), and what you'd lose if the drive failed. Also `xylem-cli health`.
+- **Who's writing (View → Who's writing):** the programs writing to your drives right now and while the PC is idle, next to the drive's own counter, and the folders that change most. Known offenders are flagged with what to do (e.g. AMD's `atieclxx.exe` bug of Nov 2026, Samsung 990 PRO firmware 0B2QJXD7), with sources. Also `xylem-cli writes`.
+- **Scheduled scans (View → Scheduled scans):** Xylem can scan by itself every 30 minutes or more (it recommends how often), no admin, no window, nothing left running. When you open it: what changed while you were away. Optional notifications: low free space, fast growth, a program writing a lot while idle, a weekly report (each at most once a day/week).
+- **Size history and forecast (View → Size history):** a chart for the drive and every folder, what grew in the last day/week/month, "C: would be full in about 40–70 days" (after a week of scans, never a date), log files that keep growing. Also `xylem-cli history`.
+- **Where every GB is:** the drive's used space against what the scan counted, what the difference is, and the list of folders a normal scan couldn't read.
+- **Hardlinks counted once in the normal scan:** e.g. C:\Windows 46 → 36 GB on our test PC. Your first scan after updating shows that drop once in What changed (it says why).
+- **Smarter categories:** code projects (Node, Rust, Python, .NET, Java, Gradle, CMake, Go, Unreal) with their rebuildable parts marked safe to clear, AI models, datasets (csv, jsonl, ...), databases, temp files and unfinished downloads. "Unclassified" on our test drive: 22.8 → 1.6 GB. **Belongs to:** which installed program or Steam/Epic game a folder is part of. **Teach Xylem:** right-click a folder → This is… (my project, a dataset, a game, ...).
+- **Light on your PC:** Xylem's own RAM and CPU in the status bar, free its memory with one click (the scan stays saved), gentle scanning, Save space and Home worked out off the UI thread.
+- **Fixed:** a normal scan whose description mentioned the MFT was taken for a Fast scan in What changed (no warning when comparing the two methods).
+- Keyboard shortcuts list (Help), screen-reader names for the map and its legend.
+
+## In 0.4.1
 - **One download, everything ready:** the installer now puts `xylem-cli` on PATH, so it works in any new terminal right after installing (the uninstaller removes exactly that entry again).
 - **Always-latest links:** `xylem-setup.exe` and `xylem-portable.zip` on every release, so https://github.com/JayD108/Xylem/releases/latest/download/xylem-setup.exe always gives the newest version.
 - **Compress skips hardlinked files** (their data is shared with names that may be outside the folder you chose).
