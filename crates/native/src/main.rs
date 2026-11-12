@@ -7,16 +7,20 @@
 //!   window (see `diskroot_session::helper`).
 //!
 //! The UI is egui (immediate mode, OpenGL): no browser engine, one process,
-//! and it only redraws on input, so an idle window costs ~nothing.
+//! and it only redraws on input, so an idle window costs ~nothing. On a PC
+//! where OpenGL can't start (no graphics driver), it draws on the CPU
+//! instead (`soft.rs`); `DISKROOT_RENDERER=software` forces that.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
 mod map;
 mod settings;
+mod soft;
 mod theme;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui::{IconData, ViewportBuilder};
 
@@ -89,14 +93,11 @@ fn main() {
     }
 
     let icon = IconData { rgba: include_bytes!("../assets/icon-64.rgba").to_vec(), width: 64, height: 64 };
-    let options = eframe::NativeOptions {
-        viewport: ViewportBuilder::default()
-            .with_title("DiskRoot")
-            .with_inner_size([1360.0, 860.0])
-            .with_min_inner_size([960.0, 600.0])
-            .with_icon(Arc::new(icon)),
-        ..Default::default()
-    };
+    let viewport = ViewportBuilder::default()
+        .with_title("DiskRoot")
+        .with_inner_size([1360.0, 860.0])
+        .with_min_inner_size([960.0, 600.0])
+        .with_icon(Arc::new(icon));
     // Explorer's right-click menu passes "%V"; for a drive that is "C:\",
     // which Windows' argument rules turn into `C:"`. Drop the stray quote.
     let start = args
@@ -104,11 +105,51 @@ fn main() {
         .map(|a| a.trim().trim_end_matches('"'))
         .filter(|a| !a.is_empty() && !a.starts_with('-'))
         .map(str::to_owned);
-    let result = eframe::run_native("DiskRoot", options, Box::new(move |cc| Ok(Box::new(app::DiskRootApp::new(cc, start)))));
-    if let Err(e) = result {
-        eprintln!("DiskRoot could not start: {e}");
-        std::process::exit(1);
+
+    let forced = std::env::var("DISKROOT_RENDERER").ok();
+    if forced.as_deref() == Some("software") {
+        if let Err(e) = soft::run(viewport, Box::new(move |ctx| app::DiskRootApp::with_context(ctx, start))) {
+            eprintln!("DiskRoot could not start: {e}");
+            std::process::exit(1);
+        }
+        return;
     }
+
+    // Normal path: OpenGL. Set once the app exists, so a failure after that
+    // (a real bug) isn't mistaken for "no OpenGL here".
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    let mut options = eframe::NativeOptions { viewport, ..Default::default() };
+    if std::env::var_os("DISKROOT_TEST_GL_FAIL").is_some() {
+        // Test hook: no driver offers this, so OpenGL setup fails like on a
+        // PC without a graphics driver.
+        options.multisampling = 128;
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        eframe::run_native(
+            "DiskRoot",
+            options,
+            Box::new(move |cc| {
+                STARTED.store(true, Ordering::SeqCst);
+                Ok(Box::new(app::DiskRootApp::new(cc, start)))
+            }),
+        )
+    }));
+    let failed = match &result {
+        Ok(Ok(())) => return,
+        Ok(Err(e)) => e.to_string(),
+        Err(_) => "OpenGL setup panicked".into(),
+    };
+    if !STARTED.load(Ordering::SeqCst) && forced.is_none() {
+        // OpenGL couldn't start: open again, drawn on the CPU. A new process,
+        // because a window event loop can't be created twice in one.
+        if let Ok(exe) = std::env::current_exe()
+            && std::process::Command::new(exe).args(&args[1..]).env("DISKROOT_RENDERER", "software").spawn().is_ok()
+        {
+            return;
+        }
+    }
+    eprintln!("DiskRoot could not start: {failed}");
+    std::process::exit(1);
 }
 
 #[cfg(test)]

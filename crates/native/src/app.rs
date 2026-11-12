@@ -520,11 +520,16 @@ impl Footprint {
 
 impl DiskRootApp {
     pub fn new(cc: &eframe::CreationContext<'_>, start: Option<String>) -> Self {
-        theme::install_fonts(&cc.egui_ctx);
+        Self::with_context(&cc.egui_ctx, start)
+    }
+
+    /// The app on any driver (eframe/OpenGL or the CPU renderer).
+    pub fn with_context(ctx: &egui::Context, start: Option<String>) -> Self {
+        theme::install_fonts(ctx);
         // Upgrading from the previous version: move its settings and saved scans first.
         let migrated = diskroot_session::migrate_previous();
         let settings = Settings::load();
-        theme::apply(&cc.egui_ctx, if settings.dark { Theme::Dark } else { Theme::Light });
+        theme::apply(ctx, if settings.dark { Theme::Dark } else { Theme::Light });
         let mut app = Self {
             path: start.clone().unwrap_or_else(|| settings.last_path.clone()),
             settings,
@@ -555,7 +560,7 @@ impl DiskRootApp {
             marked: BTreeSet::new(),
             links_cache: None,
             hist: None,
-            egui_ctx: cc.egui_ctx.clone(),
+            egui_ctx: ctx.clone(),
             ssd_cache: std::collections::HashMap::new(),
             owners: None,
             savings_rx: None,
@@ -570,7 +575,7 @@ impl DiskRootApp {
             hot: std::collections::HashMap::new(),
             hot_since: Instant::now(),
             hist_cache: None,
-            logo: cc.egui_ctx.load_texture(
+            logo: ctx.load_texture(
                 "diskroot-logo",
                 egui::ColorImage::from_rgba_unmultiplied([128, 128], include_bytes!("../assets/logo-128.rgba")),
                 egui::TextureOptions::LINEAR,
@@ -4998,6 +5003,13 @@ impl Columns {
 
 impl eframe::App for DiskRootApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        self.show(ui);
+    }
+}
+
+impl DiskRootApp {
+    /// One frame of the whole app, on any driver.
+    pub fn show(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let _bench = bench_frame(&ctx, self.scanned.is_some());
         self.poll_job(&ctx);
@@ -5149,7 +5161,9 @@ fn size_chart(ui: &mut Ui, t: &Tokens, pts: &[(u64, u64)], size: egui::Vec2, axi
 /// intervals and UI build times (ms) to DISKROOT_BENCH_OUT and closes.
 struct BenchGuard(Instant);
 
-static BENCH: std::sync::Mutex<Option<(Instant, Instant, Vec<f32>, Vec<f32>)>> = std::sync::Mutex::new(None);
+/// Benchmark state: start, last frame, frame intervals, build times (ms).
+type BenchState = (Instant, Instant, Vec<f32>, Vec<f32>);
+static BENCH: std::sync::Mutex<Option<BenchState>> = std::sync::Mutex::new(None);
 
 impl Drop for BenchGuard {
     fn drop(&mut self) {

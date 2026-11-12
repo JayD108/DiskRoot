@@ -12,6 +12,10 @@ path = "src/main.rs"
 [dependencies]
 diskroot-session.workspace = true
 eframe.workspace = true
+# CPU renderer (soft.rs): same window/input layer eframe uses, drawn via GDI.
+egui-winit = { version = "0.37", default-features = false, features = ["accesskit"] }
+winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
+softbuffer = { version = "0.4", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 
