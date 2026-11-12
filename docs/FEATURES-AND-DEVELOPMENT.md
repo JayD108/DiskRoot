@@ -246,6 +246,8 @@ cargo build --release --workspace                  # ~2-3 min (fat LTO)
 - `--by disk|size`: sort by size on disk or logical size.
 - `--top N`, `--json`, `--export all.csv`, `--threads N`.
 
+Setup (PATH), every option, JSON/CSV formats and script examples: [CLI.md](CLI.md).
+
 ## 11. Tests
 ```powershell
 cargo test --workspace                                       # ~90 tests: unit, integration, built-in fuzz

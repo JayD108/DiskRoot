@@ -71,7 +71,7 @@ Download **`xylem-setup-<version>.exe`** from [Releases](https://github.com/JayD
 6. Next time, Xylem reopens your last scan instantly. Press **Scan** again, then **View → What changed** to see what grew.
 7. **Move to Recycle Bin…** (or the Delete key) and **Compress…** ask before doing anything.
 
-Every feature, explained with what happens underneath: [docs/FEATURES-AND-DEVELOPMENT.md](docs/FEATURES-AND-DEVELOPMENT.md). There's also a command-line tool, `xylem-cli.exe`.
+Every feature, explained with what happens underneath: [docs/FEATURES-AND-DEVELOPMENT.md](docs/FEATURES-AND-DEVELOPMENT.md). There's also a command-line tool, `xylem-cli.exe`: [docs/CLI.md](docs/CLI.md) shows how to set it up and every command.
 
 ## Safety and privacy
 
@@ -93,6 +93,7 @@ Free code signing provided by [SignPath.io](https://about.signpath.io/), certifi
 | [Security and privacy](docs/SECURITY-AND-PRIVACY.md) | What Xylem reads and never does, admin rights, safe delete, Windows' own tools, your data on disk |
 | [Features and development](docs/FEATURES-AND-DEVELOPMENT.md) | Every feature: what it does, how to use it, what happens underneath. Building, tests, project layout |
 | [Roadmap](docs/ROADMAP.md) | Releases, planned features and what's next |
+| [Command line](docs/CLI.md) | Set up `xylem-cli`, every command and option, JSON and CSV formats, script examples |
 | [Benchmarks](docs/BENCHMARKS.md) | Speed against WizTree, WinDirStat and eDirStat, and compression measured per file type, with the method |
 | [Contributing](CONTRIBUTING.md) | How to help, the rules every change keeps, and the **call for compression research** |
 | [Help wanted](docs/HELP-WANTED.md) | Everything Xylem needs next: compression problems with measurements, known gaps, testing |
