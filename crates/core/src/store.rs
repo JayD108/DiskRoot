@@ -23,6 +23,13 @@ fn bad(msg: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, format!("index file: {msg}"))
 }
 
+/// What the caller knows about the stream's length.
+#[derive(Clone, Copy)]
+enum Len {
+    Exact(u64),
+    AtMost(u64),
+}
+
 impl Index {
     /// Writes the index plus scan stats and a mode label.
     pub fn save(&self, stats: &ScanStats, mode: &str, w: &mut impl Write) -> io::Result<()> {
@@ -73,7 +80,14 @@ impl Index {
     /// header match `file_len` exactly, so a corrupt header can't make us
     /// allocate gigabytes before failing.
     pub fn load_checked(r: &mut impl Read, file_len: u64) -> io::Result<(Index, ScanStats, String)> {
-        Self::load_inner(r, Some(file_len))
+        Self::load_inner(r, Some(Len::Exact(file_len)))
+    }
+
+    /// Like `load_checked` for a stream whose exact length isn't known
+    /// (a compressed file): the header must promise at most `max_len`
+    /// bytes, and the caller checks that the stream ends right after.
+    pub fn load_checked_max(r: &mut impl Read, max_len: u64) -> io::Result<(Index, ScanStats, String)> {
+        Self::load_inner(r, Some(Len::AtMost(max_len)))
     }
 
     /// Reads an index written by [`Index::save`], with totals computed.
@@ -81,7 +95,7 @@ impl Index {
         Self::load_inner(r, None)
     }
 
-    fn load_inner(r: &mut impl Read, file_len: Option<u64>) -> io::Result<(Index, ScanStats, String)> {
+    fn load_inner(r: &mut impl Read, file_len: Option<Len>) -> io::Result<(Index, ScanStats, String)> {
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
         let v1 = &magic == MAGIC_V1;
@@ -111,7 +125,11 @@ impl Index {
         if let Some(len) = file_len {
             // magic + 7 header words + mode length + mode + columns + names
             let expected = 8 + 7 * 8 + 4 + mode_len as u64 + n as u64 * (4 + 8 + 8 + 1 + 4 + 2 + 2 * dates) + name_bytes as u64;
-            if expected != len {
+            let ok = match len {
+                Len::Exact(l) => expected == l,
+                Len::AtMost(l) => expected <= l,
+            };
+            if !ok {
                 return Err(bad("size doesn't match its header"));
             }
         }

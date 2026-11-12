@@ -112,3 +112,10 @@ unsafe extern "system" {
         restart_scan: u8,
     ) -> i32;
 }
+
+#[link(name = "kernel32", kind = "raw-dylib")]
+unsafe extern "system" {
+    pub fn GetVolumePathNameW(file: *const u16, vol: *mut u16, len: u32) -> i32;
+    pub fn GetDriveTypeW(root: *const u16) -> u32;
+    pub fn GetVolumeInformationW(root: *const u16, name: *mut u16, name_len: u32, serial: *mut u32, max_comp: *mut u32, fs_flags: *mut u32, fs_name: *mut u16, fs_len: u32) -> i32;
+}

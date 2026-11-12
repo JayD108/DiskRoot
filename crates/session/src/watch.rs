@@ -92,6 +92,12 @@ impl Drop for Owned {
 impl Watcher {
     /// Starts watching `root` and everything below it.
     pub fn start(root: &str) -> Result<Self, String> {
+        Self::start_with_wake(root, Box::new(|| {}))
+    }
+
+    /// Like `start`, and calls `wake` after each event is sent (so the app
+    /// can redraw only when something happened instead of polling).
+    pub fn start_with_wake(root: &str, wake: Box<dyn Fn() + Send>) -> Result<Self, String> {
         let wide: Vec<u16> = root.encode_utf16().chain([0]).collect();
         // SAFETY: NUL-terminated path; the handle is checked below.
         let h = unsafe {
@@ -112,13 +118,13 @@ impl Watcher {
         let s2 = Arc::clone(&stop);
         std::thread::Builder::new()
             .name("xylem-watch".into())
-            .spawn(move || run(&dir, &ev, &s2, &tx))
+            .spawn(move || run(&dir, &ev, &s2, &tx, &*wake))
             .map_err(|e| e.to_string())?;
         Ok(Self { stop, rx })
     }
 }
 
-fn run(dir: &Owned, ev: &Owned, stop: &AtomicBool, tx: &Sender<Event>) {
+fn run(dir: &Owned, ev: &Owned, stop: &AtomicBool, tx: &Sender<Event>, wake: &dyn Fn()) {
     // DWORD-aligned buffer, 64 KB (the limit for network shares).
     let mut buf = vec![0u64; 8192];
     let len = (buf.len() * 8) as u32;
@@ -133,6 +139,7 @@ fn run(dir: &Owned, ev: &Owned, stop: &AtomicBool, tx: &Sender<Event>) {
         let ok = unsafe { ReadDirectoryChangesW(dir.0, buf.as_mut_ptr().cast(), len, 1, NOTIFY, null_mut(), &mut ov, null_mut()) };
         if ok == 0 {
             let _ = tx.send(Event::Stopped(std::io::Error::last_os_error().to_string()));
+            wake();
             return;
         }
         // Wait in short slices so stop and the batch timer are honoured.
@@ -151,12 +158,13 @@ fn run(dir: &Owned, ev: &Owned, stop: &AtomicBool, tx: &Sender<Event>) {
                 }
                 return;
             }
-            flush(&mut pending, &mut overflow, &mut last_send, tx);
+            flush(&mut pending, &mut overflow, &mut last_send, tx, wake);
         }
         let mut n = 0u32;
         // SAFETY: the read completed (event signalled).
         if unsafe { GetOverlappedResult(dir.0, &mut ov, &mut n, 0) } == 0 {
             let _ = tx.send(Event::Stopped(std::io::Error::last_os_error().to_string()));
+            wake();
             return;
         }
         if n == 0 {
@@ -169,11 +177,11 @@ fn run(dir: &Owned, ev: &Owned, stop: &AtomicBool, tx: &Sender<Event>) {
         if stop.load(Ordering::Relaxed) {
             return;
         }
-        flush(&mut pending, &mut overflow, &mut last_send, tx);
+        flush(&mut pending, &mut overflow, &mut last_send, tx, wake);
     }
 }
 
-fn flush(pending: &mut HashSet<String>, overflow: &mut bool, last: &mut Instant, tx: &Sender<Event>) {
+fn flush(pending: &mut HashSet<String>, overflow: &mut bool, last: &mut Instant, tx: &Sender<Event>, wake: &dyn Fn()) {
     if last.elapsed() < BATCH || (pending.is_empty() && !*overflow) {
         return;
     }
@@ -183,6 +191,7 @@ fn flush(pending: &mut HashSet<String>, overflow: &mut bool, last: &mut Instant,
     } else {
         let _ = tx.send(Event::Changed(pending.drain().collect()));
     }
+    wake();
     *last = Instant::now();
 }
 

@@ -6,6 +6,7 @@
 //! folder", "is this safe to delete") is a method here, so the UI never
 //! holds the full tree.
 
+pub mod cachefile;
 pub mod compress;
 pub mod dupes;
 pub mod history;
@@ -268,13 +269,44 @@ fn mode_text(used: &Used) -> String {
     }
 }
 
-/// Scans a drive or folder in this process (MFT if possible, else walk).
+/// Scans a drive or folder in this process (always a folder walk; Fast scan
+/// goes through the admin helper).
 /// Blocking: call it from a worker thread.
 pub fn scan(path: &str) -> Result<Scanned, String> {
     let path = real_path(path)?;
     let threads = xylem_scan_walk::default_threads();
-    let (s, used) = scan_auto(Path::new(&path), Mode::Auto, threads).map_err(|e| format!("Scan failed: {e}"))?;
+    // Always a folder walk in this process, even if it was started as admin:
+    // reading the raw drive (MFT) happens only in the locked-down helper.
+    let (s, used) = scan_auto(Path::new(&path), Mode::Walk, threads).map_err(|e| format!("Scan failed: {e}"))?;
     Ok(Scanned::new(s.index, s.stats, mode_text(&used)))
+}
+
+/// Whether this process runs with admin rights (an elevated token). The
+/// window isn't meant to: it warns when someone starts it that way.
+pub fn is_elevated() -> bool {
+    #[link(name = "advapi32", kind = "raw-dylib")]
+    unsafe extern "system" {
+        fn OpenProcessToken(p: *mut std::ffi::c_void, access: u32, token: *mut *mut std::ffi::c_void) -> i32;
+        fn GetTokenInformation(t: *mut std::ffi::c_void, class: u32, info: *mut std::ffi::c_void, len: u32, ret: *mut u32) -> i32;
+    }
+    #[link(name = "kernel32", kind = "raw-dylib")]
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> *mut std::ffi::c_void;
+        fn CloseHandle(h: *mut std::ffi::c_void) -> i32;
+    }
+    const TOKEN_QUERY: u32 = 0x8;
+    const TOKEN_ELEVATION: u32 = 20;
+    let mut tok = std::ptr::null_mut();
+    // SAFETY: pseudo-handle of this process; out pointer valid; closed below.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut tok) } == 0 {
+        return false;
+    }
+    let mut elevated = 0u32;
+    let mut ret = 0u32;
+    // SAFETY: TOKEN_ELEVATION is one DWORD.
+    let ok = unsafe { GetTokenInformation(tok, TOKEN_ELEVATION, (&raw mut elevated).cast(), 4, &mut ret) } != 0;
+    unsafe { CloseHandle(tok) };
+    ok && elevated != 0
 }
 
 /// The real, full path of what the user typed: short 8.3 names
@@ -1341,7 +1373,9 @@ It may be left over from an uninstalled program, or belong to one that's install
             let meta = std::fs::symlink_metadata(&full);
             match (self.find_rel(rel), meta) {
                 (Some(n), Err(e)) if e.kind() == std::io::ErrorKind::NotFound && n != 0 => remove.push(n),
-                (Some(n), Ok(m)) if m.is_file() && !self.index.is_dir(n) && self.index.flags(n) & flags::LINK == 0 => {
+                // An extra name of a hardlinked file stays 0 B: its data counts once,
+                // under its other name.
+                (Some(n), Ok(m)) if m.is_file() && !self.index.is_dir(n) && self.index.flags(n) & (flags::LINK | flags::HARDLINK) == 0 => {
                     let size = m.len();
                     let alloc = live_alloc(&full, size, self.index.flags(n));
                     let mt = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| (d.as_secs() / 86_400).min(u64::from(u16::MAX)) as u16);

@@ -208,7 +208,13 @@ pub fn run_now(exe: &Path) -> Result<(), String> {
 /// background scanning under ~0.1% of the PC's time) and how fast the
 /// drive changes (no point scanning hourly if little changes in a day).
 /// `secs`: duration of a normal scan; `bytes_per_day`: average change.
-pub fn recommend(secs: Option<f64>, bytes_per_day: Option<f64>) -> (u32, String) {
+/// SSD writes Xylem allows itself for background scans: about 1 GB a day.
+const WRITE_BUDGET_PER_DAY: f64 = 1024.0 * 1024.0 * 1024.0;
+
+/// `saved`: bytes one run writes to save its result (the compressed
+/// remembered scan, snapshot and history). Background scans keep Xylem's
+/// own SSD writes under ~1 GB a day.
+pub fn recommend(secs: Option<f64>, bytes_per_day: Option<f64>, saved: Option<u64>) -> (u32, String) {
     let snap = |m: f64| *CHOICES.iter().find(|&&c| f64::from(c) >= m).unwrap_or(&1440);
     let Some(secs) = secs.filter(|s| *s > 0.0) else {
         return (120, "Every 2 hours is a good start; Xylem refines this after a few scans.".into());
@@ -222,13 +228,22 @@ pub fn recommend(secs: Option<f64>, bytes_per_day: Option<f64>) -> (u32, String)
         Some(_) => (720, "it changes little from day to day"),
         None => (by_cost, ""),
     };
-    let m = by_cost.max(by_change);
+    let by_writes = saved.map_or(MIN_MINUTES, |b| snap((b as f64 * 1440.0 / WRITE_BUDGET_PER_DAY).max(f64::from(MIN_MINUTES))));
+    let m = by_cost.max(by_change).max(by_writes);
     let every = |m: u32| if m < 60 { format!("{m} minutes") } else if m == 60 { "hour".into() } else if m < 1440 { format!("{} hours", m / 60) } else { "day".into() };
     let mut reason = format!("A scan takes about {secs:.0} s, so every {} keeps background scanning under 0.1% of your PC's time", every(m));
     if !why.is_empty() {
         reason.push_str(&format!(", and {why}"));
     }
     reason.push('.');
+    if let Some(b) = saved.filter(|&b| b > 0) {
+        let per_day = b as f64 * 1440.0 / f64::from(m);
+        reason.push_str(&format!(
+            " Each run saves about {} on this PC (about {} of SSD writes a day at this pace).",
+            xylem_core::format::bytes(b),
+            xylem_core::format::bytes(per_day as u64)
+        ));
+    }
     (m, reason)
 }
 
@@ -346,15 +361,20 @@ mod tests {
 
     #[test]
     fn recommendations_respect_cost_change_and_the_minimum() {
-        assert_eq!(recommend(Some(7.0), None).0, 120, "7 s scan: ~2 h for 0.1%");
-        assert_eq!(recommend(Some(1.0), None).0, 30, "never below 30 minutes");
-        assert_eq!(recommend(Some(60.0), None).0, 1440, "slow scans: daily");
+        assert_eq!(recommend(Some(7.0), None, None).0, 120, "7 s scan: ~2 h for 0.1%");
+        assert_eq!(recommend(Some(1.0), None, None).0, 30, "never below 30 minutes");
+        assert_eq!(recommend(Some(60.0), None, None).0, 1440, "slow scans: daily");
         let gb = 1024.0 * 1024.0 * 1024.0;
-        assert_eq!(recommend(Some(7.0), Some(0.3 * gb)).0, 720, "little change: twice a day");
-        assert_eq!(recommend(Some(7.0), Some(30.0 * gb)).0, 120, "lots of change, but cost still decides the floor");
-        assert_eq!(recommend(Some(1.0), Some(30.0 * gb)).0, 60);
-        assert_eq!(recommend(None, None).0, 120);
-        assert!(recommend(Some(7.0), None).1.contains("7 s"));
+        assert_eq!(recommend(Some(7.0), Some(0.3 * gb), None).0, 720, "little change: twice a day");
+        assert_eq!(recommend(Some(7.0), Some(30.0 * gb), None).0, 120, "lots of change, but cost still decides the floor");
+        assert_eq!(recommend(Some(1.0), Some(30.0 * gb), None).0, 60);
+        assert_eq!(recommend(None, None, None).0, 120);
+        assert!(recommend(Some(7.0), None, None).1.contains("7 s"));
+        // Writes: a 45 MB save every 30 min would be ~2 GB a day; capped near 1 GB.
+        let (m, why) = recommend(Some(1.0), Some(30.0 * gb), Some(45 << 20));
+        assert_eq!(m, 120, "{why}");
+        assert!(why.contains("Each run saves about 45.0 MB") && why.contains("540 MB of SSD writes a day"), "{why}");
+        assert_eq!(recommend(Some(1.0), Some(30.0 * gb), Some(1 << 20)).0, 60, "tiny saves don't slow it down");
     }
 
     #[test]

@@ -12,3 +12,5 @@ xylem-scan-mft.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 blake3 = { version = "1", default-features = false, features = ["std"] }
+# Compresses Xylem's own cache files (pure Rust, MIT).
+lz4_flex = "0.14"

@@ -16,9 +16,9 @@
 //! never leaves the PC.
 
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{self, BufReader, BufWriter, Read, Write};
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::io::{self, Read, Write};
+use std::path::PathBuf;
 
 use serde::Serialize;
 
@@ -514,7 +514,8 @@ pub fn path(root: &str) -> Option<PathBuf> {
 /// The history of `root`, if there is one (and it isn't damaged).
 pub fn load(root: &str) -> Option<History> {
     let p = path(root)?;
-    let h = History::load(&mut BufReader::with_capacity(1 << 20, File::open(p).ok()?)).ok()?;
+    let (mut r, _) = crate::cachefile::open(&p).ok()?;
+    let h = History::load(&mut r).ok()?;
     (key(&h.root) == key(root)).then_some(h)
 }
 
@@ -525,7 +526,7 @@ pub fn record(snap: &Snapshot) -> io::Result<()> {
     let mut h = load(&snap.root).unwrap_or_else(|| History::new(&snap.root));
     h.add(snap, crate::disk_space(&snap.root));
     h.thin(snap.time);
-    write_atomic(&p, |w| h.save(w))
+    crate::cachefile::write(&p, |mut w| h.save(&mut w))
 }
 
 /// Deletes the history of `root`.
@@ -540,23 +541,6 @@ pub fn disk_usage() -> u64 {
     let Some(dir) = cache_dir() else { return 0 };
     let Ok(entries) = fs::read_dir(dir) else { return 0 };
     entries.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".hist")).filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum()
-}
-
-fn write_atomic(path: &Path, f: impl FnOnce(&mut BufWriter<File>) -> io::Result<()>) -> io::Result<()> {
-    if let Some(d) = path.parent() {
-        fs::create_dir_all(d)?;
-    }
-    let tmp = path.with_extension("hist.tmp");
-    let mut w = BufWriter::with_capacity(1 << 20, File::create(&tmp)?);
-    let r = f(&mut w).and_then(|()| w.flush());
-    drop(w);
-    match r {
-        Ok(()) => fs::rename(&tmp, path),
-        Err(e) => {
-            let _ = fs::remove_file(&tmp);
-            Err(e)
-        }
-    }
 }
 
 fn write_str(w: &mut impl Write, s: &str) -> io::Result<()> {

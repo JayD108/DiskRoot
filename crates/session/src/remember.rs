@@ -15,8 +15,8 @@
 //! are never slower.
 
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::fs;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -364,31 +364,16 @@ fn paths(root: &str) -> Option<(PathBuf, PathBuf, PathBuf)> {
     Some((dir.join(format!("{k}.idx")), dir.join(format!("{k}.snap")), dir.join(format!("{k}.prev.snap"))))
 }
 
-/// Writes to a temporary file and renames it into place, so a crash or a
-/// full disk never leaves a half-written cache file behind.
-fn write_atomic(path: &Path, f: impl FnOnce(&mut BufWriter<File>) -> io::Result<()>) -> io::Result<()> {
-    let tmp = path.with_extension("tmp");
-    let mut w = BufWriter::with_capacity(1 << 20, File::create(&tmp)?);
-    let r = f(&mut w).and_then(|()| w.flush());
-    drop(w);
-    match r {
-        Ok(()) => fs::rename(&tmp, path),
-        Err(e) => {
-            let _ = fs::remove_file(&tmp);
-            Err(e)
-        }
-    }
-}
-
 fn load_snap(path: &Path) -> Option<Snapshot> {
-    Snapshot::load(&mut BufReader::new(File::open(path).ok()?)).ok()
+    let (mut r, _) = crate::cachefile::open(path).ok()?;
+    Snapshot::load(&mut r).ok()
 }
 
 /// The scan time stored in a snapshot's header, without reading the rest
 /// (reopen needs only this; parsing the whole C: snapshot cost ~46 ms).
 fn snap_time(path: &Path) -> Option<u64> {
     let mut head = [0u8; 16];
-    File::open(path).ok()?.read_exact(&mut head).ok()?;
+    crate::cachefile::open(path).ok()?.0.read_exact(&mut head).ok()?;
     (&head[..8] == SNAP_MAGIC || &head[..8] == SNAP_MAGIC_V1).then(|| u64::from_le_bytes(head[8..].try_into().expect("8 bytes")))
 }
 
@@ -400,6 +385,8 @@ pub fn remember(idx: &Arc<Index>, stats: &ScanStats, mode: &str) -> io::Result<O
     let (idx_path, snap_path, prev_path) = paths(&root).ok_or_else(|| io::Error::other("no LOCALAPPDATA"))?;
     fs::create_dir_all(idx_path.parent().expect("cache dir"))?;
     let mode = with_hardlink_note(&mode.replace(" via admin helper", ""));
+    // The app and a scheduled scan may finish together: one writer at a time.
+    let _lock = crate::cachefile::Lock::take().ok_or_else(|| io::Error::other("another Xylem is saving a scan; try again"))?;
     let mut snap = Snapshot::of(idx);
     snap.mode.clone_from(&mode);
     let prev = load_snap(&snap_path).filter(|p| p.root.eq_ignore_ascii_case(&root));
@@ -407,8 +394,8 @@ pub fn remember(idx: &Arc<Index>, stats: &ScanStats, mode: &str) -> io::Result<O
         let _ = fs::remove_file(&prev_path);
         fs::rename(&snap_path, &prev_path)?;
     }
-    write_atomic(&snap_path, |w| snap.save(w))?;
-    write_atomic(&idx_path, |w| idx.save(stats, &mode, w))?;
+    crate::cachefile::write(&snap_path, |mut w| snap.save(&mut w))?;
+    crate::cachefile::write(&idx_path, |mut w| idx.save(stats, &mode, &mut w))?;
     // Size history is extra: a failure there never fails remembering.
     let _ = crate::history::record(&snap);
     crate::logs::record(idx, snap.time);
@@ -423,7 +410,8 @@ pub fn save_index(idx: &Index, stats: &ScanStats, mode: &str) -> io::Result<()> 
     let (idx_path, _, _) = paths(idx.name(0)).ok_or_else(|| io::Error::other("no LOCALAPPDATA"))?;
     fs::create_dir_all(idx_path.parent().expect("cache dir"))?;
     let mode = with_hardlink_note(&mode.replace(" via admin helper", ""));
-    write_atomic(&idx_path, |w| idx.save(stats, &mode, w))
+    let _lock = crate::cachefile::Lock::take().ok_or_else(|| io::Error::other("another Xylem is saving a scan; try again"))?;
+    crate::cachefile::write(&idx_path, |mut w| idx.save(stats, &mode, &mut w))
 }
 
 fn seen_path(root: &str) -> Option<PathBuf> {
@@ -436,7 +424,12 @@ fn seen_path(root: &str) -> Option<PathBuf> {
 pub fn keep_seen(root: &str) {
     let (Some((_, snap, _)), Some(seen)) = (paths(root), seen_path(root)) else { return };
     if !seen.exists() && snap.exists() {
-        let _ = fs::copy(&snap, &seen);
+        // A second name for the same data, not a copy: writes nothing. The
+        // next save renames the snapshot away and writes a new file, so this
+        // name keeps the old one.
+        if fs::hard_link(&snap, &seen).is_err() {
+            let _ = fs::copy(&snap, &seen);
+        }
     }
 }
 
@@ -462,9 +455,16 @@ pub fn has_index(root: &str) -> bool {
 /// The remembered scan of `root`, if any: (index, stats, mode, scan time).
 pub fn reopen(root: &str) -> Option<(Index, ScanStats, String, u64)> {
     let (idx_path, snap_path, _) = paths(root)?;
-    let f = File::open(&idx_path).ok()?;
-    let len = f.metadata().ok()?.len();
-    let (index, stats, mode) = Index::load_checked(&mut BufReader::with_capacity(1 << 20, f), len).ok()?;
+    let (mut r, max) = crate::cachefile::open(&idx_path).ok()?;
+    let (index, stats, mode) = match max {
+        // Compressed: the header may promise at most what lz4 can expand to,
+        // and the stream must end right after the index.
+        Some(max) => {
+            let loaded = Index::load_checked_max(&mut r, max).ok()?;
+            crate::cachefile::at_end(&mut r).then_some(loaded)?
+        }
+        None => Index::load_checked(&mut r, fs::metadata(&idx_path).ok()?.len()).ok()?,
+    };
     if !index.name(0).eq_ignore_ascii_case(root.trim()) && key(index.name(0)) != key(root) {
         return None;
     }

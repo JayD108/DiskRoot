@@ -44,9 +44,28 @@ const OFF_NAME: usize = 68;
 // FILE_ID_FULL_DIR_INFORMATION: the same, then FileId (8-byte aligned) and the name.
 const OFF_FILE_ID: usize = 72;
 const OFF_NAME_WITH_ID: usize = 80;
-/// Whether listings with file IDs work on this volume (cleared on the first
-/// "not supported", e.g. FAT/exFAT, which have no hardlinks anyway).
-static IDS_OK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+/// Whether file IDs can be trusted to find hardlinks on this volume: only a
+/// local NTFS volume. ReFS IDs are 128-bit (the listing gives 64 bits) and
+/// network shares report the server's own IDs, so there every name counts.
+fn ids_trusted(display_root: &str) -> bool {
+    let w: Vec<u16> = display_root.encode_utf16().chain([0]).collect();
+    let mut vol = [0u16; 300];
+    let mut fs = [0u16; 64];
+    // SAFETY: NUL-terminated input, buffers with their lengths in characters.
+    unsafe {
+        if crate::ffi::GetVolumePathNameW(w.as_ptr(), vol.as_mut_ptr(), vol.len() as u32) == 0 {
+            return false;
+        }
+        if crate::ffi::GetDriveTypeW(vol.as_ptr()) == 4 {
+            return false; // DRIVE_REMOTE
+        }
+        if crate::ffi::GetVolumeInformationW(vol.as_ptr(), std::ptr::null_mut(), 0, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), fs.as_mut_ptr(), fs.len() as u32) == 0 {
+            return false;
+        }
+    }
+    let n = fs.iter().position(|&c| c == 0).unwrap_or(fs.len());
+    String::from_utf16_lossy(&fs[..n]).eq_ignore_ascii_case("NTFS")
+}
 
 const BACKSLASH: u16 = b'\\' as u16;
 
@@ -190,6 +209,8 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> io::Result<Scan> {
     let mut stats = ScanStats::default();
     // (file ID, node) of every file: hardlinks are counted once at the end.
     let mut file_ids: Vec<(u64, u32)> = Vec::new();
+    // Per scan: whether to ask for file IDs (and whether they still work).
+    let ids_ok = std::sync::atomic::AtomicBool::new(ids_trusted(&display));
     let threads = opts.threads.max(1);
 
     let stack = Stack::new();
@@ -198,6 +219,7 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> io::Result<Scan> {
     thread::scope(|s| {
         for _ in 0..threads {
             let stack = &stack;
+            let ids_ok = &ids_ok;
             let res_tx = res_tx.clone();
             s.spawn(move || {
                 if GENTLE.load(std::sync::atomic::Ordering::Relaxed) {
@@ -211,7 +233,7 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> io::Result<Scan> {
                     let node = task.node;
                     // A bug in one folder must not hang the whole scan.
                     let listing =
-                        panic::catch_unwind(AssertUnwindSafe(|| list_dir(&task, &mut buf, &mut units)))
+                        panic::catch_unwind(AssertUnwindSafe(|| list_dir(&task, &mut buf, &mut units, ids_ok)))
                             .unwrap_or_else(|_| Listing { node, unreadable: true, ..Default::default() });
                     if res_tx.send(listing).is_err() {
                         break;
@@ -260,7 +282,9 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> io::Result<Scan> {
         stack.close(); // lets the workers' loops end
     });
 
-    count_hardlinks_once(&mut index, file_ids);
+    if ids_ok.load(std::sync::atomic::Ordering::Relaxed) {
+        count_hardlinks_once(&mut index, file_ids);
+    }
     index.compute_totals();
     stats.elapsed = start.elapsed();
     Ok(Scan { index, stats })
@@ -407,7 +431,7 @@ fn open_dir(task: &Task) -> Option<OwnedHandle> {
     Some(unsafe { OwnedHandle::from_raw_handle(raw) })
 }
 
-fn list_dir(task: &Task, buf: &mut [u64], units: &mut Vec<u16>) -> Listing {
+fn list_dir(task: &Task, buf: &mut [u64], units: &mut Vec<u16>, ids_ok: &std::sync::atomic::AtomicBool) -> Listing {
     let mut out = Listing { node: task.node, ..Default::default() };
     let Some(handle) = open_dir(task) else {
         out.unreadable = true;
@@ -416,7 +440,7 @@ fn list_dir(task: &Task, buf: &mut [u64], units: &mut Vec<u16>) -> Listing {
 
     let buf_bytes = buf.len() * 8;
     let mut restart = true;
-    let mut ids = IDS_OK.load(std::sync::atomic::Ordering::Relaxed);
+    let mut ids = ids_ok.load(std::sync::atomic::Ordering::Relaxed);
     loop {
         let mut iosb = IoStatusBlock::default();
         // SAFETY: the handle is open for listing and was opened without
@@ -439,7 +463,7 @@ fn list_dir(task: &Task, buf: &mut [u64], units: &mut Vec<u16>) -> Listing {
         } as u32;
         if ids && restart && matches!(status, STATUS_INVALID_INFO_CLASS | STATUS_NOT_SUPPORTED | STATUS_INVALID_PARAMETER) {
             // This file system can't list file IDs: plain listings from now on.
-            IDS_OK.store(false, std::sync::atomic::Ordering::Relaxed);
+            ids_ok.store(false, std::sync::atomic::Ordering::Relaxed);
             ids = false;
             continue;
         }

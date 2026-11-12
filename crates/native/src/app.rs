@@ -447,6 +447,10 @@ pub struct XylemApp {
     links_cache: Option<(u32, Vec<String>)>,
     /// Size history of the scanned root (folders of 1 MB or more).
     hist: Option<Arc<History>>,
+    /// For waking the window from other threads (live updates).
+    egui_ctx: egui::Context,
+    /// Drive letter -> is it an SSD (for the nearly-full hint).
+    ssd_cache: std::collections::HashMap<String, Option<bool>>,
     /// Which program or game folders belong to ("Belongs to"); loaded once
     /// on a background thread at start.
     owners: Option<Arc<xylem_session::owners::Owners>>,
@@ -549,6 +553,8 @@ impl XylemApp {
             marked: BTreeSet::new(),
             links_cache: None,
             hist: None,
+            egui_ctx: cc.egui_ctx.clone(),
+            ssd_cache: std::collections::HashMap::new(),
             owners: None,
             savings_rx: None,
             home_rx: None,
@@ -584,6 +590,15 @@ impl XylemApp {
             app.start_scan(false);
         } else if app.settings.remember_scans {
             app.start_reopen();
+        }
+        // Started with "Run as administrator": say so. Everything still works
+        // (scans in this window stay folder walks; Fast scan still uses the
+        // locked-down helper), but deleting and the rest run with admin rights.
+        if xylem_session::is_elevated() && app.dialog.is_none() {
+            app.dialog = Some(Dialog::Message(
+                "Xylem is running as administrator".into(),
+                "Xylem doesn't need this, and it's safer without it: started this way, everything this window does (deleting, Compress, Windows' tools) runs with admin rights. Scans here stay normal folder walks, and Fast scan still goes through its locked-down helper.\n\nClose Xylem and start it normally (not with \"Run as administrator\") next time.".into(),
+            ));
         }
         app
     }
@@ -827,7 +842,10 @@ impl XylemApp {
             let sum = s.summary();
             let top = s.list(0, 5).map(|l| l.items.into_iter().map(|i| (i.id, i.name, i.on_disk, i.cat)).collect()).unwrap_or_default();
             let space = xylem_session::disk_space(&sum.root);
-            let nearly_full = space.and_then(|(total, free)| health::nearly_full(&sum.root, total, free, health::is_ssd(&sum.root) == Some(true)));
+            // Asked once per drive letter, not at every refresh (live updates).
+            let letter = sum.root.get(..1).unwrap_or("").to_uppercase();
+            let ssd = *self.ssd_cache.entry(letter).or_insert_with(|| health::is_ssd(&sum.root));
+            let nearly_full = space.and_then(|(total, free)| health::nearly_full(&sum.root, total, free, ssd == Some(true)));
             DriveBar { space, root: sum.root, scanned: sum.on_disk, top, nearly_full }
         });
     }
@@ -857,7 +875,8 @@ impl XylemApp {
             return;
         }
         if let Some(sum) = &self.summary {
-            match xylem_session::watch::Watcher::start(&sum.root) {
+            let ctx = self.egui_ctx.clone();
+            match xylem_session::watch::Watcher::start_with_wake(&sum.root, Box::new(move || ctx.request_repaint())) {
                 Ok(w) => self.watcher = Some(w),
                 Err(e) => self.say(format!("Live updates are off for this scan: {e}")),
             }
@@ -868,7 +887,7 @@ impl XylemApp {
     fn poll_watch(&mut self, ctx: &egui::Context) {
         use xylem_session::watch::Event;
         let Some(w) = &self.watcher else { return };
-        ctx.request_repaint_after(Duration::from_secs(1));
+        let _ = ctx; // the watcher wakes the window when something changed
         if self.job.is_some() {
             return;
         }
@@ -2327,7 +2346,9 @@ impl XylemApp {
             }
             _ => None,
         };
-        schedule::recommend(secs, per_day)
+        // What one save of this root writes (measured from its cache files).
+        let saved = sum.and_then(|s| remember::cache_dir().map(|d| xylem_session::cachefile::bytes_written_per_save(&d, &remember::key(&s.root)))).filter(|&b| b > 0);
+        schedule::recommend(secs, per_day, saved)
     }
 
     fn open_similar(&mut self) {
@@ -3272,6 +3293,15 @@ impl XylemApp {
                         });
                     });
                     ui.add_space(6.0);
+                    // A portable copy can be moved or deleted; the task would then fail
+                    // silently, and no uninstaller removes it.
+                    let installed_copy = std::env::current_exe().ok().is_some_and(|e| {
+                        let pf = std::env::var("ProgramFiles").unwrap_or_default().to_lowercase();
+                        !pf.is_empty() && e.to_string_lossy().to_lowercase().starts_with(&pf)
+                    });
+                    if !installed_copy {
+                        ui.add(egui::Label::new(RichText::new("This is a portable copy: the scheduled task runs this very file. If you move or delete it, turn scheduled scans off here first (no uninstaller removes the task for you).").color(theme::WARN).size(12.0)).wrap());
+                    }
                     let state = if v.installed { "On: a Windows scheduled task runs it for your account." } else { "Off." };
                     ui.label(RichText::new(state).color(if v.installed { t.accent } else { t.muted }));
                     if let Some(m) = &v.msg {
