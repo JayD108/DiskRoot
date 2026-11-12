@@ -227,10 +227,28 @@ struct RefTotals {
     unreadable: u64,
 }
 
+#[link(name = "kernel32", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn GetFileInformationByHandle(h: *mut std::ffi::c_void, info: *mut [u32; 13]) -> i32;
+}
+
+/// (number of names, (volume serial, file index)) of a file, via
+/// GetFileInformationByHandle on a handle opened for attributes only.
+fn link_id(p: &Path) -> Option<(u32, (u32, u64))> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    let f = fs::OpenOptions::new().access_mode(0x80).share_mode(7).open(p).ok()?;
+    let mut info = [0u32; 13];
+    // SAFETY: valid handle; BY_HANDLE_FILE_INFORMATION is 13 DWORDs.
+    (unsafe { GetFileInformationByHandle(f.as_raw_handle(), &mut info) } != 0)
+        .then(|| (info[10], (info[7], (u64::from(info[11]) << 32) | u64::from(info[12]))))
+}
+
 /// Plain single-threaded walk with std::fs. Like xylem, it does not follow
 /// symlinks or junctions (std treats both as symlinks on Windows).
 fn reference_walk(root: &Path) -> RefTotals {
     let mut t = RefTotals::default();
+    let mut seen: std::collections::HashSet<(u32, u64)> = std::collections::HashSet::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let Ok(rd) = fs::read_dir(&dir) else {
@@ -243,7 +261,13 @@ fn reference_walk(root: &Path) -> RefTotals {
                 stack.push(entry.path());
             } else if ft.is_file() {
                 t.files += 1;
-                t.size += entry.metadata().map(|m| m.len()).unwrap_or(0);
+                // A file with several names (hardlinks) counts its bytes once,
+                // like Xylem's walk (asked file by file here, independently).
+                let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                match link_id(&entry.path()) {
+                    Some((links, id)) if links > 1 && !seen.insert(id) => {}
+                    _ => t.size += len,
+                }
             }
         }
     }
