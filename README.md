@@ -149,7 +149,7 @@ Method and more numbers: [BENCHMARKS.md](docs/BENCHMARKS.md).
 | 👀 **Read-only scanning** | Folders are opened for listing only, drives read-only. A scan never changes your files; DiskRoot saves its own scans (compressed) in `%LOCALAPPDATA%\DiskRoot`. |
 | ✋ **Nothing without your OK** | Delete goes to the Recycle Bin after you confirm, Compress is undoable, Save space only suggests. Windows and Program Files are locked, even under other spellings of the path. |
 | 🔐 **Least privilege** | The window doesn't need admin (started as admin, it warns). Only a short-lived, locked-down helper reads the raw drive, after the Windows prompt. Scheduled scans never ask for admin. |
-| 🧪 **Tested every release** | 141 tests, 2 million fuzz rounds per file parser, checks for network sockets, read-only scanning and planted DLLs, and a real install / upgrade / uninstall on a clean Windows machine. |
+| 🧪 **Tested every release** | 148 tests, 2 million fuzz rounds per file parser, checks for network sockets, read-only scanning and planted DLLs, and a real install / upgrade / uninstall on a clean Windows machine. |
 | ⚠️ **"Windows protected your PC"** | Releases aren't code-signed yet, so SmartScreen may warn: click **More info → Run anyway**. Every file is built by GitHub Actions from this repository; check it against `SHA256SUMS.txt` on the release page. |
 
 Details: [SECURITY-AND-PRIVACY.md](docs/SECURITY-AND-PRIVACY.md) · report a problem privately: [SECURITY.md](SECURITY.md).
