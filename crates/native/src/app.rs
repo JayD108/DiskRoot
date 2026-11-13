@@ -162,6 +162,8 @@ enum Page {
     Map,
     /// Home: the drive at a glance, as its own page.
     Home,
+    /// Drive health, as its own page.
+    Health,
 }
 
 /// What was picked in the palette.
@@ -202,8 +204,6 @@ enum Dialog {
     Schedule(Box<ScheduleView>),
     /// View > Size history.
     Growth(Box<GrowthView>),
-    /// View > Drive health.
-    Health(Box<HealthView>),
     /// View > Who's writing.
     Writers(Box<WritersView>),
     /// View > Where every GB is.
@@ -558,6 +558,8 @@ pub struct DiskRootApp {
     page: Page,
     /// Home's numbers, worked out on a worker thread when it opens.
     home: Option<HomeView>,
+    /// The drives' own reports, read when the Drive health page opens.
+    health_view: Option<Box<HealthView>>,
     /// The command palette (Ctrl+K), when open.
     palette: Option<Palette>,
     /// Save space badge: the biggest single way to get space back (bytes, what).
@@ -677,6 +679,7 @@ impl DiskRootApp {
             focus: false,
             page: Page::Map,
             home: None,
+            health_view: None,
             toasts: Vec::new(),
             test_palette: std::env::var("DISKROOT_TEST_PALETTE").ok(),
             palette: None,
@@ -2566,7 +2569,8 @@ impl DiskRootApp {
             let root = s.summary().root;
             (root.len() == 3 && root.ends_with(":\\")).then(|| (root.trim_end_matches('\\').to_owned(), s.at_risk()))
         });
-        self.dialog = Some(Dialog::Health(Box::new(v)));
+        self.health_view = Some(Box::new(v));
+        self.page = Page::Health;
     }
 
     fn open_unreadable(&mut self) {
@@ -3795,7 +3799,7 @@ impl DiskRootApp {
         let mut confirm: Option<u32> = None;
         let mut action: Option<&'static str> = None;
         let mut jump: Option<String> = None;
-        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_) | Dialog::Savings(_) | Dialog::Schedule(_) | Dialog::Growth(_) | Dialog::Health(_) | Dialog::Writers(_) | Dialog::Space(_) | Dialog::Unreadable(_));
+        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_) | Dialog::Savings(_) | Dialog::Schedule(_) | Dialog::Growth(_) | Dialog::Writers(_) | Dialog::Space(_) | Dialog::Unreadable(_));
         let mut leftover_marks: Option<Vec<u32>> = None;
         let mut tool_start: Option<(Action, bool)> = None;
         let mut dupes_start = false;
@@ -4079,76 +4083,6 @@ impl DiskRootApp {
                         }
                     }
                     });
-                }
-                Dialog::Health(v) => {
-                    let (drives, trim) = (&v.drives, &v.trim);
-                    ui.label(RichText::new("Drive health").font(theme::semibold(16.0)));
-                    ui.add(egui::Label::new(RichText::new("What the drives report about themselves: how much of their rated life is used, how much was written, temperature and errors. DiskRoot only asks for these reports; it changes nothing and needs no admin.").color(t.muted)).wrap());
-                    ui.add_space(6.0);
-                    egui::ScrollArea::vertical().id_salt("health").max_height(420.0).show(ui, |ui| {
-                        if drives.is_empty() {
-                            ui.label(RichText::new("Windows didn't list any drives.").color(t.faint));
-                        }
-                        for (d, trend) in drives {
-                            let kind = match d.ssd {
-                                Some(true) => format!("{} SSD", d.bus),
-                                Some(false) => format!("{} hard disk", d.bus),
-                                None => d.bus.clone(),
-                            };
-                            let letters = if d.letters.is_empty() { "no drive letter".to_owned() } else { d.letters.join(" ") };
-                            ui.label(RichText::new(format!("{letters} · {} · {kind}", if d.model.is_empty() { "unknown model" } else { &d.model })).font(theme::semibold(13.5)));
-                            let (level, text) = d.verdict();
-                            let col = match level {
-                                Health::Good => t.accent,
-                                Health::Watch => theme::WARN,
-                                Health::Bad => theme::cat_color(5),
-                                Health::Unknown => t.muted,
-                            };
-                            ui.add(egui::Label::new(RichText::new(text).color(col).font(theme::semibold(13.0))).wrap());
-                            for f in d.facts() {
-                                ui.add(egui::Label::new(RichText::new(f).color(t.muted)).wrap());
-                            }
-                            if let Some(tr) = trend {
-                                match tr.per_day {
-                                    Some(b) => {
-                                        ui.horizontal(|ui| {
-                                            ui.label(format!("Writes: about {} a day (last {:.0} days)", fmt_bytes(b as u64), tr.days.min(30.0)));
-                                            if tr.daily.len() >= 2 {
-                                                size_chart(ui, &t, &tr.daily, vec2(180.0, 22.0), false);
-                                            }
-                                        });
-                                    }
-                                    None => {
-                                        ui.label(RichText::new("Writes per day: shown after two days of notes (DiskRoot notes the numbers once a day when it scans).").color(t.faint));
-                                    }
-                                }
-                                ui.add(egui::Label::new(RichText::new(tr.life.as_str())).wrap());
-                            }
-                            if let Some((letter, items)) = &v.at_risk
-                                && d.letters.iter().any(|l| l.eq_ignore_ascii_case(letter))
-                                && !items.is_empty()
-                            {
-                                let list = items.iter().map(|(k, b, f)| format!("{k} {} ({})", fmt_bytes(*b), fmt_files(*f))).collect::<Vec<_>>().join(" · ");
-                                let urgent = level != Health::Good && level != Health::Unknown;
-                                ui.add(egui::Label::new(RichText::new(format!("If {letter} failed, this would be lost unless you have a copy somewhere else: {list} (OneDrive folders aren't counted here). Keep a copy (File History, OneDrive, an external drive){}", if urgent { ", now" } else { "" }) + ".").color(if urgent { theme::WARN } else { t.muted })).wrap());
-                            }
-                            if let Some(o) = diskroot_session::offenders::for_drive(&d.model, &d.firmware) {
-                                ui.add(egui::Label::new(RichText::new(format!("⚠ {}: {} {}", o.title, o.what, o.todo)).color(theme::WARN)).wrap())
-                                    .on_hover_text(format!("Checked {} against:\n{}", o.checked, o.sources.join("\n")));
-                            }
-                            if !d.firmware.is_empty() {
-                                ui.label(RichText::new(format!("Disk {} · firmware {}", d.number, d.firmware)).color(t.faint).size(11.5));
-                            }
-                            ui.add_space(8.0);
-                        }
-                    });
-                    let trim_text = match trim {
-                        Some(true) => "Windows sends TRIM to SSDs (on, as it should be).",
-                        Some(false) => "Windows TRIM is turned off. SSDs stay faster and wear less with it on: run \"fsutil behavior set DisableDeleteNotify 0\" as admin to turn it back on.",
-                        None => "Couldn't read whether Windows sends TRIM.",
-                    };
-                    ui.add(egui::Label::new(RichText::new(trim_text).color(if *trim == Some(false) { theme::WARN } else { t.muted })).wrap());
-                    ui.add(egui::Label::new(RichText::new("\"Rated life used\" is the drive's own estimate from its flash wear; a drive often keeps working past 100%. \"Written\" is what Windows sent to it.").color(t.faint).size(11.5)).wrap());
                 }
                 Dialog::Growth(v) => {
                     ui.label(RichText::new("Size history").font(theme::semibold(16.0)));
@@ -5043,16 +4977,6 @@ impl DiskRootApp {
                         }
                         return;
                     }
-                    Dialog::Health(_) => {
-                        let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
-                        if ui.add(ok).clicked() {
-                            close = true;
-                        }
-                        if ui.button("Check again").clicked() {
-                            action = Some("health-refresh");
-                        }
-                        return;
-                    }
                     Dialog::Growth(_) => {
                         let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
                         if ui.add(ok).clicked() {
@@ -5408,7 +5332,7 @@ impl DiskRootApp {
             let (f, esc) = ctx.input(|i| (i.key_pressed(Key::F) && i.modifiers.is_none(), i.key_pressed(Key::Escape)));
             if f && self.page == Page::Map {
                 self.focus = !self.focus;
-            } else if esc && self.page == Page::Home {
+            } else if esc && self.page != Page::Map {
                 self.page = Page::Map;
             } else if esc && self.focus {
                 self.focus = false;
@@ -5953,6 +5877,126 @@ impl DiskRootApp {
         ui.allocate_rect(area, Sense::hover());
     }
 
+    /// Drive health as a page: one card per drive (verdict, facts, writes per
+    /// day, life estimate, what you'd lose), then TRIM and what the words mean.
+    fn health_page(&mut self, ui: &mut Ui) {
+        let t = self.tokens();
+        let Some(v) = &self.health_view else { return };
+        let mut go: Option<&'static str> = None;
+        let card = |t: &Tokens| Frame::new().fill(t.panel).stroke(Stroke::new(1.0, t.line)).corner_radius(CornerRadius::same(t.radius + 4)).inner_margin(Margin::same(18));
+        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            Frame::new().inner_margin(Margin::same(20)).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("Drive health").font(theme::semibold(24.0)));
+                        ui.label(RichText::new("What your drives report about themselves. DiskRoot only reads these reports: it changes nothing and needs no admin.").color(t.muted));
+                    });
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button("Back to the map  (Esc)").clicked() {
+                            go = Some("map");
+                        }
+                        if ui.button("Who's writing…").on_hover_text("Which programs write to your drives, also while the PC is idle").clicked() {
+                            go = Some("writers");
+                        }
+                        if ui.button("Check again").clicked() {
+                            go = Some("refresh");
+                        }
+                    });
+                });
+                ui.add_space(14.0);
+                if v.drives.is_empty() {
+                    card(&t).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(RichText::new("Windows didn't list any drives.").color(t.faint));
+                    });
+                }
+                for (d, trend) in &v.drives {
+                    let (level, verdict) = d.verdict();
+                    let col = match level {
+                        Health::Good => t.accent,
+                        Health::Watch => theme::WARN,
+                        Health::Bad => theme::cat_color(5),
+                        Health::Unknown => t.muted,
+                    };
+                    card(&t).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        let kind = match d.ssd {
+                            Some(true) => format!("{} SSD", d.bus),
+                            Some(false) => format!("{} hard disk", d.bus),
+                            None => d.bus.clone(),
+                        };
+                        let letters = if d.letters.is_empty() { "No drive letter".to_owned() } else { d.letters.join(" ") };
+                        ui.horizontal(|ui| {
+                            let (dot, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
+                            ui.painter().circle_filled(dot.center(), 6.0, col);
+                            ui.label(RichText::new(letters).font(theme::semibold(18.0)));
+                            ui.label(RichText::new(format!("{} · {kind}", if d.model.is_empty() { "unknown model" } else { &d.model })).color(t.muted));
+                        });
+                        ui.add_space(4.0);
+                        ui.add(egui::Label::new(RichText::new(verdict).color(col).font(theme::semibold(16.0))).wrap());
+                        ui.add_space(8.0);
+                        ui.columns(2, |cols| {
+                            for f in d.facts() {
+                                plain_note(&mut cols[0], RichText::new(f).color(t.text));
+                            }
+                            if !d.firmware.is_empty() {
+                                plain_note(&mut cols[0], RichText::new(format!("Disk {} · firmware {}", d.number, d.firmware)).color(t.faint).size(11.5));
+                            }
+                            if let Some(tr) = trend {
+                                cols[1].label(RichText::new("Written per day").color(t.muted));
+                                match tr.per_day {
+                                    Some(b) => {
+                                        cols[1].label(RichText::new(format!("about {}", fmt_bytes(b as u64))).font(theme::num(18.0)));
+                                        if tr.daily.len() >= 2 {
+                                            let w = cols[1].available_width().min(420.0);
+                                            size_chart(&mut cols[1], &t, &tr.daily, vec2(w, 70.0), true);
+                                        }
+                                        plain_note(&mut cols[1], RichText::new(format!("last {:.0} days", tr.days.min(30.0))).color(t.faint).size(11.5));
+                                    }
+                                    None => plain_note(&mut cols[1], RichText::new("Shown after two days of notes (DiskRoot notes the numbers once a day when it scans).").color(t.faint)),
+                                }
+                                cols[1].add_space(6.0);
+                                plain_note(&mut cols[1], RichText::new(tr.life.as_str()).color(t.text));
+                            }
+                        });
+                        if let Some((letter, items)) = &v.at_risk
+                            && d.letters.iter().any(|l| l.eq_ignore_ascii_case(letter))
+                            && !items.is_empty()
+                        {
+                            let list = items.iter().map(|(k, b, f)| format!("{k} {} ({})", fmt_bytes(*b), fmt_files(*f))).collect::<Vec<_>>().join(" · ");
+                            let urgent = level != Health::Good && level != Health::Unknown;
+                            ui.add_space(8.0);
+                            plain_note(ui, RichText::new(format!("If {letter} failed, this would be lost unless you have a copy somewhere else: {list} (OneDrive folders aren't counted here). Keep a copy (File History, OneDrive, an external drive){}.", if urgent { ", now" } else { "" })).color(if urgent { theme::WARN } else { t.muted }));
+                        }
+                        if let Some(o) = diskroot_session::offenders::for_drive(&d.model, &d.firmware) {
+                            ui.add_space(6.0);
+                            ui.add(egui::Label::new(RichText::new(format!("⚠ {}: {} {}", o.title, o.what, o.todo)).color(theme::WARN)).wrap())
+                                .on_hover_text(format!("Checked {} against:\n{}", o.checked, o.sources.join("\n")));
+                        }
+                    });
+                    ui.add_space(12.0);
+                }
+                card(&t).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    let trim_text = match v.trim {
+                        Some(true) => "Windows sends TRIM to SSDs (on, as it should be).",
+                        Some(false) => "Windows TRIM is turned off. SSDs stay faster and wear less with it on: run \"fsutil behavior set DisableDeleteNotify 0\" as admin to turn it back on.",
+                        None => "Couldn't read whether Windows sends TRIM.",
+                    };
+                    plain_note(ui, RichText::new(trim_text).color(if v.trim == Some(false) { theme::WARN } else { t.text }));
+                    ui.add_space(4.0);
+                    plain_note(ui, RichText::new("\"Rated life used\" is the drive's own estimate from its flash wear; a drive often keeps working past 100%. \"Written\" is what Windows sent to it.").color(t.faint).size(11.5));
+                });
+            });
+        });
+        match go {
+            Some("map") => self.page = Page::Map,
+            Some("refresh") => self.open_health(),
+            Some("writers") => self.dialog = Some(Dialog::Writers(Box::new(WritersView::open()))),
+            _ => {}
+        }
+    }
+
     /// Home as a page: the drive at a glance, four answers, then what
     /// changed, ways to get space back and the biggest items.
     fn home_page(&mut self, ui: &mut Ui) {
@@ -6381,13 +6425,20 @@ impl DiskRootApp {
         // (Ctrl+B, Ctrl+J); Focus (F) shows only the map.
         let scanning = self.job.as_ref().is_some_and(|j| matches!(j.kind, JobKind::Scan(_) | JobKind::Fast(_) | JobKind::Reopen(_)));
         let home = self.page == Page::Home && self.scanned.is_some() && self.home.is_some() && !scanning;
+        let health = self.page == Page::Health && self.health_view.is_some() && !scanning;
         let empty = self.scanned.is_none();
         let focus = self.focus && !empty;
-        if scanning || home {
+        if scanning || home || health {
             egui::CentralPanel::default().frame(Frame::new().fill(t.win).inner_margin(Margin::same(6))).show(ui, |ui| {
                 Self::pane_frame(&t).show(ui, |ui| {
                     ui.set_min_size(ui.available_size());
-                    if scanning { self.scan_view(ui) } else { self.home_page(ui) }
+                    if scanning {
+                        self.scan_view(ui)
+                    } else if health {
+                        self.health_page(ui)
+                    } else {
+                        self.home_page(ui)
+                    }
                 });
             });
             self.palette_ui(&ctx);
