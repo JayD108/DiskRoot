@@ -3232,7 +3232,7 @@ impl DiskRootApp {
             }
             let table = self.reclaim.clone().unwrap_or_default();
             for (i, n) in nodes.iter().enumerate() {
-                let parent = (n.parent >= 0).then(|| n.parent as usize).filter(|&p| p < i);
+                let parent = (n.parent >= 0).then_some(n.parent as usize).filter(|&p| p < i);
                 // Inside a place that is reclaimable as a whole: same colour.
                 if let Some(p) = parent
                     && codes[p] != 212
