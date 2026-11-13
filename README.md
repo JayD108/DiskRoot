@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/logo/diskroot-logo.png" alt="DiskRoot: a leaf whose veins form growth rings, with one amber slice like a disk-usage chart, and the name DiskRoot" width="220">
+<img src="docs/logo/diskroot-logo.png" alt="DiskRoot: a leaf whose veins form growth rings, with one amber slice like a disk-usage chart, and the name DiskRoot" width="120">
 
 ### Get to the root of your disk.
 
