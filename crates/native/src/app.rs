@@ -3491,15 +3491,18 @@ impl DiskRootApp {
                     let parent_size = info.parent.and_then(|p| s.info(p).ok()).map(|p| p.on_disk);
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
+                            // Leave room for the buttons on the right (170 px + gap);
+                            // long names and paths wrap instead of running under them.
+                            ui.set_max_width((ui.available_width() - 190.0).max(220.0));
                             egui::Grid::new("props").num_columns(2).spacing([14.0, 1.0]).show(ui, |ui| {
                                 let key = |ui: &mut Ui, s: &str| {
                                     ui.label(RichText::new(s).color(t.muted));
                                 };
                                 key(ui, "Name");
-                                ui.label(RichText::new(&info.name).font(theme::semibold(13.0)));
+                                ui.add(egui::Label::new(RichText::new(&info.name).font(theme::semibold(13.0))).wrap());
                                 ui.end_row();
                                 key(ui, "Location");
-                                ui.label(&info.path);
+                                ui.add(egui::Label::new(&info.path).wrap());
                                 ui.end_row();
                                 key(ui, "Size on disk");
                                 let mut size = format!("{} · {}", fmt_bytes(info.on_disk), fmt_files(u64::from(info.files)));
