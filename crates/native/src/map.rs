@@ -374,3 +374,295 @@ pub fn paint(p: &Painter, layout: &Layout, cx: &PaintCtx) {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// 2.5D: the same layout, tilted and lifted. No 3D engine: flat polygons in
+// painter's order (back to front), so it costs about as much as the 2D map.
+// ---------------------------------------------------------------------------
+
+/// How the flat layout is tilted and lifted on screen.
+pub struct Tilt {
+    /// Ground origin (the sunburst's centre / the treemap's top-left).
+    c: Pos2,
+    /// Where the ground origin lands on screen (at height 0).
+    o: Pos2,
+    ex: f32,
+    ey: f32,
+    /// Treemap: screen x shift per screen y (the city leans; its left and
+    /// front faces show).
+    sh: f32,
+    /// Tallest height, in screen points.
+    pub lift: f32,
+    max_depth: u8,
+    max_leaf: u64,
+}
+
+impl Tilt {
+    pub fn new(layout: &Layout, nodes: &[Node], area: Rect) -> Self {
+        let pad = 10.0;
+        let lift = (area.height() * 0.2).clamp(24.0, 120.0);
+        match layout {
+            Layout::Sun { center, arcs, .. } => {
+                let max_depth = arcs.iter().map(|a| a.depth).max().unwrap_or(1).max(1);
+                // Low steps: higher inner rings would hide the outer rings' back half.
+                let lift = lift.min(9.0 * f32::from(max_depth));
+                let r = arcs.iter().map(|a| a.ro).fold(1.0, f32::max);
+                let ew = (area.width() - 2.0 * pad).min((area.height() - lift - 2.0 * pad) / 0.5).max(40.0);
+                let ex = ew / (2.0 * r);
+                let eh = ew * 0.5;
+                let o = pos2(area.center().x, area.min.y + pad + lift + eh / 2.0 + ((area.height() - 2.0 * pad - lift - eh) / 2.0).max(0.0));
+                Self { c: *center, o, ex, ey: ex * 0.5, sh: 0.0, lift, max_depth, max_leaf: 1 }
+            }
+            Layout::Tree { tiles } => {
+                let g = tiles.iter().fold(Rect::NOTHING, |r, t| r.union(t.rect));
+                let (gw, gh) = (g.width().max(1.0), g.height().max(1.0));
+                let sh = 0.35;
+                let mut ey = (area.height() - lift - 2.0 * pad) / gh;
+                let mut ex = (area.width() - 2.0 * pad - gh * ey * sh) / gw;
+                if ey > ex * 0.65 {
+                    ey = ex * 0.65;
+                    ex = (area.width() - 2.0 * pad - gh * ey * sh) / gw;
+                }
+                let used_w = gw * ex + gh * ey * sh;
+                let used_h = gh * ey + lift;
+                let o = pos2(area.min.x + (area.width() - used_w) / 2.0, area.min.y + (area.height() - used_h) / 2.0 + lift);
+                let max_leaf = tiles.iter().filter(|t| !t.header).map(|t| nodes[t.i].size).max().unwrap_or(1).max(1);
+                Self { c: g.min, o, ex, ey, sh, lift, max_depth: 1, max_leaf }
+            }
+        }
+    }
+
+    /// Ground point at height `z` → screen.
+    pub fn at(&self, p: Pos2, z: f32) -> Pos2 {
+        let d = p - self.c;
+        pos2(self.o.x + d.x * self.ex + d.y * self.ey * self.sh, self.o.y + d.y * self.ey - z)
+    }
+
+    /// Screen point → ground point, assuming height `z`.
+    fn ground(&self, s: Pos2, z: f32) -> Pos2 {
+        let gy = (s.y + z - self.o.y) / self.ey;
+        let gx = (s.x - self.o.x - gy * self.ey * self.sh) / self.ex;
+        self.c + vec2(gx, gy)
+    }
+
+    /// Sunburst ring height: inner rings stand higher (a stepped cake).
+    fn ring_z(&self, depth: u8) -> f32 {
+        let step = self.lift / f32::from(self.max_depth);
+        f32::from(self.max_depth.saturating_sub(depth) + 1) * step
+    }
+
+    /// Treemap box height: bigger items stand taller (square root, so small
+    /// ones still show).
+    fn box_z(&self, size: u64) -> f32 {
+        (self.lift * (size as f32 / self.max_leaf as f32).sqrt()).max(3.0)
+    }
+}
+
+fn shade(c: Color32, k: f32) -> Color32 {
+    Color32::from_rgb((f32::from(c.r()) * k) as u8, (f32::from(c.g()) * k) as u8, (f32::from(c.b()) * k) as u8)
+}
+
+/// Treemap boxes back to front: (tile index, height). Folder headers lie
+/// flat on the ground and come first.
+fn tree_order(tiles: &[Tile], nodes: &[Node], tilt: &Tilt) -> Vec<(usize, f32)> {
+    let mut v: Vec<(usize, f32)> = tiles.iter().enumerate().map(|(k, t)| (k, if t.header { 0.0 } else { tilt.box_z(nodes[t.i].size) })).collect();
+    v.sort_by(|a, b| {
+        let (ta, tb) = (&tiles[a.0], &tiles[b.0]);
+        tb.header.cmp(&ta.header).then(ta.rect.max.y.total_cmp(&tb.rect.max.y)).then(tb.rect.min.x.total_cmp(&ta.rect.min.x))
+    });
+    v
+}
+
+pub fn paint_25d(p: &Painter, layout: &Layout, tilt: &Tilt, cx: &PaintCtx) {
+    let t = cx.t;
+    let g = cx.grow.clamp(0.0, 1.0);
+    match layout {
+        Layout::Sun { center, r0, arcs } => {
+            // Which drawn arcs have drawn children (their wall stops on top of them).
+            let mut parent_of = std::collections::HashSet::new();
+            for s in arcs {
+                if cx.nodes[s.i].parent > 0 {
+                    parent_of.insert(cx.nodes[s.i].parent as usize);
+                }
+            }
+            for d in (1..=tilt.max_depth).rev() {
+                let z = tilt.ring_z(d) * g;
+                let below = if d < tilt.max_depth { tilt.ring_z(d + 1) * g } else { 0.0 };
+                // Outer walls on the front half (map angles π/2..3π/2).
+                for s in arcs.iter().filter(|s| s.depth == d) {
+                    let (a0, a1) = (s.a0.max(FRAC_PI_2), s.a1.min(3.0 * FRAC_PI_2));
+                    if a1 - a0 < 0.002 {
+                        continue;
+                    }
+                    let bottom = if parent_of.contains(&s.i) { below } else { 0.0 };
+                    let base = color_of(&cx.nodes[s.i], s.depth, t, cx.today, cx.over.get(s.i).copied());
+                    let steps = (((a1 - a0) / TAU) * 160.0).ceil().max(1.0) as u32;
+                    let mut m = Mesh::default();
+                    for k in 0..=steps {
+                        let a = a0 + (a1 - a0) * k as f32 / steps as f32 - FRAC_PI_2;
+                        let gp = *center + vec2(a.cos(), a.sin()) * (s.ro - 0.75);
+                        // Light from the front: faces turned to the viewer are brighter.
+                        let col = shade(base, 0.62 + 0.2 * a.sin().max(0.0));
+                        m.colored_vertex(tilt.at(gp, z), col);
+                        m.colored_vertex(tilt.at(gp, bottom), col);
+                        if k > 0 {
+                            let b = k * 2;
+                            m.add_triangle(b - 2, b - 1, b);
+                            m.add_triangle(b - 1, b + 1, b);
+                        }
+                    }
+                    p.add(Shape::mesh(m));
+                }
+                // Tops of this ring.
+                for s in arcs.iter().filter(|s| s.depth == d) {
+                    if s.a1 - s.a0 < 0.002 {
+                        continue;
+                    }
+                    if let Some(mut m) = ring_mesh(*center, s.ri, s.ro, s.a0, s.a1, color_of(&cx.nodes[s.i], s.depth, t, cx.today, cx.over.get(s.i).copied())) {
+                        for v in &mut m.vertices {
+                            v.pos = tilt.at(v.pos, z);
+                        }
+                        p.add(Shape::mesh(m));
+                    }
+                }
+            }
+            // Pith on top, outlines, centre text.
+            let z1 = tilt.ring_z(1) * g;
+            if let Some(mut m) = ring_mesh(*center, 0.0, r0 - 3.0, 0.0, TAU, t.panel) {
+                for v in &mut m.vertices {
+                    v.pos = tilt.at(v.pos, z1);
+                }
+                p.add(Shape::mesh(m));
+            }
+            if g >= 1.0 {
+                for s in arcs {
+                    if Some(s.i) == cx.hover || Some(s.i) == cx.selected {
+                        let z = tilt.ring_z(s.depth);
+                        let pts = ring_outline(*center, s.ri + 0.75, s.ro - 0.75, s.a0, s.a1).into_iter().map(|q| tilt.at(q, z)).collect();
+                        p.add(Shape::closed_line(pts, Stroke::new(2.0, t.text)));
+                    }
+                }
+            }
+            let c = tilt.at(*center, z1);
+            p.text(c - vec2(0.0, 4.0), Align2::CENTER_CENTER, cx.center_value, theme::semibold(15.0), t.text);
+            if cx.can_go_up {
+                p.text(c + vec2(0.0, 12.0), Align2::CENTER_CENTER, "↑ up", theme::regular(10.5), t.faint);
+            }
+        }
+        Layout::Tree { tiles } => {
+            for (k, z) in tree_order(tiles, cx.nodes, tilt) {
+                let tile = &tiles[k];
+                let n = &cx.nodes[tile.i];
+                let z = z * g;
+                let base = color_of(n, tile.depth, t, cx.today, cx.over.get(tile.i).copied());
+                let r = tile.rect.shrink(if tile.header { 0.0 } else { 1.0 });
+                let (a, b, c, d) = (r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom());
+                if z > 0.5 {
+                    // Left and front faces (the ones turned to the viewer).
+                    p.add(Shape::convex_polygon(vec![tilt.at(a, z), tilt.at(d, z), tilt.at(d, 0.0), tilt.at(a, 0.0)], shade(base, 0.66), Stroke::NONE));
+                    p.add(Shape::convex_polygon(vec![tilt.at(d, z), tilt.at(c, z), tilt.at(c, 0.0), tilt.at(d, 0.0)], shade(base, 0.8), Stroke::NONE));
+                }
+                let top = vec![tilt.at(a, z), tilt.at(b, z), tilt.at(c, z), tilt.at(d, z)];
+                let edge = if tile.header { Stroke::new(1.0, t.panel) } else { Stroke::new(0.75, shade(base, 0.85)) };
+                p.add(Shape::convex_polygon(top.clone(), base, edge));
+                if g >= 1.0 && (Some(tile.i) == cx.hover || Some(tile.i) == cx.selected) {
+                    p.add(Shape::closed_line(top, Stroke::new(2.0, t.text)));
+                }
+                // Names on tops (and folder headers) that are big enough.
+                let w = (tilt.at(b, z) - tilt.at(a, z)).length();
+                let h = (tilt.at(d, z) - tilt.at(a, z)).length();
+                if g >= 1.0 && w > 54.0 && h > 14.0 {
+                    let ink = theme::ink(tile.depth, t);
+                    if let Some(name) = fit(p, &n.name, 11.0, w - 10.0) {
+                        p.text(tilt.at(a, z) + vec2(5.0, 2.0), Align2::LEFT_TOP, name, if tile.header { theme::semibold(11.0) } else { theme::regular(11.0) }, ink);
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn hit_25d(layout: &Layout, tilt: &Tilt, nodes: &[Node], p: Pos2) -> Option<Hit> {
+    match layout {
+        Layout::Sun { center, r0, arcs } => {
+            // Inner rings stand higher and are drawn last: test them first.
+            for d in 1..=tilt.max_depth {
+                let gp = tilt.ground(p, tilt.ring_z(d));
+                let v = gp - *center;
+                let r = v.length();
+                if d == 1 && r < r0 - 3.0 {
+                    return Some(Hit::Pith);
+                }
+                let mut a = v.y.atan2(v.x) + FRAC_PI_2;
+                if a < 0.0 {
+                    a += TAU;
+                }
+                if let Some(s) = arcs.iter().find(|s| s.depth == d && r >= s.ri && r < s.ro && a >= s.a0 && a < s.a1) {
+                    return Some(Hit::Node(s.i));
+                }
+            }
+            None
+        }
+        Layout::Tree { tiles } => {
+            for (k, z) in tree_order(tiles, nodes, tilt).into_iter().rev() {
+                if tiles[k].rect.contains(tilt.ground(p, z)) {
+                    return Some(Hit::Node(tiles[k].i));
+                }
+            }
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// root (100) → a (60) [a1 (40), a2 (20)], b (40).
+    fn nodes() -> Vec<Node> {
+        vec![
+            Node::plain(0, -1, "root".into(), 100, 3, true, 0),
+            Node::plain(1, 0, "a".into(), 60, 2, true, 1),
+            Node::plain(2, 0, "b".into(), 40, 1, false, 1),
+            Node::plain(3, 1, "a1".into(), 40, 1, false, 2),
+            Node::plain(4, 1, "a2".into(), 20, 1, false, 2),
+        ]
+    }
+
+    #[test]
+    fn tilted_sunburst_hits_what_is_drawn() {
+        let n = nodes();
+        let kids = children(&n);
+        let area = Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 500.0));
+        let lay = layout(Kind::Sunburst, &n, &kids, area);
+        let tilt = Tilt::new(&lay, &n, area);
+        let Layout::Sun { center, arcs, .. } = &lay else { panic!() };
+        for s in arcs {
+            // The middle of each ring piece, on its top face.
+            let a = (s.a0 + s.a1) / 2.0 - FRAC_PI_2;
+            let g = *center + vec2(a.cos(), a.sin()) * ((s.ri + s.ro) / 2.0);
+            let screen = tilt.at(g, tilt.ring_z(s.depth));
+            assert!(matches!(hit_25d(&lay, &tilt, &n, screen), Some(Hit::Node(i)) if i == s.i), "piece {} ({})", s.i, n[s.i].name);
+        }
+        assert!(matches!(hit_25d(&lay, &tilt, &n, tilt.at(*center, tilt.ring_z(1))), Some(Hit::Pith)));
+        assert!(hit_25d(&lay, &tilt, &n, pos2(2.0, 2.0)).is_none(), "corner: nothing");
+    }
+
+    #[test]
+    fn tilted_treemap_hits_what_is_drawn() {
+        let n = nodes();
+        let kids = children(&n);
+        let area = Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 500.0));
+        let lay = layout(Kind::Treemap, &n, &kids, area);
+        let tilt = Tilt::new(&lay, &n, area);
+        let Layout::Tree { tiles } = &lay else { panic!() };
+        for (k, z) in tree_order(tiles, &n, &tilt) {
+            let t = &tiles[k];
+            let screen = tilt.at(t.rect.center(), z);
+            // A box's top is hit as that box (headers can be covered by their children).
+            if !t.header {
+                assert!(matches!(hit_25d(&lay, &tilt, &n, screen), Some(Hit::Node(i)) if i == t.i), "tile {}", n[t.i].name);
+            }
+        }
+    }
+}

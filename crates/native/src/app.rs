@@ -133,6 +133,7 @@ enum Cmd {
     ModeGrowth,
     ModeReclaim,
     Animations,
+    Tilt,
     ByLocation,
     ByCategory,
     ColorCategory,
@@ -1635,6 +1636,10 @@ impl DiskRootApp {
                 if ui.add(egui::Checkbox::new(&mut insp, "Inspector")).on_hover_text("Show or minimize the details at the bottom (Ctrl+J)").changed() {
                     self.run_cmd(ui.ctx(), Cmd::ToggleInspector);
                 }
+                let mut tilt = self.settings.map_25d;
+                if ui.checkbox(&mut tilt, "Tilted map (2.5D)").on_hover_text("Boxes and rings stand up by size; 2D is the default").changed() {
+                    self.run_cmd(ui.ctx(), Cmd::Tilt);
+                }
                 let mut anim = self.settings.animations;
                 if ui.checkbox(&mut anim, "Smooth transitions").on_hover_text("A short movement when the map opens a folder or goes up").changed() {
                     self.settings.animations = anim;
@@ -2930,6 +2935,7 @@ impl DiskRootApp {
         self.ensure_map();
         let mut crumb_go: Option<Key_> = None;
         let mut mode_go: Option<u8> = None;
+        let mut tilt_go = false;
         Self::pane_frame(&t).show(ui, |ui| {
             ui.set_min_size(ui.available_size());
             let full = ui.available_width();
@@ -2952,7 +2958,7 @@ impl DiskRootApp {
             let sep = "  ›  ";
             let width = |text: &str, last: bool| p.layout_no_wrap(text.to_owned(), if last { theme::semibold(12.0) } else { theme::regular(12.0) }, t.text).size().x;
             let sep_w = width(sep, false);
-            let budget = full - 300.0 - 150.0;
+            let budget = full - 420.0 - 150.0;
             let mut first = 0;
             while first + 1 < crumbs.len() {
                 let total: f32 = crumbs[first..].iter().enumerate().map(|(i, c)| width(&visible(&c.1), first + i + 1 == crumbs.len()) + sep_w).sum::<f32>() + if first > 0 { width("…", false) + sep_w } else { 0.0 };
@@ -2972,10 +2978,11 @@ impl DiskRootApp {
                 let last = i + 1 == crumbs.len();
                 let shown = visible(name);
                 // The last level gets what's left before the mode switch (~300 px).
-                let text = if last { map::fit(p, &shown, 12.0, (hr.max.x - 300.0 - x).max(40.0)).unwrap_or_default() } else { shown.clone() };
+                let text = if last { map::fit(p, &shown, 12.0, (hr.max.x - 420.0 - x).max(40.0)).unwrap_or_default() } else { shown.clone() };
                 let w = width(&text, last);
                 if last {
                     p.text(pos2(x, hr.center().y), Align2::LEFT_CENTER, text, theme::semibold(12.0), t.text);
+                    x += w;
                 } else {
                     let r = Rect::from_min_size(pos2(x - 2.0, hr.min.y + 3.0), vec2(w + 4.0, hr.height() - 6.0));
                     let resp = ui.interact(r, ui.scope_id().with(("crumb", i)), Sense::click());
@@ -3010,6 +3017,10 @@ impl DiskRootApp {
             if mode != self.settings.map_mode {
                 mode_go = Some(mode);
             }
+            strip.separator();
+            if strip.selectable_label(self.settings.map_25d, RichText::new("2.5D").size(11.5)).on_hover_text("Tilted map: boxes and rings stand up by size (2D is the default)").clicked() {
+                tilt_go = true;
+            }
             let size_text = format!("{} · {}", fmt_bytes(root.size), fmt_files(u64::from(root.files)));
             let size_w = width(&size_text, false) + 16.0;
             if strip.min_rect().min.x - size_w > crumbs_end + 12.0 {
@@ -3031,14 +3042,25 @@ impl DiskRootApp {
             let selected = self.selected.as_ref().and_then(|k| self.map_index(k)).filter(|&i| i != 0);
             {
                 let m = self.map.as_mut().expect("map exists");
-                let stale = !matches!(&m.cached, Some((r, k, _)) if *r == map_rect && *k == kind);
+                // Tilted sunburst: the picture is half as tall, so lay the rings
+                // out in a taller area to use the width.
+                let lay_rect = if self.settings.map_25d && kind == Kind::Sunburst {
+                    Rect::from_center_size(map_rect.center(), vec2(map_rect.width(), (map_rect.height() / 0.6).min(map_rect.width())))
+                } else {
+                    map_rect
+                };
+                let stale = !matches!(&m.cached, Some((r, k, _)) if *r == lay_rect && *k == kind);
                 if stale {
-                    m.cached = Some((map_rect, kind, map::layout(kind, &m.nodes, &m.kids, map_rect)));
+                    m.cached = Some((lay_rect, kind, map::layout(kind, &m.nodes, &m.kids, lay_rect)));
                 }
             }
             let m = self.map.as_ref().expect("map exists");
             let layout = &m.cached.as_ref().expect("layout").2;
-            let hit = resp.hover_pos().and_then(|q| map::hit(layout, q));
+            let tilt = self.settings.map_25d.then(|| map::Tilt::new(layout, &m.nodes, map_rect));
+            let hit = resp.hover_pos().and_then(|q| match &tilt {
+                Some(tl) => map::hit_25d(layout, tl, &m.nodes, q),
+                None => map::hit(layout, q),
+            });
             let hover_idx = match hit {
                 Some(Hit::Node(i)) => Some(i),
                 _ => None,
@@ -3065,7 +3087,10 @@ impl DiskRootApp {
                     _ => 1.0,
                 },
             };
-            map::paint(&ui.painter_at(map_rect), layout, &pc);
+            match &tilt {
+                Some(tl) => map::paint_25d(&ui.painter_at(map_rect), layout, tl, &pc),
+                None => map::paint(&ui.painter_at(map_rect), layout, &pc),
+            }
             let mode_hint = match m.mode {
                 1 if self.prev_sizes.is_none() => Some("Growth needs a previous scan of this place: it shows from the next scan on (File → Remember scans)"),
                 1 => Some("Colours: change since the previous scan"),
@@ -3075,6 +3100,7 @@ impl DiskRootApp {
             // Hints only beside the sunburst, where there's room for them (the
             // treemap fills its area; the legend says the same).
             let room = match layout {
+                _ if tilt.is_some() => 0.0,
                 MapLayout::Sun { center, arcs, .. } => center.x - arcs.iter().map(|a| a.ro).fold(0.0, f32::max) - map_rect.min.x - 16.0,
                 MapLayout::Tree { .. } => 0.0,
             };
@@ -3193,6 +3219,9 @@ impl DiskRootApp {
         });
         if let Some(k) = crumb_go {
             self.go_to(k);
+        }
+        if tilt_go {
+            self.run_cmd(&ui.ctx().clone(), Cmd::Tilt);
         }
         if let Some(v) = mode_go
             && v != self.settings.map_mode
@@ -5501,6 +5530,7 @@ impl DiskRootApp {
             ("Map colours: size (category)", "", Cmd::ModeSize, self.settings.map_mode != 0),
             ("Map colours: growth since the previous scan", "", Cmd::ModeGrowth, self.settings.map_mode != 1),
             ("Map colours: reclaimable (safe to clear / check first)", "", Cmd::ModeReclaim, self.settings.map_mode != 2),
+            (if self.settings.map_25d { "Map: flat (2D)" } else { "Map: tilted (2.5D)" }, "", Cmd::Tilt, self.scanned.is_some()),
             (if self.settings.animations { "Turn off smooth transitions" } else { "Turn on smooth transitions" }, "", Cmd::Animations, true),
             ("Switch to Sunburst", "", Cmd::Sunburst, self.settings.treemap),
             ("Switch to Treemap", "", Cmd::Treemap, !self.settings.treemap),
@@ -5567,6 +5597,14 @@ impl DiskRootApp {
                 };
                 self.settings.save();
                 self.map = None;
+            }
+            Cmd::Tilt => {
+                self.settings.map_25d = !self.settings.map_25d;
+                self.settings.save();
+                if let Some(m) = &mut self.map {
+                    // Rise up from the ground when switching on.
+                    m.born = (self.settings.animations && self.settings.map_25d).then(Instant::now);
+                }
             }
             Cmd::Animations => {
                 self.settings.animations = !self.settings.animations;
