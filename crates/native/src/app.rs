@@ -265,6 +265,8 @@ struct HealthView {
     /// The scan on screen, if it's a whole drive: (its letter "C:", what
     /// can't be downloaded or rebuilt again: (kind, bytes, files)).
     at_risk: Option<(String, Vec<AtRisk>)>,
+    /// When the drives were read (shown as "Checked … ago").
+    checked: Instant,
 }
 
 impl HealthView {
@@ -277,7 +279,7 @@ impl HealthView {
         Self { drives: drives.into_iter().map(|d| {
             let t = health::trend(&snaps, &d);
             (d, t)
-        }).collect(), trim: health::trim_enabled(), at_risk: None }
+        }).collect(), trim: health::trim_enabled(), at_risk: None, checked: Instant::now() }
     }
 }
 
@@ -557,6 +559,8 @@ pub struct DiskRootApp {
     focus: bool,
     /// Map or Home page.
     page: Page,
+    /// When the page last changed (for a short fade-in).
+    page_since: (Page, Instant),
     /// Home's numbers, worked out on a worker thread when it opens.
     home: Option<HomeView>,
     /// The drives' own reports, read when the Drive health page opens.
@@ -565,6 +569,8 @@ pub struct DiskRootApp {
     tour: Option<usize>,
     /// Where parts of the window were drawn this frame (for the tour).
     anchors: std::collections::HashMap<&'static str, Rect>,
+    /// Ctrl+V / Shift+Insert, read from Windows (see clip.rs).
+    paste_key: crate::clip::PasteKey,
     /// The command palette (Ctrl+K), when open.
     palette: Option<Palette>,
     /// Save space badge: the biggest single way to get space back (bytes, what).
@@ -683,10 +689,12 @@ impl DiskRootApp {
             home_rx: None,
             focus: false,
             page: Page::Map,
+            page_since: (Page::Map, Instant::now()),
             home: None,
             health_view: None,
             tour: None,
             anchors: std::collections::HashMap::new(),
+            paste_key: crate::clip::PasteKey::default(),
             toasts: Vec::new(),
             test_palette: std::env::var("DISKROOT_TEST_PALETTE").ok(),
             palette: None,
@@ -790,13 +798,22 @@ impl DiskRootApp {
         }
         let t = self.tokens();
         let mut dismiss = None;
+        let anim = self.settings.animations;
         egui::Area::new(egui::Id::unique("diskroot-toasts"))
             .order(egui::Order::Foreground)
             .anchor(Align2::RIGHT_BOTTOM, vec2(-16.0, -72.0))
             .show(ctx, |ui| {
                 ui.set_max_width(380.0);
-                for (i, (msg, _)) in self.toasts.iter().enumerate() {
-                    let resp = Frame::new()
+                for (i, (msg, since)) in self.toasts.iter().enumerate() {
+                    // In over 150 ms, out over the last 500 ms.
+                    let age = since.elapsed().as_secs_f32();
+                    let alpha = if anim { (age / 0.15).min((SHOW.as_secs_f32() - age) / 0.5).clamp(0.0, 1.0) } else { 1.0 };
+                    if alpha < 1.0 {
+                        ui.ctx().request_repaint();
+                    }
+                    let resp = ui.scope(|ui| {
+                    ui.multiply_opacity(alpha);
+                    Frame::new()
                         .fill(t.panel)
                         .stroke(Stroke::new(1.0, t.line_strong))
                         .corner_radius(CornerRadius::same(6))
@@ -806,6 +823,8 @@ impl DiskRootApp {
                             ui.add(egui::Label::new(RichText::new(msg).color(t.text)).wrap());
                         })
                         .response
+                    })
+                    .inner
                         .interact(Sense::click())
                         .on_hover_text("Click to dismiss");
                     if resp.clicked() {
@@ -1900,6 +1919,9 @@ impl DiskRootApp {
             let home_key = ui.input(|i| i.modifiers.ctrl && i.key_pressed(Key::H));
             let on_home = self.page == Page::Home;
             let hr = ui.add_enabled(self.scanned.is_some(), egui::Button::new("Home").selected(on_home)).on_hover_text("The drive at a glance, as a page (Ctrl+H; again or Esc: back to the map)");
+            if self.home_rx.is_some() {
+                ui.add(egui::Spinner::new().size(14.0).color(t.accent));
+            }
             self.anchors.insert("home", hr.rect);
             if (hr.clicked() || home_key) && self.scanned.is_some() {
                 self.toggle_home();
@@ -1916,6 +1938,10 @@ impl DiskRootApp {
             };
             if ui.add_enabled(self.scanned.is_some(), egui::Button::new(job)).on_hover_text(tip).clicked() {
                 self.open_savings();
+            }
+            if self.savings_rx.is_some() {
+                // Working out the ways to save space (a fraction of a second on a big drive).
+                ui.add(egui::Spinner::new().size(14.0).color(t.accent)).on_hover_text("Finding ways to save space…");
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // Whatever room is left (the window can be narrow).
@@ -1958,11 +1984,11 @@ impl DiskRootApp {
                 if self.watcher.is_some() {
                     ui.separator();
                     if self.live_overflow {
-                        ui.label(RichText::new("Many changes · press F5").color(theme::WARN).size(11.5))
+                        ui.label(RichText::new("Many changes · press F5").color(theme::warn()).size(11.5))
                             .on_hover_text("Windows reported more changes than it could list. Scan again for exact sizes.");
                     } else if !self.live_new.is_empty() {
                         let bytes: u64 = self.live_new.values().sum();
-                        ui.label(RichText::new(format!("{} new since the scan ({}) · F5 to include", fmt_count(self.live_new.len() as u64), fmt_bytes(bytes))).color(theme::WARN).size(11.5))
+                        ui.label(RichText::new(format!("{} new since the scan ({}) · F5 to include", fmt_count(self.live_new.len() as u64), fmt_bytes(bytes))).color(theme::warn()).size(11.5))
                             .on_hover_text("New files and folders appeared. Sizes of existing items update live; new ones join the tree at the next scan.");
                     } else {
                         ui.label(RichText::new("Live").color(t.accent).size(11.5))
@@ -2016,14 +2042,14 @@ impl DiskRootApp {
         let mut open_space = false;
         ui.horizontal_centered(|ui| {
             let full = b.nearly_full.as_ref().filter(|_| is_drive);
-            let l = ui.add(egui::Label::new(RichText::new(text).font(theme::semibold(12.5)).color(if full.is_some() { theme::WARN } else { t.text })).sense(Sense::click()));
+            let l = ui.add(egui::Label::new(RichText::new(text).font(theme::semibold(12.5)).color(if full.is_some() { theme::warn() } else { t.text })).sense(Sense::click()));
             if is_drive && l.clicked() {
                 open_space = true;
             }
             let l = if is_drive { l.on_hover_text("Click: where every GB is") } else { l };
             if let Some(w) = full {
                 l.on_hover_text(w.as_str());
-                ui.label(RichText::new("⚠ nearly full").color(theme::WARN).size(12.0)).on_hover_text(w.as_str());
+                ui.label(RichText::new("⚠ nearly full").color(theme::warn()).size(12.0)).on_hover_text(w.as_str());
             }
             ui.add_space(10.0);
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::click());
@@ -2126,7 +2152,7 @@ impl DiskRootApp {
                     let bar = Rect::from_min_size(pos2(rect.min.x + 14.0, rect.min.y + 32.0), vec2(rect.width() - 28.0, 9.0));
                     p.rect_filled(bar, CornerRadius::same(4), t.head);
                     let frac = used as f32 / total as f32;
-                    let col = if frac > 0.9 { theme::cat_color(5) } else if frac > 0.75 { theme::WARN } else { t.accent };
+                    let col = if frac > 0.9 { theme::cat_color(5) } else if frac > 0.75 { theme::warn() } else { t.accent };
                     p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac, bar.height())), CornerRadius::same(4), col);
                 }
                 if resp.clicked() {
@@ -2219,7 +2245,7 @@ impl DiskRootApp {
                     let marked = matches!(r.key, Key_::Node(n) if self.marked.contains(&n));
                     if marked {
                         p.rect_filled(rect, CornerRadius::ZERO, t.sel);
-                        p.rect_filled(Rect::from_min_size(rect.min, vec2(4.0, ROW_H)), CornerRadius::ZERO, theme::WARN);
+                        p.rect_filled(Rect::from_min_size(rect.min, vec2(4.0, ROW_H)), CornerRadius::ZERO, theme::warn());
                     } else if selected {
                         p.rect_filled(rect, CornerRadius::ZERO, t.sel);
                         p.rect_filled(Rect::from_min_size(rect.min, vec2(2.0, ROW_H)), CornerRadius::ZERO, t.accent);
@@ -2299,7 +2325,7 @@ impl DiskRootApp {
                                 let before = prev.get(&remember::path_key(rel)).copied().unwrap_or(0);
                                 let d = i128::from(r.bytes) - i128::from(before);
                                 if d.unsigned_abs() >= 1 << 20 {
-                                    let col = if d > 0 { theme::WARN } else { t.accent };
+                                    let col = if d > 0 { theme::warn() } else { t.accent };
                                     p.text(pos2(cat_x, y), Align2::LEFT_CENTER, fmt_delta(d), theme::semibold(12.0), col);
                                     cat_x += 74.0;
                                 }
@@ -3175,7 +3201,7 @@ impl DiskRootApp {
             if kind == Kind::Treemap || !mode_hint.is_none_or(fits) {
                 // no room
             } else if let Some(h) = mode_hint {
-                ui.painter_at(map_rect).text(map_rect.left_top() + vec2(10.0, 8.0), Align2::LEFT_TOP, h, theme::regular(11.0), if m.mode == 1 && self.prev_sizes.is_none() { theme::WARN } else { t.faint });
+                ui.painter_at(map_rect).text(map_rect.left_top() + vec2(10.0, 8.0), Align2::LEFT_TOP, h, theme::regular(11.0), if m.mode == 1 && self.prev_sizes.is_none() { theme::warn() } else { t.faint });
             } else if kind == Kind::Sunburst {
                 let hint = if m.up.is_some() { "Click a piece to open it · the centre goes up · Ctrl+K: everything" } else { "Click a piece to open it · Ctrl+K: everything" };
                 let hint = if fits(hint) { hint } else if fits("Click a piece to open it") { "Click a piece to open it" } else { "" };
@@ -3501,7 +3527,7 @@ impl DiskRootApp {
             let mut mark_key: Option<String> = None;
             if !self.marked.is_empty() {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("{} items marked", self.marked.len())).font(theme::semibold(13.0)).color(theme::WARN));
+                    ui.label(RichText::new(format!("{} items marked", self.marked.len())).font(theme::semibold(13.0)).color(theme::warn()));
                     if ui.add_enabled(self.job.is_none(), egui::Button::new(format!("Move {} marked to Recycle Bin…", self.marked.len()))).clicked() {
                         action = Some(("delete-marked", 0));
                     }
@@ -3561,7 +3587,7 @@ impl DiskRootApp {
                                     ui.horizontal(|ui| {
                                         ui.label(size);
                                         let others = names.iter().filter(|x| !x.eq_ignore_ascii_case(&info.path)).map(|x| visible(x)).collect::<Vec<_>>().join("\n");
-                                        ui.label(RichText::new(format!("· {} names (hardlinks)", names.len())).color(theme::WARN))
+                                        ui.label(RichText::new(format!("· {} names (hardlinks)", names.len())).color(theme::warn()))
                                             .on_hover_text(format!("This file is stored once but has {} names. Deleting this one frees nothing while the others exist.\n\nOther names:\n{others}", names.len()));
                                     });
                                 } else {
@@ -3583,7 +3609,7 @@ impl DiskRootApp {
                                         let d = i128::from(last.1) - i128::from(week.1);
                                         let span = remember::gap_text(last.0.saturating_sub(week.0));
                                         let text = if d == 0 { format!("no change in {span}") } else { format!("{} in {span}", fmt_delta(d)) };
-                                        ui.label(RichText::new(text).color(if d > 0 { theme::WARN } else { t.muted }))
+                                        ui.label(RichText::new(text).color(if d > 0 { theme::warn() } else { t.muted }))
                                             .on_hover_text("From the scans DiskRoot remembered (folders of 1 MB or more). View → Size history for more.");
                                     });
                                     ui.end_row();
@@ -3909,12 +3935,12 @@ impl DiskRootApp {
                         !pf.is_empty() && e.to_string_lossy().to_lowercase().starts_with(&pf)
                     });
                     if !installed_copy {
-                        ui.add(egui::Label::new(RichText::new("This is a portable copy: the scheduled task runs this very file. If you move or delete it, turn scheduled scans off here first (no uninstaller removes the task for you).").color(theme::WARN).size(12.0)).wrap());
+                        ui.add(egui::Label::new(RichText::new("This is a portable copy: the scheduled task runs this very file. If you move or delete it, turn scheduled scans off here first (no uninstaller removes the task for you).").color(theme::warn()).size(12.0)).wrap());
                     }
                     let state = if v.installed { "On: a Windows scheduled task runs it for your account." } else { "Off." };
                     ui.label(RichText::new(state).color(if v.installed { t.accent } else { t.muted }));
                     if let Some(m) = &v.msg {
-                        ui.add(egui::Label::new(RichText::new(m.as_str()).color(theme::WARN)).wrap());
+                        ui.add(egui::Label::new(RichText::new(m.as_str()).color(theme::warn())).wrap());
                     }
                     if !v.runs.is_empty() {
                         ui.add_space(4.0);
@@ -3925,7 +3951,7 @@ impl DiskRootApp {
                                 ui.label(visible(&r.root));
                                 match &r.error {
                                     Some(e) => {
-                                        ui.label(RichText::new("failed").color(theme::WARN)).on_hover_text(e.as_str());
+                                        ui.label(RichText::new("failed").color(theme::warn())).on_hover_text(e.as_str());
                                         ui.label("");
                                         ui.label("");
                                     }
@@ -4042,13 +4068,13 @@ impl DiskRootApp {
                             ui.end_row();
                             for w in &top {
                                 if diskroot_session::offenders::for_process(&w.name).is_some() {
-                                    ui.label(RichText::new(format!("⚠ {}", w.name)).color(theme::WARN));
+                                    ui.label(RichText::new(format!("⚠ {}", w.name)).color(theme::warn()));
                                 } else {
                                     ui.label(&w.name);
                                 }
                                 ui.label(rate(w.now));
                                 ui.label(fmt_bytes(w.active));
-                                ui.label(RichText::new(fmt_bytes(w.idle)).color(if w.idle > 100 << 20 { theme::WARN } else { t.text }));
+                                ui.label(RichText::new(fmt_bytes(w.idle)).color(if w.idle > 100 << 20 { theme::warn() } else { t.text }));
                                 ui.end_row();
                             }
                         });
@@ -4061,7 +4087,7 @@ impl DiskRootApp {
                         }
                         shown_titles.push(o.title);
                         ui.add_space(4.0);
-                        ui.add(egui::Label::new(RichText::new(format!("⚠ {}: {} {}", o.title, o.what, o.todo)).color(theme::WARN)).wrap())
+                        ui.add(egui::Label::new(RichText::new(format!("⚠ {}: {} {}", o.title, o.what, o.todo)).color(theme::warn())).wrap())
                             .on_hover_text(format!("Checked {} against:\n{}", o.checked, o.sources.join("\n")));
                     }
                     ui.add_space(8.0);
@@ -4119,7 +4145,7 @@ impl DiskRootApp {
                     }
                     if let Some(f) = &v.forecast {
                         ui.add_space(4.0);
-                        let col = if matches!(f, Forecast::Full { low, .. } if *low < 60) { theme::WARN } else { t.text };
+                        let col = if matches!(f, Forecast::Full { low, .. } if *low < 60) { theme::warn() } else { t.text };
                         ui.add(egui::Label::new(RichText::new(f.text(v.root.trim_end_matches('\\'))).color(col)).wrap())
                             .on_hover_text("From the drive's free space at the last scan of each day, over up to 60 days. Sudden one-off jumps (one big download) aren't counted as the pace. A rough guide, not a promise.");
                     }
@@ -4144,7 +4170,7 @@ impl DiskRootApp {
                                 fmt_delta(i128::from(ch.after_total) - i128::from(ch.before_total))
                             )).color(t.muted).size(12.0));
                             if ch.mixed_methods() {
-                                ui.add(egui::Label::new(RichText::new("One of these scans was a Fast scan and the other a folder walk: they count some things differently, so part of the change comes from the method.").color(theme::WARN).size(12.0)).wrap());
+                                ui.add(egui::Label::new(RichText::new("One of these scans was a Fast scan and the other a folder walk: they count some things differently, so part of the change comes from the method.").color(theme::warn()).size(12.0)).wrap());
                             }
                             if ch.items.is_empty() {
                                 ui.label(RichText::new("No folder changed by more than 1 MB (or 0.1% of the total).").color(t.faint));
@@ -4153,7 +4179,7 @@ impl DiskRootApp {
                                     egui::Grid::new("growers").num_columns(3).striped(true).spacing([14.0, 4.0]).show(ui, |ui| {
                                         for c in &ch.items {
                                             let d = c.delta();
-                                            ui.label(RichText::new(fmt_delta(d)).color(if d > 0 { theme::WARN } else { t.accent }).strong());
+                                            ui.label(RichText::new(fmt_delta(d)).color(if d > 0 { theme::warn() } else { t.accent }).strong());
                                             ui.label(RichText::new(fmt_bytes(c.after)).color(t.muted));
                                             let shown = if c.path.is_empty() { "(the scanned folder itself)".to_owned() } else { c.path.clone() };
                                             let note = if c.before == 0 { "  new" } else if c.after == 0 { "  gone" } else { "" };
@@ -4225,7 +4251,7 @@ impl DiskRootApp {
                         self.settings.save();
                     }
                     if !self.settings.remember_scans {
-                        ui.label(RichText::new("Remembering scans is off (File menu), so freeing memory means scanning again later.").color(theme::WARN).size(12.0));
+                        ui.label(RichText::new("Remembering scans is off (File menu), so freeing memory means scanning again later.").color(theme::warn()).size(12.0));
                     }
                 }
                 Dialog::About => {
@@ -4280,7 +4306,7 @@ impl DiskRootApp {
                         "Running from a folder your user account can change. Install DiskRoot to protect the admin helper used by Fast scan."
                     };
                     for (ok, k, v) in [(ig.protected_location, "Location", loc_text), (sig_ok, "Signature", sig_text)] {
-                        let (mark, col) = if ok { ("✔", t.accent) } else { ("!", theme::WARN) };
+                        let (mark, col) = if ok { ("✔", t.accent) } else { ("!", theme::warn()) };
                         ui.label(RichText::new(format!("{mark}  {k}")).font(theme::semibold(13.0)).color(col));
                         ui.add(egui::Label::new(RichText::new(v).color(t.muted)).wrap());
                         ui.add_space(4.0);
@@ -4338,12 +4364,12 @@ impl DiskRootApp {
                                 Changes::method_name(&ch.before_mode),
                                 Changes::method_name(&ch.after_mode)
                             ))
-                            .color(theme::WARN),
+                            .color(theme::warn()),
                         );
                     }
                     if ch.hardlink_switch() {
                         ui.add_space(4.0);
-                        ui.add(egui::Label::new(RichText::new("This version of DiskRoot counts hardlinked files once (the same data under two names, mostly in Windows' WinSxS); the previous scan counted every name. Part of this drop is that, not deleted files.").color(theme::WARN)).wrap());
+                        ui.add(egui::Label::new(RichText::new("This version of DiskRoot counts hardlinked files once (the same data under two names, mostly in Windows' WinSxS); the previous scan counted every name. Part of this drop is that, not deleted files.").color(theme::warn())).wrap());
                     }
                     ui.add_space(4.0);
                     let total = i128::from(ch.after_total) - i128::from(ch.before_total);
@@ -4360,7 +4386,7 @@ impl DiskRootApp {
                                 ui.end_row();
                                 for c in &ch.items {
                                     let d = c.delta();
-                                    let col = if d > 0 { theme::WARN } else { t.accent };
+                                    let col = if d > 0 { theme::warn() } else { t.accent };
                                     ui.label(RichText::new(fmt_delta(d)).color(col).strong());
                                     ui.label(fmt_bytes(c.after));
                                     ui.label(RichText::new(fmt_bytes(c.before)).color(t.muted));
@@ -4414,7 +4440,7 @@ impl DiskRootApp {
                         notes.push(format!("{} is running and uses some of these files. Close it first.", w.apps_running.join(", ")));
                     }
                     for n in &notes {
-                        egui::Frame::new().fill(theme::WARN.gamma_multiply(if t.dark { 0.22 } else { 0.14 })).corner_radius(CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+                        egui::Frame::new().fill(theme::warn().gamma_multiply(if t.dark { 0.22 } else { 0.14 })).corner_radius(CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             ui.add(egui::Label::new(RichText::new(n).color(t.text)).wrap());
                         });
@@ -4530,7 +4556,7 @@ impl DiskRootApp {
                     ui.add(egui::Label::new(RichText::new("Add your own categories for folders and file types, e.g. \"Projects/*/out\" as Dev stuff > My build output. Your rules can't change what DiskRoot protects: they never apply where a built-in rule matches or inside protected places like C:\\Windows, and their safety label stays \"Your rule\".").color(t.muted)).wrap());
                     ui.add_space(8.0);
                     let (mark, col, text) = match (&st.error, st.found) {
-                        (Some(e), _) => ("!", theme::WARN, format!("Not loaded: {e}")),
+                        (Some(e), _) => ("!", theme::warn(), format!("Not loaded: {e}")),
                         (None, true) => ("✔", t.accent, format!("{} of your own rules loaded", st.user_rules)),
                         (None, false) => ("·", t.muted, "No rules file yet. \"Edit rules\" creates one with an example.".to_owned()),
                     };
@@ -4667,7 +4693,7 @@ impl DiskRootApp {
                                 }
                             });
                             if !v.sugg.has_arrival_dates {
-                                ui.label(RichText::new("This scan was saved by an older DiskRoot and has no arrival dates, so downloaded files may look older than they are. Press Scan for exact ages.").color(theme::WARN).size(12.0));
+                                ui.label(RichText::new("This scan was saved by an older DiskRoot and has no arrival dates, so downloaded files may look older than they are. Press Scan for exact ages.").color(theme::warn()).size(12.0));
                             }
                             let n = v.sugg.items.len();
                             let summary = if n == 0 {
@@ -4786,7 +4812,7 @@ impl DiskRootApp {
                         ("3. Compact", "Windows' diskpart attaches the disk read-only and compacts it (admin). This can take minutes."),
                     ]);
                     ui.add_space(6.0);
-                    let (mark, col, text) = if *busy { ("!", theme::WARN, "In use right now: stop WSL or Docker first.") } else { ("✔", t.accent, "Not in use: ready to compact.") };
+                    let (mark, col, text) = if *busy { ("!", theme::warn(), "In use right now: stop WSL or Docker first.") } else { ("✔", t.accent, "Not in use: ready to compact.") };
                     ui.label(RichText::new(format!("{mark}  {text}")).color(col).font(theme::semibold(13.0)));
                 }
                 Dialog::Alerts => {
@@ -4843,7 +4869,7 @@ impl DiskRootApp {
                                 ui.allocate_ui_with_layout(vec2(160.0, 18.0), Layout::left_to_right(Align::Center), |ui| {
                                     ui.set_min_width(160.0);
                                     let kind = if l.mtime > 0 { format!("{} · {}", l.kind, diskroot_session::age_text(diskroot_session::today_days(), l.mtime)) } else { l.kind.clone() };
-                                    ui.add(egui::Label::new(RichText::new(kind).color(if l.deletable && !l.hint { t.text } else { theme::WARN })).truncate());
+                                    ui.add(egui::Label::new(RichText::new(kind).color(if l.deletable && !l.hint { t.text } else { theme::warn() })).truncate());
                                 });
                                 let r = ui.add(egui::Label::new(visible(&l.name)).truncate().sense(Sense::click()));
                                 if r.on_hover_text(format!("{}\n\n{}\n\nClick to show it in the tree", visible(&l.path), l.note)).clicked() {
@@ -4891,7 +4917,7 @@ impl DiskRootApp {
                         let w = &c.warnings;
                         let warn = |ui: &mut Ui, title: &str, text: &str| {
                             egui::Frame::new()
-                                .fill(theme::WARN.gamma_multiply(if t.dark { 0.22 } else { 0.14 }))
+                                .fill(theme::warn().gamma_multiply(if t.dark { 0.22 } else { 0.14 }))
                                 .corner_radius(CornerRadius::same(4))
                                 .inner_margin(egui::Margin::symmetric(10, 6))
                                 .show(ui, |ui| {
@@ -5375,6 +5401,11 @@ impl DiskRootApp {
         if typing {
             return;
         }
+        // The list and map keys (Backspace, arrows, Delete, Space) only act
+        // when the map is shown, not behind Home or Drive health.
+        if self.page != Page::Map {
+            return;
+        }
         if back
             && let Some(k) = self.map.as_ref().and_then(|m| m.up.clone()) {
                 self.go_to(k);
@@ -5787,7 +5818,7 @@ impl DiskRootApp {
                     }
                 }
                 if !self.marked.is_empty() {
-                    ui.label(RichText::new(format!("{} marked", self.marked.len())).color(theme::WARN).size(11.5));
+                    ui.label(RichText::new(format!("{} marked", self.marked.len())).color(theme::warn()).size(11.5));
                 }
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.label(RichText::new("INSPECTOR").color(t.faint).size(10.5));
@@ -5821,10 +5852,30 @@ impl DiskRootApp {
     fn toggle_home(&mut self) {
         if self.page == Page::Home {
             self.page = Page::Map;
-        } else if self.home.is_some() {
-            self.page = Page::Home;
         } else {
-            self.open_home();
+            // Show the page at once (it says it's working until the numbers are in).
+            self.page = Page::Home;
+            if self.home.is_none() {
+                self.open_home();
+            }
+        }
+    }
+
+    /// 0.35 → 1 over 160 ms after the page changed (map, Home, health): a
+    /// quick fade so a switch doesn't feel like a jump. Repaints only meanwhile.
+    fn page_fade(&mut self, ctx: &egui::Context) -> f32 {
+        if self.page != self.page_since.0 {
+            self.page_since = (self.page, Instant::now());
+        }
+        if !self.settings.animations {
+            return 1.0;
+        }
+        let x = self.page_since.1.elapsed().as_secs_f32() / 0.16;
+        if x < 1.0 {
+            ctx.request_repaint();
+            0.35 + 0.65 * (1.0 - (1.0 - x).powi(3))
+        } else {
+            1.0
         }
     }
 
@@ -5943,11 +5994,9 @@ impl DiskRootApp {
         let card = |t: &Tokens| Frame::new().fill(t.panel).stroke(Stroke::new(1.0, t.line)).corner_radius(CornerRadius::same(t.radius + 4)).inner_margin(Margin::same(18));
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             Frame::new().inner_margin(Margin::same(20)).show(ui, |ui| {
+                // Title and buttons on one line; the description below, full width.
                 ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("Drive health").font(theme::semibold(24.0)));
-                        ui.label(RichText::new("What your drives report about themselves. DiskRoot only reads these reports: it changes nothing and needs no admin.").color(t.muted));
-                    });
+                    ui.label(RichText::new("Drive health").font(theme::semibold(24.0)));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.button("Back to the map  (Esc)").clicked() {
                             go = Some("map");
@@ -5960,6 +6009,11 @@ impl DiskRootApp {
                         }
                     });
                 });
+                plain_note(ui, RichText::new("What your drives report about themselves. DiskRoot only reads these reports: it changes nothing and needs no admin.").color(t.muted));
+                let ago = v.checked.elapsed().as_secs();
+                let when = if ago < 5 { "just now".to_owned() } else if ago < 90 { format!("{ago} s ago") } else { format!("{} min ago", ago / 60) };
+                ui.label(RichText::new(format!("Checked {when}")).color(t.faint).size(11.5));
+                ui.ctx().request_repaint_after(Duration::from_secs(if ago < 90 { 5 } else { 30 }));
                 ui.add_space(14.0);
                 if v.drives.is_empty() {
                     card(&t).show(ui, |ui| {
@@ -5971,11 +6025,16 @@ impl DiskRootApp {
                     let (level, verdict) = d.verdict();
                     let col = match level {
                         Health::Good => t.accent,
-                        Health::Watch => theme::WARN,
+                        Health::Watch => theme::warn(),
                         Health::Bad => theme::cat_color(5),
                         Health::Unknown => t.muted,
                     };
-                    card(&t).show(ui, |ui| {
+                    // Just checked: the card's edge glows for a moment.
+                    let glow = if self.settings.animations { (1.0 - v.checked.elapsed().as_secs_f32() / 0.9).max(0.0) } else { 0.0 };
+                    if glow > 0.0 {
+                        ui.ctx().request_repaint();
+                    }
+                    card(&t).stroke(Stroke::new(1.0 + glow, lerp(t.line, t.accent, glow))).show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         let kind = match d.ssd {
                             Some(true) => format!("{} SSD", d.bus),
@@ -6023,11 +6082,11 @@ impl DiskRootApp {
                             let list = items.iter().map(|(k, b, f)| format!("{k} {} ({})", fmt_bytes(*b), fmt_files(*f))).collect::<Vec<_>>().join(" · ");
                             let urgent = level != Health::Good && level != Health::Unknown;
                             ui.add_space(8.0);
-                            plain_note(ui, RichText::new(format!("If {letter} failed, this would be lost unless you have a copy somewhere else: {list} (OneDrive folders aren't counted here). Keep a copy (File History, OneDrive, an external drive){}.", if urgent { ", now" } else { "" })).color(if urgent { theme::WARN } else { t.muted }));
+                            plain_note(ui, RichText::new(format!("If {letter} failed, this would be lost unless you have a copy somewhere else: {list} (OneDrive folders aren't counted here). Keep a copy (File History, OneDrive, an external drive){}.", if urgent { ", now" } else { "" })).color(if urgent { theme::warn() } else { t.muted }));
                         }
                         if let Some(o) = diskroot_session::offenders::for_drive(&d.model, &d.firmware) {
                             ui.add_space(6.0);
-                            ui.add(egui::Label::new(RichText::new(format!("⚠ {}: {} {}", o.title, o.what, o.todo)).color(theme::WARN)).wrap())
+                            ui.add(egui::Label::new(RichText::new(format!("⚠ {}: {} {}", o.title, o.what, o.todo)).color(theme::warn())).wrap())
                                 .on_hover_text(format!("Checked {} against:\n{}", o.checked, o.sources.join("\n")));
                         }
                     });
@@ -6040,7 +6099,7 @@ impl DiskRootApp {
                         Some(false) => "Windows TRIM is turned off. SSDs stay faster and wear less with it on: run \"fsutil behavior set DisableDeleteNotify 0\" as admin to turn it back on.",
                         None => "Couldn't read whether Windows sends TRIM.",
                     };
-                    plain_note(ui, RichText::new(trim_text).color(if v.trim == Some(false) { theme::WARN } else { t.text }));
+                    plain_note(ui, RichText::new(trim_text).color(if v.trim == Some(false) { theme::warn() } else { t.text }));
                     ui.add_space(4.0);
                     plain_note(ui, RichText::new("\"Rated life used\" is the drive's own estimate from its flash wear; a drive often keeps working past 100%. \"Written\" is what Windows sent to it.").color(t.faint).size(11.5));
                 });
@@ -6048,7 +6107,21 @@ impl DiskRootApp {
         });
         match go {
             Some("map") => self.page = Page::Map,
-            Some("refresh") => self.open_health(),
+            Some("refresh") => {
+                // The drives answer in about a millisecond, so say what the
+                // new reading shows instead of seeming to do nothing.
+                let before: Vec<(u32, Vec<String>)> = self.health_view.as_ref().map(|v| v.drives.iter().map(|(d, _)| (d.number, d.facts())).collect()).unwrap_or_default();
+                self.open_health();
+                let mut changed = Vec::new();
+                if let Some(v) = &self.health_view {
+                    for (d, _) in &v.drives {
+                        if let Some((_, old)) = before.iter().find(|b| b.0 == d.number) {
+                            changed.extend(d.facts().into_iter().filter(|l| !old.contains(l)));
+                        }
+                    }
+                }
+                self.say(if changed.is_empty() { "Checked the drives again: nothing has changed.".to_owned() } else { format!("Checked the drives again: {}", changed.join(" · ")) });
+            }
             Some("writers") => self.dialog = Some(Dialog::Writers(Box::new(WritersView::open()))),
             _ => {}
         }
@@ -6058,6 +6131,13 @@ impl DiskRootApp {
     /// changed, ways to get space back and the biggest items.
     fn home_page(&mut self, ui: &mut Ui) {
         let t = self.tokens();
+        if self.home.is_none() {
+            // Still working the numbers out (about half a second on a big drive).
+            let c = ui.available_rect_before_wrap().center();
+            ui.put(Rect::from_center_size(c - vec2(0.0, 20.0), vec2(28.0, 28.0)), egui::Spinner::new().size(26.0).color(t.accent));
+            ui.painter().text(c + vec2(0.0, 18.0), Align2::CENTER_TOP, "Working out the answers…", theme::regular(13.0), t.muted);
+            return;
+        }
         let (Some(h), Some(s)) = (&self.home, &self.scanned) else { return };
         let mut go: Option<&'static str> = None;
         let mut jump_rel: Option<String> = None;
@@ -6075,10 +6155,7 @@ impl DiskRootApp {
             Frame::new().inner_margin(Margin::same(20)).show(ui, |ui| {
                 // Header
                 ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new(format!("{} at a glance", visible(&h.root))).font(theme::semibold(24.0)));
-                        ui.label(RichText::new("Your drive, explained in four answers. Click one to go deeper.").color(t.muted));
-                    });
+                    ui.add(egui::Label::new(RichText::new(format!("{} at a glance", visible(&h.root))).font(theme::semibold(24.0))).truncate());
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.button("Back to the map  (Esc)").clicked() {
                             go = Some("map");
@@ -6088,6 +6165,7 @@ impl DiskRootApp {
                         }
                     });
                 });
+                plain_note(ui, RichText::new(if h.root.len() <= 3 { "Your drive, explained in four answers. Click one to go deeper." } else { "This folder and its drive, in four answers. Click one to go deeper." }).color(t.muted));
                 ui.add_space(14.0);
                 // Hero: the drive disc and four answers.
                 card(&t).show(ui, |ui| {
@@ -6123,7 +6201,7 @@ impl DiskRootApp {
                         let used = total.saturating_sub(free);
                         p.text(c - vec2(0.0, 10.0), Align2::CENTER_CENTER, fmt_bytes(used), theme::num(20.0), t.text);
                         p.text(c + vec2(0.0, 14.0), Align2::CENTER_CENTER, format!("used of {}", fmt_bytes(total)), theme::regular(11.5), t.muted);
-                        p.text(c + vec2(0.0, 30.0), Align2::CENTER_CENTER, format!("{} free", fmt_bytes(free)), theme::regular(11.5), if h.nearly_full.is_some() { theme::WARN } else { t.faint });
+                        p.text(c + vec2(0.0, 30.0), Align2::CENTER_CENTER, format!("{} free", fmt_bytes(free)), theme::regular(11.5), if h.nearly_full.is_some() { theme::warn() } else { t.faint });
                         // What the disc's parts are.
                         let scanned = s.summary().on_disk;
                         let mut ly = rect.max.y + 10.0;
@@ -6188,12 +6266,12 @@ impl DiskRootApp {
                                 go = Some("savings");
                             }
                             let fill = h.forecast.clone().unwrap_or_else(|| "Not enough history yet: it builds up with every scan".into());
-                            if answer(ui, theme::WARN, "When does it fill up?", fill, "Open Size history") {
+                            if answer(ui, theme::warn(), "When does it fill up?", fill, "Open Size history") {
                                 go = Some("history");
                             }
                             let (hc, ht) = match &h.health {
                                 Some((Health::Good, x)) => (t.accent, x.clone()),
-                                Some((Health::Watch, x)) => (theme::WARN, x.clone()),
+                                Some((Health::Watch, x)) => (theme::warn(), x.clone()),
                                 Some((_, x)) => (theme::cat_color(5), x.clone()),
                                 None => (t.faint, "No health report for this drive".into()),
                             };
@@ -6217,7 +6295,7 @@ impl DiskRootApp {
                                     let name = if c.path.is_empty() { visible(&h.root) } else { visible(&c.path) };
                                     ui.horizontal(|ui| {
                                         let d = c.delta();
-                                        ui.label(RichText::new(fmt_delta(d)).font(theme::num(12.5)).color(if d > 0 { theme::WARN } else { t.accent }));
+                                        ui.label(RichText::new(fmt_delta(d)).font(theme::num(12.5)).color(if d > 0 { theme::warn() } else { t.accent }));
                                         if ui.add(egui::Label::new(name).truncate().sense(Sense::click())).on_hover_text("Show it on the map").clicked() {
                                             jump_rel = Some(c.path.clone());
                                         }
@@ -6574,6 +6652,28 @@ impl DiskRootApp {
     /// One frame of the whole app, on any driver.
     pub fn show(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        // Clipboard (text only): paste into the focused text box, and put
+        // copied or cut text on the Windows clipboard (see clip.rs).
+        if self.paste_key.pressed()
+            && ctx.input(|i| i.focused)
+            && let Some(text) = crate::clip::get()
+        {
+            ctx.input_mut(|i| i.events.push(egui::Event::Paste(text)));
+        }
+        self.frame(ui);
+        let copied = ctx.output(|o| {
+            o.commands.iter().rev().find_map(|c| match c {
+                egui::OutputCommand::CopyText(s) => Some(s.clone()),
+                _ => None,
+            })
+        });
+        if let Some(s) = copied {
+            crate::clip::set(&s);
+        }
+    }
+
+    fn frame(&mut self, ui: &mut Ui) {
+        let ctx = ui.ctx().clone();
         let _bench = bench_frame(&ctx, self.scanned.is_some());
         // Last frame's places, for the tour (this frame refills them).
         let anchors = std::mem::take(&mut self.anchors);
@@ -6614,12 +6714,14 @@ impl DiskRootApp {
         // the Inspector under the map. Both docks resize and minimize
         // (Ctrl+B, Ctrl+J); Focus (F) shows only the map.
         let scanning = self.job.as_ref().is_some_and(|j| matches!(j.kind, JobKind::Scan(_) | JobKind::Fast(_) | JobKind::Reopen(_)));
-        let home = self.page == Page::Home && self.scanned.is_some() && self.home.is_some() && !scanning;
+        let home = self.page == Page::Home && self.scanned.is_some() && (self.home.is_some() || self.home_rx.is_some()) && !scanning;
         let health = self.page == Page::Health && self.health_view.is_some() && !scanning;
         let empty = self.scanned.is_none();
         let focus = self.focus && !empty;
         if scanning || home || health {
+            let fade = self.page_fade(&ctx);
             egui::CentralPanel::default().frame(Frame::new().fill(t.win).inner_margin(Margin::same(6))).show(ui, |ui| {
+                ui.multiply_opacity(fade);
                 Self::pane_frame(&t).show(ui, |ui| {
                     ui.set_min_size(ui.available_size());
                     if scanning {
@@ -6654,37 +6756,47 @@ impl DiskRootApp {
         } else {
             let area = ctx.content_rect();
             if !focus {
-                if self.settings.hide_list {
-                    egui::Panel::left("list-min")
-                        .frame(Frame::new().fill(t.win).inner_margin(Margin { left: 6, right: 0, top: 6, bottom: 6 }))
-                        .exact_size(34.0)
-                        .show_separator_line(false)
-                        .show(ui, |ui| self.list_strip(ui));
-                } else {
+                // The list and the Inspector slide when minimized or shown
+                // (Ctrl+B / Ctrl+J); their sizes are remembered by egui.
+                let list_frame = Frame::new().fill(t.win).inner_margin(Margin { left: 6, right: 0, top: 6, bottom: 6 });
+                let mut list_open = !self.settings.hide_list;
+                egui::Panel::show_switched(
+                    ui,
+                    &mut list_open,
+                    egui::Panel::left("list-min").frame(list_frame).exact_size(34.0).show_separator_line(false),
                     egui::Panel::left("list")
-                        .frame(Frame::new().fill(t.win).inner_margin(Margin { left: 6, right: 0, top: 6, bottom: 6 }))
+                        .frame(list_frame)
                         .default_size(area.width() * 0.4)
                         .size_range(300.0..=(area.width() * 0.6).max(320.0))
                         .resizable(true)
-                        .show_separator_line(false)
-                        .show(ui, |ui| {
+                        .show_separator_line(false),
+                    |ui, expanded| {
+                        if expanded {
                             self.tree_pane(ui);
                             self.anchors.insert("list", ui.min_rect());
-                        });
+                        } else {
+                            self.list_strip(ui);
+                        }
+                    },
+                );
+                if list_open == self.settings.hide_list {
+                    self.settings.hide_list = !list_open;
+                    self.settings.save();
                 }
                 let frame = Frame::new().fill(t.win).inner_margin(Margin { left: 6, right: 6, top: 0, bottom: 6 });
-                if self.settings.hide_inspector {
-                    egui::Panel::bottom("inspector-min").frame(frame).exact_size(36.0).show_separator_line(false).show(ui, |ui| {
-                        Self::pane_frame(&t).inner_margin(Margin::symmetric(10, 2)).show(ui, |ui| self.inspector_bar(ui));
-                    });
-                } else {
+                let mut insp_open = !self.settings.hide_inspector;
+                egui::Panel::show_switched(
+                    ui,
+                    &mut insp_open,
+                    egui::Panel::bottom("inspector-min").frame(frame).exact_size(36.0).show_separator_line(false),
                     egui::Panel::bottom("inspector")
                         .frame(frame)
                         .default_size((area.height() * 0.28).clamp(150.0, 250.0))
                         .size_range(120.0..=(area.height() * 0.5).max(140.0))
                         .resizable(true)
-                        .show_separator_line(false)
-                        .show(ui, |ui| {
+                        .show_separator_line(false),
+                    |ui, expanded| {
+                        if expanded {
                             let bar = Self::pane_frame(&t).inner_margin(Margin { left: 10, right: 10, top: 2, bottom: 0 }).show(ui, |ui| {
                                 ui.set_min_width(ui.available_width());
                                 self.inspector_bar(ui);
@@ -6693,10 +6805,22 @@ impl DiskRootApp {
                             ui.add_space(4.0);
                             // Each selection starts at the top of its details.
                             ScrollArea::vertical().id_salt(("details", self.selected.clone())).auto_shrink([false, false]).show(ui, |ui| self.details_pane(ui));
-                        });
+                        } else {
+                            let bar = Self::pane_frame(&t).inner_margin(Margin::symmetric(10, 2)).show(ui, |ui| self.inspector_bar(ui));
+                            self.anchors.insert("inspector", bar.response.rect);
+                        }
+                    },
+                );
+                if insp_open == self.settings.hide_inspector {
+                    self.settings.hide_inspector = !insp_open;
+                    self.settings.save();
                 }
             }
-            egui::CentralPanel::default().frame(Frame::new().fill(t.win).inner_margin(Margin::same(6))).show(ui, |ui| self.map_pane(ui));
+            let fade = self.page_fade(&ctx);
+            egui::CentralPanel::default().frame(Frame::new().fill(t.win).inner_margin(Margin::same(6))).show(ui, |ui| {
+                ui.multiply_opacity(fade);
+                self.map_pane(ui)
+            });
         }
 
         if self.scanned.is_some()

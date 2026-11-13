@@ -55,7 +55,7 @@ pub const LIGHT: Tokens = Tokens {
     head: hex(0xefede7),
     text: hex(0x1e1d1a),
     muted: hex(0x6c6860),
-    faint: hex(0x9a958b),
+    faint: hex(0x6f6a62),
     sel: hex(0xdde8d4),
     hover: hex(0xeeece5),
     accent: hex(0x3e6b35),
@@ -73,7 +73,7 @@ pub const DARK: Tokens = Tokens {
     head: hex(0x23241f),
     text: hex(0xe8e6df),
     muted: hex(0x9a978d),
-    faint: hex(0x6d6a62),
+    faint: hex(0x8c887f),
     sel: hex(0x2b3a27),
     hover: hex(0x24261f),
     accent: hex(0x8fbf74),
@@ -93,7 +93,7 @@ pub const STUDIO_DARK: Tokens = Tokens {
     head: hex(0x121821),
     text: hex(0xe6edf3),
     muted: hex(0x8a95a3),
-    faint: hex(0x56606d),
+    faint: hex(0x747e8c),
     sel: hex(0x0f2a24),
     hover: hex(0x151b23),
     accent: hex(0x10b981),
@@ -112,7 +112,7 @@ pub const STUDIO_LIGHT: Tokens = Tokens {
     head: hex(0xf8f7f4),
     text: hex(0x0f172a),
     muted: hex(0x586476),
-    faint: hex(0x8f98a6),
+    faint: hex(0x687181),
     sel: hex(0xe2f6ef),
     hover: hex(0xf1f0ec),
     accent: hex(0x047857),
@@ -171,8 +171,14 @@ const STUDIO_CAT: [Color32; 10] = [
     hex(0x64748b), // Other
 ];
 
-/// Amber for warnings (cloud, Git, large deletes, integrity notes).
-pub const WARN: Color32 = hex(0xb7791f);
+/// Amber for warnings (cloud, Git, large deletes, integrity notes): one
+/// that stays readable (WCAG 4.5:1) on the theme's background.
+pub fn warn() -> Color32 {
+    if IS_DARK.load(Ordering::Relaxed) { hex(0xc58a2a) } else { hex(0x9a6412) }
+}
+
+/// The theme in use is dark (set by `apply`, read by `warn`).
+static IS_DARK: AtomicBool = AtomicBool::new(false);
 
 pub fn cat_color(cat: u8) -> Color32 {
     let set = if classic() { &CAT } else { &STUDIO_CAT };
@@ -266,15 +272,16 @@ pub fn regular(size: f32) -> FontId {
     FontId::proportional(size)
 }
 
-/// Sizes and counts: monospaced in Studio (digits line up in columns),
-/// the normal font in Classic.
+/// Sizes and counts. Segoe UI's regular digits all have the same width
+/// (tabular), so columns of numbers line up without a monospaced font.
 pub fn num(size: f32) -> FontId {
-    if classic() { regular(size) } else { FontId::monospace(size - 0.5) }
+    regular(size)
 }
 
 /// Applies the tokens to egui's widgets.
 pub fn apply(ctx: &egui::Context, theme: Theme) {
     let t = tokens(theme);
+    IS_DARK.store(t.dark, Ordering::Relaxed);
     let mut v = if t.dark { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.win;
     v.window_fill = t.win;
