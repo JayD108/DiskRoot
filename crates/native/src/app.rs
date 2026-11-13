@@ -560,6 +560,11 @@ pub struct DiskRootApp {
     reclaim: Option<Arc<std::collections::HashMap<u32, [u64; 2]>>>,
     /// The root of the last map built, to tell a new place from a recolour.
     last_map_root: Option<MapRoot>,
+    /// Speed guard: frame intervals (ms) measured during a transition.
+    anim_frames: Vec<f32>,
+    last_frame: Option<(Instant, bool)>,
+    /// DISKROOT_TEST_SLOW_FRAME=<ms>: make every frame that slow (tests the guard).
+    test_slow: Option<u64>,
     /// The user's own rules: loaded or not, and why.
     rules_status: RulesStatus,
     /// Live updates: the running watch on the scan root.
@@ -668,6 +673,9 @@ impl DiskRootApp {
             badge_dirty: false,
             reclaim: None,
             last_map_root: None,
+            anim_frames: Vec::new(),
+            last_frame: None,
+            test_slow: std::env::var("DISKROOT_TEST_SLOW_FRAME").ok().and_then(|v| v.parse().ok()),
             owners_rx: {
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
@@ -2971,7 +2979,9 @@ impl DiskRootApp {
             let sep = "  ›  ";
             let width = |text: &str, last: bool| p.layout_no_wrap(text.to_owned(), if last { theme::semibold(12.0) } else { theme::regular(12.0) }, t.text).size().x;
             let sep_w = width(sep, false);
-            let budget = full - 420.0 - 150.0;
+            // Room left of the switches (2.5D, Size, Growth, Reclaimable ≈ 340 px);
+            // the size text only shows when there's room besides.
+            let budget = full - 350.0;
             let mut first = 0;
             while first + 1 < crumbs.len() {
                 let total: f32 = crumbs[first..].iter().enumerate().map(|(i, c)| width(&visible(&c.1), first + i + 1 == crumbs.len()) + sep_w).sum::<f32>() + if first > 0 { width("…", false) + sep_w } else { 0.0 };
@@ -2991,7 +3001,7 @@ impl DiskRootApp {
                 let last = i + 1 == crumbs.len();
                 let shown = visible(name);
                 // The last level gets what's left before the mode switch (~300 px).
-                let text = if last { map::fit(p, &shown, 12.0, (hr.max.x - 420.0 - x).max(40.0)).unwrap_or_default() } else { shown.clone() };
+                let text = if last { map::fit(p, &shown, 12.0, (hr.max.x - 350.0 - x).max(40.0)).unwrap_or_default() } else { shown.clone() };
                 let w = width(&text, last);
                 if last {
                     p.text(pos2(x, hr.center().y), Align2::LEFT_CENTER, text, theme::semibold(12.0), t.text);
@@ -5862,7 +5872,7 @@ impl DiskRootApp {
                     ui.painter().rect_filled(rect, CornerRadius::same(2), theme::cat_color(*cat));
                     let size = fmt_bytes(*bytes);
                     let w = |s: &str, f: egui::FontId| ui.painter().layout_no_wrap(s.to_owned(), f, t.text).size().x;
-                    let rest = w(&size, theme::regular(13.0)) + if label.is_empty() { 0.0 } else { w(label, theme::regular(11.5)) + 8.0 } + 16.0;
+                    let rest = w(&size, theme::regular(13.0)) + if label.is_empty() { 0.0 } else { w(label, theme::regular(11.5)) + 6.0 } + 8.0;
                     let name_w = (ui.available_width() - rest).max(30.0);
                     ui.scope(|ui| {
                         ui.set_max_width(name_w);
@@ -5891,6 +5901,49 @@ impl DiskRootApp {
                 self.run_cmd(ui.ctx(), Cmd::ToggleList);
             }
         });
+    }
+
+    /// Speed guard: the map's transitions are the only animation, so they
+    /// are where a slow PC shows. Frame intervals are measured while one
+    /// runs; if the PC can't keep up (median over 50 ms, under ~20 fps),
+    /// transitions are turned off, and over 120 ms the 2.5D map too. Once:
+    /// whatever the user turns back on afterwards stays on.
+    fn speed_guard(&mut self) {
+        const RUN: Duration = Duration::from_millis(220);
+        let now = Instant::now();
+        let born = self.map.as_ref().and_then(|m| m.born);
+        // Every frame drawn because of the transition counts: from the one
+        // that started it to the first one after it ended.
+        if let (Some(b), Some((prev, _))) = (born, self.last_frame)
+            && prev + Duration::from_millis(500) >= b
+            && prev < b + RUN
+        {
+            self.anim_frames.push(now.duration_since(prev).as_secs_f32() * 1000.0);
+        }
+        let over = born.is_none_or(|b| now.duration_since(b) >= RUN);
+        if over && !self.anim_frames.is_empty() {
+            let mut f = std::mem::take(&mut self.anim_frames);
+            if f.len() >= 2 && !self.settings.slow_pc {
+                f.sort_by(f32::total_cmp);
+                let median = f[f.len() / 2];
+                if median > 50.0 {
+                    self.settings.slow_pc = true;
+                    self.settings.animations = false;
+                    let also_25d = median > 120.0 && self.settings.map_25d;
+                    if also_25d {
+                        self.settings.map_25d = false;
+                        self.map = None;
+                    }
+                    self.settings.save();
+                    self.say(format!(
+                        "This PC draws the map slowly (about {:.0} frames a second), so smooth transitions{} are off now. View turns them back on.",
+                        1000.0 / median,
+                        if also_25d { " and the tilted map" } else { "" }
+                    ));
+                }
+            }
+        }
+        self.last_frame = Some((now, !over));
     }
 
     /// Save space badge: the biggest single way to get space back, worked
@@ -5975,6 +6028,10 @@ impl DiskRootApp {
     pub fn show(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let _bench = bench_frame(&ctx, self.scanned.is_some());
+        if let Some(ms) = self.test_slow {
+            std::thread::sleep(Duration::from_millis(ms));
+        }
+        self.speed_guard();
         self.poll_job(&ctx);
         self.poll_remember(&ctx);
         self.poll_savings(&ctx);

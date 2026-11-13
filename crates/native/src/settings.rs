@@ -41,6 +41,10 @@ pub struct Settings {
     pub map_25d: bool,
     /// The Classic look (warm paper, moss green) instead of Studio.
     pub classic: bool,
+    /// The speed guard found this PC draws slowly and turned transitions
+    /// (and maybe the 2.5D map) off. Set once: if the user turns them back
+    /// on, the guard leaves them alone.
+    pub slow_pc: bool,
 }
 
 /// A size alert on a folder (checked after scans and live updates while
@@ -57,7 +61,7 @@ pub struct Alert {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { dark: false, treemap: false, by_category: false, last_path: "C:\\".into(), seen_notice: false, remember_scans: true, color_by_age: false, live_updates: true, alerts: Vec::new(), free_when_minimized: false, gentle_scan: false, home_at_start: true, hide_list: false, hide_inspector: false, map_mode: 0, animations: true, map_25d: false, classic: false }
+        Self { dark: false, treemap: false, by_category: false, last_path: "C:\\".into(), seen_notice: false, remember_scans: true, color_by_age: false, live_updates: true, alerts: Vec::new(), free_when_minimized: false, gentle_scan: false, home_at_start: true, hide_list: false, hide_inspector: false, map_mode: 0, animations: true, map_25d: false, classic: false, slow_pc: false }
     }
 }
 
