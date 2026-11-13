@@ -274,7 +274,9 @@ static FONTS: std::sync::Mutex<Option<(FontDefinitions, u32)>> = std::sync::Mute
 /// Scripts Segoe UI doesn't cover, and Windows' own font for each. These
 /// fonts are big (5-19 MB), so each is loaded only when a file or folder
 /// name on screen needs it.
-const SCRIPTS: [(&str, &[&str], fn(u32) -> bool); 5] = [
+/// (name, font files to try, does this character need it).
+type Script = (&'static str, &'static [&'static str], fn(u32) -> bool);
+const SCRIPTS: [Script; 5] = [
     ("cjk", &["msyh.ttc", "YuGothR.ttc", "simsun.ttc", "msgothic.ttc"], |c| {
         (0x2E80..=0x9FFF).contains(&c) || (0xF900..=0xFAFF).contains(&c) || (0xFF00..=0xFFEF).contains(&c) || (0x2_0000..=0x2_FFFF).contains(&c)
     }),
