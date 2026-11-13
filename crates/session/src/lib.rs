@@ -1320,6 +1320,58 @@ It may be left over from an uninstalled program, or belong to one that's install
             .collect()
     }
 
+    /// Map "Reclaimable" mode: for every folder that holds some, the bytes
+    /// inside it that DiskRoot's rules label safe to clear (`[0]`), and
+    /// "check first" places that are still space to get back (`[1]`): caches
+    /// (Temp & caches) and Windows leftovers with a Windows cleanup tool
+    /// (e.g. Windows.old). Personal folders (Documents, Downloads…) are
+    /// "check first" too, but not reclaimable space, so they're left out.
+    /// Counted at the topmost labelled place only (a cache folder, not again
+    /// for each file in it); protected places and the user's own rules (for
+    /// "safe") are left out, like "Mark all". Only folders with something
+    /// reclaimable are stored, to keep memory low.
+    pub fn reclaimable(&self) -> std::collections::HashMap<u32, [u64; 2]> {
+        use std::collections::HashMap;
+        let idx = &self.index;
+        let mut places: HashMap<u32, usize> = HashMap::new();
+        for n in 1..idx.len() as u32 {
+            if !self.cls.matched_here(n) || idx.flags(n) & flags::DELETED != 0 {
+                continue;
+            }
+            let Some(info) = self.rules.info.get(self.cls.rule[n as usize] as usize) else { continue };
+            let cache_like = self.cls.cat[n as usize] == CAT_TEMP || info.action.is_some();
+            let slot = match diskroot_core::classify::safety_at(info, &idx.path(n)) {
+                Some(Safety::Green) if !info.user => 0,
+                Some(Safety::Yellow) if cache_like => 1,
+                _ => continue,
+            };
+            if self.cls.protection(idx, &self.rules, n).is_none() {
+                places.insert(n, slot);
+            }
+        }
+        let mut out: HashMap<u32, [u64; 2]> = HashMap::new();
+        'place: for (&n, &slot) in &places {
+            // Inside another labelled place: already counted there.
+            let mut a = n;
+            while a != 0 {
+                a = idx.parent(a);
+                if places.contains_key(&a) {
+                    continue 'place;
+                }
+            }
+            let bytes = idx.alloc(n);
+            let mut a = n;
+            loop {
+                out.entry(a).or_default()[slot] += bytes;
+                if a == 0 {
+                    break;
+                }
+                a = idx.parent(a);
+            }
+        }
+        out
+    }
+
     /// Folders and files whose name contains `query` (case-insensitive),
     /// biggest first (a folder counts with everything inside). For the
     /// command palette: one pass, no allocation per name for ASCII queries.
@@ -1613,9 +1665,17 @@ pub fn reveal(path: &str) -> Result<(), String> {
         .map_err(|e| format!("Could not open Explorer: {e}"))
 }
 
+/// The "Temp & caches" category (index into the categories list).
+const CAT_TEMP: u8 = 6;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn temp_category_index_is_right() {
+        assert_eq!(categories()[CAT_TEMP as usize].name, "Temp & caches");
+    }
 
     #[test]
     fn teaching_writes_a_category_only_rule_and_can_be_undone() {
@@ -1676,6 +1736,19 @@ mod tests {
         assert!(s.prepare_delete(7).is_err());
         assert!(s.prepare_delete(4).is_ok(), "node_modules can be deleted");
         assert!(s.prepare_delete(0).is_err(), "never the scan root");
+    }
+
+    #[test]
+    fn reclaimable_counts_each_place_once_and_skips_protected() {
+        let s = demo();
+        let r = s.reclaimable();
+        let at = |n: u32| r.get(&n).copied().unwrap_or_default();
+        let total = at(0)[0] + at(0)[1];
+        assert!(total > 0, "node_modules is reclaimable: {r:?}");
+        assert_eq!(at(0), at(1), "everything reclaimable is under Users");
+        assert_eq!(at(3), at(4), "proj holds exactly node_modules");
+        assert_eq!(total, 4096, "counted once, not again for a.js inside it");
+        assert!(!r.contains_key(&7), "Windows is protected");
     }
 
     #[test]
@@ -2037,3 +2110,4 @@ mod tests {
         assert!(s.cat_children("", 100).unwrap().iter().all(|r| r.name != "Dev stuff"));
     }
 }
+

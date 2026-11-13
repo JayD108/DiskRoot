@@ -118,9 +118,20 @@ pub fn age_color(bucket: usize) -> Color32 {
     AGE.get(bucket).copied().unwrap_or(AGE[6])
 }
 
-/// Legend swatches: 0-99 are categories, 100+ age buckets.
+/// Map modes. Growth: grew a lot, grew, unchanged, shrank, new, no data.
+/// Reclaimable: safe to clear, check first, everything else.
+pub const GROWTH: [Color32; 6] = [hex(0xc8452c), hex(0xe3a33f), hex(0xa9a59d), hex(0x4f9a52), hex(0x7d62c4), hex(0xd3cfc7)];
+pub const RECLAIM: [Color32; 3] = [hex(0x3f9a4a), hex(0xd99a2b), hex(0xc2bdb4)];
+
+/// Legend swatches: 0-99 are categories, 100-199 age buckets, 200-209
+/// growth, 210-219 reclaimable.
 pub fn swatch(c: u8) -> Color32 {
-    if c >= 100 { age_color(usize::from(c - 100)) } else { cat_color(c) }
+    match c {
+        210.. => RECLAIM.get(usize::from(c - 210)).copied().unwrap_or(RECLAIM[2]),
+        200.. => GROWTH.get(usize::from(c - 200)).copied().unwrap_or(GROWTH[5]),
+        100.. => age_color(usize::from(c - 100)),
+        _ => cat_color(c),
+    }
 }
 
 /// Blend toward the panel colour: deeper rings / inner tiles get lighter

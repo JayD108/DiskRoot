@@ -175,8 +175,9 @@ pub fn hit(layout: &Layout, p: Pos2) -> Option<Hit> {
     }
 }
 
-fn color_of(n: &Node, depth: u8, t: &Tokens, today: Option<u16>) -> Color32 {
+fn color_of(n: &Node, depth: u8, t: &Tokens, today: Option<u16>, over: Option<Color32>) -> Color32 {
     let base = match today {
+        _ if over.is_some() => over.unwrap_or_default(),
         Some(d) => theme::age_color(diskroot_session::age_bucket(d, n.mtime)),
         None if n.cat == u8::MAX => theme::cat_color(9),
         None => theme::cat_color(n.cat),
@@ -283,6 +284,8 @@ pub struct PaintCtx<'a> {
     pub can_go_up: bool,
     /// Some(today): colour by last-modified age instead of category.
     pub today: Option<u16>,
+    /// Map modes (growth, reclaimable): a colour per node; empty = by category.
+    pub over: &'a [Color32],
 }
 
 pub fn paint(p: &Painter, layout: &Layout, cx: &PaintCtx) {
@@ -293,7 +296,7 @@ pub fn paint(p: &Painter, layout: &Layout, cx: &PaintCtx) {
                 if s.a1 - s.a0 < 0.002 {
                     continue;
                 }
-                if let Some(m) = ring_mesh(*center, s.ri, s.ro, s.a0, s.a1, color_of(&cx.nodes[s.i], s.depth, t, cx.today)) {
+                if let Some(m) = ring_mesh(*center, s.ri, s.ro, s.a0, s.a1, color_of(&cx.nodes[s.i], s.depth, t, cx.today, cx.over.get(s.i).copied())) {
                     p.add(Shape::mesh(m));
                 }
             }
@@ -332,7 +335,7 @@ pub fn paint(p: &Painter, layout: &Layout, cx: &PaintCtx) {
         Layout::Tree { tiles } => {
             for tile in tiles {
                 let n = &cx.nodes[tile.i];
-                p.rect_filled(tile.rect, CornerRadius::ZERO, color_of(n, tile.depth, t, cx.today));
+                p.rect_filled(tile.rect, CornerRadius::ZERO, color_of(n, tile.depth, t, cx.today, cx.over.get(tile.i).copied()));
                 p.rect_stroke(tile.rect, CornerRadius::ZERO, Stroke::new(2.0, t.panel), StrokeKind::Inside);
                 if Some(tile.i) == cx.hover || Some(tile.i) == cx.selected {
                     p.rect_stroke(tile.rect.shrink(1.5), CornerRadius::ZERO, Stroke::new(2.0, t.text), StrokeKind::Inside);

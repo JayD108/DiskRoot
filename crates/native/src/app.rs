@@ -129,6 +129,9 @@ enum Cmd {
     Leftovers,
     Sunburst,
     Treemap,
+    ModeSize,
+    ModeGrowth,
+    ModeReclaim,
     ByLocation,
     ByCategory,
     ColorCategory,
@@ -466,6 +469,13 @@ struct MapState {
     ages: Option<[u64; diskroot_session::AGE_UNKNOWN + 1]>,
     /// Path from the top to the map root, for the breadcrumbs: (key, name).
     crumbs: Vec<(Key_, String)>,
+    /// Map mode these colours were made for (settings.map_mode).
+    mode: u8,
+    /// Growth / reclaimable: colour, legend code (200+ / 210+) and tooltip
+    /// line per node. Empty in size mode.
+    over: Vec<Color32>,
+    codes: Vec<u8>,
+    notes: Vec<String>,
 }
 
 pub struct DiskRootApp {
@@ -540,6 +550,9 @@ pub struct DiskRootApp {
     badge_rx: Option<Receiver<Option<(u64, String)>>>,
     /// The scan changed (new scan, delete, compress): work the badge out again.
     badge_dirty: bool,
+    /// Map "Reclaimable" mode: safe / check-first bytes per folder (~10 ms
+    /// for a whole drive; made when first needed, dropped when the scan changes).
+    reclaim: Option<Arc<std::collections::HashMap<u32, [u64; 2]>>>,
     /// The user's own rules: loaded or not, and why.
     rules_status: RulesStatus,
     /// Live updates: the running watch on the scan root.
@@ -645,6 +658,7 @@ impl DiskRootApp {
             badge: None,
             badge_rx: None,
             badge_dirty: false,
+            reclaim: None,
             owners_rx: {
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
@@ -896,6 +910,10 @@ impl DiskRootApp {
             Ok((r, prev, hist)) => {
                 self.remember_rx = None;
                 self.prev_sizes = prev;
+                // Growth colours on the map use these: draw it again.
+                if self.settings.map_mode == 1 {
+                    self.map = None;
+                }
                 self.set_hist(hist);
                 self.rows = None;
                 match r {
@@ -1167,6 +1185,10 @@ impl DiskRootApp {
         self.remembered_at = Some(r.time);
         self.changes = changes;
         self.prev_sizes = r.prev;
+        // Growth colours on the map use these: draw it again.
+        if self.settings.map_mode == 1 {
+            self.map = None;
+        }
         self.set_hist(r.hist);
     }
 
@@ -1427,7 +1449,7 @@ impl DiskRootApp {
             self.map = None;
             return;
         };
-        if self.map.as_ref().is_some_and(|m| m.root == root) {
+        if self.map.as_ref().is_some_and(|m| m.root == root && m.mode == self.settings.map_mode) {
             return;
         }
         let Some(s) = &self.scanned else { return };
@@ -1452,7 +1474,8 @@ impl DiskRootApp {
             (MapRoot::Node(n), true) => Some(s.age_breakdown(*n, diskroot_session::today_days())),
             _ => None,
         };
-        self.map = Some(MapState { root, nodes, kids, cached: None, up, ages, crumbs });
+        let (over, codes, notes) = self.mode_colors(&nodes);
+        self.map = Some(MapState { root, nodes, kids, cached: None, up, ages, crumbs, mode: self.settings.map_mode, over, codes, notes });
     }
 
     /// Index of a view node matching a tree key.
@@ -2892,12 +2915,13 @@ impl DiskRootApp {
         let t = self.tokens();
         self.ensure_map();
         let mut crumb_go: Option<Key_> = None;
+        let mut mode_go: Option<u8> = None;
         Self::pane_frame(&t).show(ui, |ui| {
             ui.set_min_size(ui.available_size());
             let full = ui.available_width();
             // Title strip
             let (hr, _) = ui.allocate_exact_size(vec2(full, 26.0), Sense::hover());
-            let p = ui.painter();
+            let p = &ui.painter().clone(); // a handle, so the strip can add widgets below
             p.rect_filled(hr, CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 }, t.head);
             p.line_segment([hr.left_bottom(), hr.right_bottom()], Stroke::new(1.0, t.line));
             let Some(m) = &self.map else {
@@ -2914,7 +2938,7 @@ impl DiskRootApp {
             let sep = "  ›  ";
             let width = |text: &str, last: bool| p.layout_no_wrap(text.to_owned(), if last { theme::semibold(12.0) } else { theme::regular(12.0) }, t.text).size().x;
             let sep_w = width(sep, false);
-            let budget = full * 0.62;
+            let budget = full - 300.0 - 150.0;
             let mut first = 0;
             while first + 1 < crumbs.len() {
                 let total: f32 = crumbs[first..].iter().enumerate().map(|(i, c)| width(&visible(&c.1), first + i + 1 == crumbs.len()) + sep_w).sum::<f32>() + if first > 0 { width("…", false) + sep_w } else { 0.0 };
@@ -2933,7 +2957,8 @@ impl DiskRootApp {
             for (i, (key, name)) in crumbs.iter().enumerate().skip(first) {
                 let last = i + 1 == crumbs.len();
                 let shown = visible(name);
-                let text = if last { map::fit(p, &shown, 12.0, (hr.max.x - x - 160.0).max(40.0)).unwrap_or_default() } else { shown.clone() };
+                // The last level gets what's left before the mode switch (~300 px).
+                let text = if last { map::fit(p, &shown, 12.0, (hr.max.x - 300.0 - x).max(40.0)).unwrap_or_default() } else { shown.clone() };
                 let w = width(&text, last);
                 if last {
                     p.text(pos2(x, hr.center().y), Align2::LEFT_CENTER, text, theme::semibold(12.0), t.text);
@@ -2954,13 +2979,28 @@ impl DiskRootApp {
                     x += sep_w;
                 }
             }
-            p.text(
-                pos2(hr.max.x - 10.0, hr.center().y),
-                Align2::RIGHT_CENTER,
-                format!("{} · {}", fmt_bytes(root.size), fmt_files(u64::from(root.files))),
-                theme::regular(11.5),
-                t.muted,
-            );
+            // Right: map colours (Size / Growth / Reclaimable), then the size
+            // when there's room.
+            let crumbs_end = x;
+            let mut mode = self.settings.map_mode;
+            let mut strip = ui.new_child(egui::UiBuilder::new().max_rect(hr.shrink2(vec2(6.0, 2.0))).layout(Layout::right_to_left(Align::Center)));
+            for (v, label, tip) in [
+                (2u8, "Reclaimable", "Colour space you could get back: safe to clear (green), and caches or Windows leftovers to check first (amber)"),
+                (1, "Growth", "Colour what grew or shrank since the previous scan"),
+                (0, "Size", "Colour by category"),
+            ] {
+                if strip.selectable_label(mode == v, RichText::new(label).size(11.5)).on_hover_text(tip).clicked() {
+                    mode = v;
+                }
+            }
+            if mode != self.settings.map_mode {
+                mode_go = Some(mode);
+            }
+            let size_text = format!("{} · {}", fmt_bytes(root.size), fmt_files(u64::from(root.files)));
+            let size_w = width(&size_text, false) + 16.0;
+            if strip.min_rect().min.x - size_w > crumbs_end + 12.0 {
+                p.text(pos2(strip.min_rect().min.x - 10.0, hr.center().y), Align2::RIGHT_CENTER, size_text, theme::regular(11.5), t.muted);
+            }
 
             // Legend (bottom)
             let legend = self.legend_items();
@@ -3000,12 +3040,32 @@ impl DiskRootApp {
                 center_value: &value,
                 can_go_up: m.up.is_some(),
                 today: self.settings.color_by_age.then(diskroot_session::today_days),
+                over: &m.over,
             };
             map::paint(&ui.painter_at(map_rect), layout, &pc);
-            if kind == Kind::Sunburst {
+            let mode_hint = match m.mode {
+                1 if self.prev_sizes.is_none() => Some("Growth needs a previous scan of this place: it shows from the next scan on (File → Remember scans)"),
+                1 => Some("Colours: change since the previous scan"),
+                2 => Some("Colours: space you could get back"),
+                _ => None,
+            };
+            // Hints only beside the sunburst, where there's room for them (the
+            // treemap fills its area; the legend says the same).
+            let room = match layout {
+                MapLayout::Sun { center, arcs, .. } => center.x - arcs.iter().map(|a| a.ro).fold(0.0, f32::max) - map_rect.min.x - 16.0,
+                MapLayout::Tree { .. } => 0.0,
+            };
+            let fits = |h: &str| ui.painter().layout_no_wrap(h.to_owned(), theme::regular(11.0), t.faint).size().x <= room;
+            if kind == Kind::Treemap || !mode_hint.is_none_or(fits) {
+                // no room
+            } else if let Some(h) = mode_hint {
+                ui.painter_at(map_rect).text(map_rect.left_top() + vec2(10.0, 8.0), Align2::LEFT_TOP, h, theme::regular(11.0), if m.mode == 1 && self.prev_sizes.is_none() { theme::WARN } else { t.faint });
+            } else if kind == Kind::Sunburst {
                 let hint = if m.up.is_some() { "Click a piece to open it · the centre goes up · Ctrl+K: everything" } else { "Click a piece to open it · Ctrl+K: everything" };
+                let hint = if fits(hint) { hint } else if fits("Click a piece to open it") { "Click a piece to open it" } else { "" };
                 ui.painter_at(map_rect).text(map_rect.left_top() + vec2(10.0, 8.0), Align2::LEFT_TOP, hint, theme::regular(11.0), t.faint);
             }
+
 
             // Tooltip + clicks
             let mut go: Option<Key_> = None;
@@ -3042,6 +3102,9 @@ impl DiskRootApp {
                         }
                         if !n.hint.is_empty() {
                             ui.label(RichText::new(&n.hint).color(t.faint).size(11.5));
+                        }
+                        if let Some(note) = m.notes.get(i).filter(|x| !x.is_empty()) {
+                            ui.label(RichText::new(note).color(t.text).size(12.0));
                         }
                     });
                     if resp.clicked() && n.merged == 0 {
@@ -3080,14 +3143,13 @@ impl DiskRootApp {
                         lp.rect_filled(r, CornerRadius::same(3), t.hover);
                     }
                     lp.rect_filled(Rect::from_center_size(pos2(cx + 6.0, cy), vec2(10.0, 10.0)), CornerRadius::same(2), theme::swatch(*cat));
-                    lp.text(pos2(cx + 17.0, cy), Align2::LEFT_CENTER, name, theme::regular(12.0), t.text);
-                    lp.text(
-                        pos2(cx + col_w - 12.0, cy),
-                        Align2::RIGHT_CENTER,
-                        format!("{} · {}", fmt_bytes(*bytes), fmt_pct(*bytes, *total)),
-                        theme::regular(11.5),
-                        t.muted,
-                    );
+                    // The name gives way to the number when the column is narrow.
+                    let value = format!("{} · {}", fmt_bytes(*bytes), fmt_pct(*bytes, *total));
+                    let value_w = lp.layout_no_wrap(value.clone(), theme::regular(11.5), t.muted).size().x;
+                    if let Some(shown) = map::fit(lp, name, 12.0, (col_w - 12.0 - value_w - 17.0 - 10.0).max(20.0)) {
+                        lp.text(pos2(cx + 17.0, cy), Align2::LEFT_CENTER, shown, theme::regular(12.0), t.text);
+                    }
+                    lp.text(pos2(cx + col_w - 12.0, cy), Align2::RIGHT_CENTER, value, theme::regular(11.5), t.muted);
                     if resp.clicked() {
                         clicked_leg = Some(key.clone());
                     }
@@ -3095,7 +3157,8 @@ impl DiskRootApp {
                 ui.allocate_space(vec2(full, legend_h - 4.0));
                 if let Some(k) = clicked_leg
                     && let Key_::Cat(key) = &k
-                    && !key.starts_with("age:") {
+                    && !key.starts_with("age:")
+                    && !key.starts_with("mode:") {
                         if !self.settings.by_category {
                             self.settings.by_category = true;
                             self.regroup();
@@ -3108,6 +3171,118 @@ impl DiskRootApp {
         if let Some(k) = crumb_go {
             self.go_to(k);
         }
+        if let Some(v) = mode_go
+            && v != self.settings.map_mode
+        {
+            self.settings.map_mode = v;
+            self.settings.save();
+            self.map = None;
+        }
+    }
+
+    /// Growth / reclaimable colouring of the map's nodes: (colour, legend
+    /// code, tooltip line) per node; all empty in size mode.
+    fn mode_colors(&mut self, nodes: &[Shape]) -> (Vec<Color32>, Vec<u8>, Vec<String>) {
+        let mode = self.settings.map_mode;
+        let Some(s) = &self.scanned else { return Default::default() };
+        if mode == 0 || nodes.is_empty() {
+            return Default::default();
+        }
+        let mut over = Vec::with_capacity(nodes.len());
+        let mut codes = Vec::with_capacity(nodes.len());
+        let mut notes = Vec::with_capacity(nodes.len());
+        if mode == 1 {
+            // Growth since the previous scan: folders of 1 MB or more are remembered.
+            let root = self.summary.as_ref().map(|x| x.root.clone()).unwrap_or_default();
+            for n in nodes {
+                let real = n.key.is_empty() && n.id >= 0;
+                let (code, note) = match (&self.prev_sizes, real && n.dir) {
+                    (None, _) => (5, "No previous scan of this place to compare with".to_owned()),
+                    (_, false) => (5, if n.key.is_empty() { "Files aren't tracked between scans (folders are)".to_owned() } else { "Growth is shown in the Location view".to_owned() }),
+                    (Some(prev), true) => {
+                        let full = s.path(n.id as u32).unwrap_or_default();
+                        let rel = full.strip_prefix(root.as_str()).unwrap_or(&full).trim_start_matches('\\');
+                        match prev.get(&remember::path_key(rel)).copied() {
+                            None if n.size >= 1 << 20 => (4, "New since the previous scan (or under 1 MB then)".to_owned()),
+                            None => (5, "Under 1 MB: not tracked between scans".to_owned()),
+                            Some(before) => {
+                                let d = i128::from(n.size) - i128::from(before);
+                                let small = d.unsigned_abs() < (1u128 << 20).max(u128::from(before) / 100);
+                                let code = if small {
+                                    2
+                                } else if d < 0 {
+                                    3
+                                } else if d >= 1 << 30 || d >= i128::from(before) / 4 {
+                                    0
+                                } else {
+                                    1
+                                };
+                                (code, if small { "About the same as at the previous scan".to_owned() } else { format!("{} since the previous scan", fmt_delta(d)) })
+                            }
+                        }
+                    }
+                };
+                over.push(theme::GROWTH[code as usize]);
+                codes.push(200 + code);
+                notes.push(note);
+            }
+        } else {
+            if self.reclaim.is_none() {
+                self.reclaim = Some(Arc::new(s.reclaimable()));
+            }
+            let table = self.reclaim.clone().unwrap_or_default();
+            for (i, n) in nodes.iter().enumerate() {
+                let parent = (n.parent >= 0).then(|| n.parent as usize).filter(|&p| p < i);
+                // Inside a place that is reclaimable as a whole: same colour.
+                if let Some(p) = parent
+                    && codes[p] != 212
+                    && over[p] == theme::RECLAIM[(codes[p] - 210) as usize]
+                {
+                    over.push(over[p]);
+                    codes.push(codes[p]);
+                    notes.push(notes[p].clone());
+                    continue;
+                }
+                let (g, y) = if n.key.is_empty() && n.id >= 0 {
+                    let v = table.get(&(n.id as u32)).copied().unwrap_or_default();
+                    (v[0], v[1])
+                } else {
+                    // Category view: the rule behind a sub-type or place.
+                    // (Same idea as Scanned::reclaimable: "check first" counts only
+                    // for caches and Windows leftovers, not personal folders.)
+                    let rule = s.rules().info.get(n.rule as usize);
+                    let cache_like = n.cat == 6 || rule.is_some_and(|r| r.action.is_some());
+                    match rule.and_then(|r| r.safety) {
+                        Some(Safety::Green) if !rule.is_some_and(|r| r.user) => (n.size, 0),
+                        Some(Safety::Yellow) if cache_like => (0, n.size),
+                        _ => (0, 0),
+                    }
+                };
+                let size = n.size.max(1);
+                if g + y == 0 {
+                    over.push(theme::RECLAIM[2]);
+                    codes.push(212);
+                    notes.push("Nothing here is labelled safe to clear or check first".to_owned());
+                    continue;
+                }
+                let slot = usize::from(y > g);
+                let frac = ((g + y) as f32 / size as f32).min(1.0);
+                // Whole place reclaimable: full colour (children inherit it);
+                // partly: the more it holds, the stronger the colour.
+                let c = if frac >= 0.99 { theme::RECLAIM[slot] } else { lerp(theme::RECLAIM[2], theme::RECLAIM[slot], 0.3 + 0.6 * frac) };
+                over.push(c);
+                codes.push(210 + slot as u8);
+                let mut note = Vec::new();
+                if g > 0 {
+                    note.push(format!("Safe to clear: {}", fmt_bytes(g)));
+                }
+                if y > 0 {
+                    note.push(format!("Check first: {}", fmt_bytes(y)));
+                }
+                notes.push(note.join(" · "));
+            }
+        }
+        (over, codes, notes)
     }
 
     /// (key, name, bytes, total, colour) entries under the map.
@@ -3115,6 +3290,35 @@ impl DiskRootApp {
         let (Some(s), Some(m)) = (&self.scanned, &self.map) else { return Vec::new() };
         let cats = diskroot_session::categories();
         let mut out = Vec::new();
+        if !m.codes.is_empty() {
+            // Growth / reclaimable: the map root's parts by colour.
+            let root_size = m.nodes.first().map_or(0, |n| n.size);
+            let mut by: Vec<(u8, u64)> = Vec::new();
+            if m.mode == 2
+                && let (MapRoot::Node(n), Some(table)) = (&m.root, &self.reclaim)
+            {
+                let v = table.get(n).copied().unwrap_or_default();
+                by = vec![(210, v[0]), (211, v[1]), (212, root_size.saturating_sub(v[0] + v[1]))];
+            } else {
+                for (i, n) in m.nodes.iter().enumerate().skip(1) {
+                    if n.parent == 0 {
+                        match by.iter_mut().find(|x| x.0 == m.codes[i]) {
+                            Some(x) => x.1 += n.size,
+                            None => by.push((m.codes[i], n.size)),
+                        }
+                    }
+                }
+                by.sort_by_key(|x| x.0);
+            }
+            let no_data = if self.prev_sizes.is_none() { "No previous scan yet" } else { "Not tracked (files, small folders)" };
+            let names = ["Grew a lot", "Grew", "About the same", "Shrank", "New (or under 1 MB before)", no_data];
+            let rnames = ["Safe to clear", "Check first", "Everything else"];
+            for (code, bytes) in by.into_iter().filter(|x| x.1 > 0) {
+                let name = if code >= 210 { rnames[(code - 210) as usize] } else { names[(code - 200) as usize] };
+                out.push((Key_::Cat(format!("mode:{code}")), name.to_owned(), bytes, root_size, code));
+            }
+            return out;
+        }
         if self.settings.color_by_age {
             if let Some(ages) = &m.ages {
                 let total: u64 = ages.iter().sum();
@@ -5271,6 +5475,9 @@ impl DiskRootApp {
             ("Largest files & file types", "", Cmd::Files, scan),
             ("Similar folders", "", Cmd::Similar, scan),
             ("Leftovers", "", Cmd::Leftovers, scan),
+            ("Map colours: size (category)", "", Cmd::ModeSize, self.settings.map_mode != 0),
+            ("Map colours: growth since the previous scan", "", Cmd::ModeGrowth, self.settings.map_mode != 1),
+            ("Map colours: reclaimable (safe to clear / check first)", "", Cmd::ModeReclaim, self.settings.map_mode != 2),
             ("Switch to Sunburst", "", Cmd::Sunburst, self.settings.treemap),
             ("Switch to Treemap", "", Cmd::Treemap, !self.settings.treemap),
             ("Group by location", "", Cmd::ByLocation, self.settings.by_category),
@@ -5327,6 +5534,15 @@ impl DiskRootApp {
                 if let Some(m) = &mut self.map {
                     m.cached = None;
                 }
+            }
+            Cmd::ModeSize | Cmd::ModeGrowth | Cmd::ModeReclaim => {
+                self.settings.map_mode = match c {
+                    Cmd::ModeGrowth => 1,
+                    Cmd::ModeReclaim => 2,
+                    _ => 0,
+                };
+                self.settings.save();
+                self.map = None;
             }
             Cmd::ByLocation | Cmd::ByCategory => {
                 self.settings.by_category = c == Cmd::ByCategory;
@@ -5594,6 +5810,11 @@ impl DiskRootApp {
     fn poll_badge(&mut self) {
         if std::mem::take(&mut self.badge_dirty) {
             self.badge = None;
+            // The map's growth / reclaimable colours depend on the scan too.
+            self.reclaim = None;
+            if self.settings.map_mode != 0 {
+                self.map = None;
+            }
             self.badge_rx = self.scanned.as_ref().map(|s| {
                 let s = s.clone(); // cheap: shared parts
                 let ctx = self.egui_ctx.clone();
@@ -5928,4 +6149,10 @@ fn changes_summary(ch: &Changes) -> String {
     let d = i128::from(ch.after_total) - i128::from(ch.before_total);
     let note = if ch.mixed_methods() { " (different scan method, see What changed)" } else { "" };
     format!("Since the previous scan ({}): {}{note}", remember::age_text(ch.before_time), fmt_delta(d))
+}
+
+/// Mix two colours: `k` = 0 gives `a`, 1 gives `b`.
+fn lerp(a: Color32, b: Color32, k: f32) -> Color32 {
+    let m = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * k.clamp(0.0, 1.0)).round() as u8;
+    Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
 }
