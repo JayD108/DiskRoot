@@ -48,11 +48,12 @@ Full C: scan (1.7M files) open, window 2062×1346, frame after frame (`DISKROOT_
 | Renderer | Frame interval | Same, limited to 2 cores | Peak RAM |
 |---|---|---|---|
 | OpenGL (normal) | 4.2 ms | 4.4–4.6 ms | ~280–320 MB |
-| CPU renderer, everything redrawn (worst case) | 11 ms (2D), 13 ms (2.5D) | 34 ms (2D), 39 ms (2.5D) | ~205 MB |
+| CPU renderer, everything redrawn (worst case) | 12 ms | 41 ms | ~205 MB |
 | CPU renderer, nothing changed | 2 ms | 2 ms | ~205 MB |
 | Windows' own software renderer (Direct3D WARP), for comparison | ~400 ms | 520–640 ms | ~445 MB |
 
 - Building the UI itself takes 0.3–0.5 ms a frame in every case.
+- Full redraws: Studio look, 2D map. The Classic look was a little cheaper (11 ms / 34 ms: fewer rounded corners); the 2.5D map adds about 2–5 ms.
 - Idle (nothing changing): no frames are drawn, 0% CPU.
 - The CPU renderer is the fallback for PCs where OpenGL can't start; on this laptop it was forced with `DISKROOT_RENDERER=software`. Slower CPUs will be slower; the speed guard turns transitions off below ~20 frames a second.
 
