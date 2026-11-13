@@ -100,6 +100,11 @@ fn squarify(items: &mut [(usize, f64)], mut r: Rect, out: &mut Vec<(usize, Rect)
     let scale = f64::from(r.width() * r.height()) / total;
     let mut i = 0;
     while i < items.len() {
+        // No room left (the rest are too small to see): stop. Without this a
+        // zero-wide strip gives infinite tiles, which break the 2.5D view.
+        if r.width() < 0.5 || r.height() < 0.5 {
+            break;
+        }
         let short = f64::from(r.width().min(r.height()));
         let max_a = items[i].1 * scale;
         let (mut end, mut sum, mut best) = (i, 0.0, f64::INFINITY);
@@ -142,6 +147,7 @@ fn layout_tree(nodes: &[Node], kids: &[Vec<usize>], rect: Rect) -> Layout {
     let mut items: Vec<(usize, f64)> =
         kids[0].iter().filter(|&&k| nodes[k].size > 0).map(|&k| (k, nodes[k].size as f64)).collect();
     squarify(&mut items, rect.shrink(6.0), &mut top);
+    top.retain(|(_, r)| r.is_finite() && r.is_positive());
     for (i, r) in top {
         let nest = !kids[i].is_empty() && r.width() > 50.0 && r.height() > 44.0;
         tiles.push(Tile { i, rect: r, header: nest, depth: 1 });
@@ -151,6 +157,7 @@ fn layout_tree(nodes: &[Node], kids: &[Vec<usize>], rect: Rect) -> Layout {
                 kids[i].iter().filter(|&&k| nodes[k].size > 0).map(|&k| (k, nodes[k].size as f64)).collect();
             let mut placed = Vec::new();
             squarify(&mut sub, inner, &mut placed);
+            placed.retain(|(_, r)| r.is_finite() && r.is_positive());
             tiles.extend(placed.into_iter().map(|(k, rr)| Tile { i: k, rect: rr, header: false, depth: 2 }));
         }
     }
@@ -646,6 +653,26 @@ mod tests {
         }
         assert!(matches!(hit_25d(&lay, &tilt, &n, tilt.at(*center, tilt.ring_z(1))), Some(Hit::Pith)));
         assert!(hit_25d(&lay, &tilt, &n, pos2(2.0, 2.0)).is_none(), "corner: nothing");
+    }
+
+    #[test]
+    fn treemap_tiles_are_always_finite() {
+        // One huge item and thousands of tiny ones (like a whole drive).
+        let mut n = vec![Node::plain(0, -1, "root".into(), 0, 0, true, 0)];
+        n.push(Node::plain(1, 0, "big".into(), 1u64 << 40, 1, false, 1));
+        for k in 0..3000 {
+            n.push(Node::plain(2 + k, 0, format!("f{k}"), 1 + (k as u64 % 7), 1, false, 1));
+        }
+        n[0].size = n.iter().skip(1).map(|x| x.size).sum();
+        let kids = children(&n);
+        let area = Rect::from_min_size(pos2(0.0, 0.0), vec2(1500.0, 700.0));
+        let Layout::Tree { tiles } = layout(Kind::Treemap, &n, &kids, area) else { panic!() };
+        let finite = |r: Rect| r.min.x.is_finite() && r.min.y.is_finite() && r.max.x.is_finite() && r.max.y.is_finite();
+        let bad = tiles.iter().filter(|t| !finite(t.rect)).count();
+        assert_eq!(bad, 0, "non-finite tiles");
+        let lay = layout(Kind::Treemap, &n, &kids, area);
+        let tilt = Tilt::new(&lay, &n, area);
+        assert!(tilt.at(pos2(10.0, 10.0), 5.0).x.is_finite(), "projection is finite");
     }
 
     #[test]
