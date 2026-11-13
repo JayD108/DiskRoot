@@ -42,6 +42,20 @@ No measurable slowdown; memory is up 2.5% for the dates.
 | Classifying 1.8M items (categories, notes, safety) | 0.12–0.15 s |
 | Reopening a remembered scan | 0.3–0.4 s |
 
+## Drawing the window
+Full C: scan (1.7M files) open, window 2062×1346, frame after frame (`DISKROOT_BENCH`). Developer laptop (Core Ultra 9 275HX), 13 Nov 2026, DiskRoot 0.7.
+
+| Renderer | Frame interval | Same, limited to 2 cores | Peak RAM |
+|---|---|---|---|
+| OpenGL (normal) | 4.2 ms | 4.4–4.6 ms | ~280–320 MB |
+| CPU renderer, everything redrawn (worst case) | 11 ms (2D), 13 ms (2.5D) | 34 ms (2D), 39 ms (2.5D) | ~205 MB |
+| CPU renderer, nothing changed | 2 ms | 2 ms | ~205 MB |
+| Windows' own software renderer (Direct3D WARP), for comparison | ~400 ms | 520–640 ms | ~445 MB |
+
+- Building the UI itself takes 0.3–0.5 ms a frame in every case.
+- Idle (nothing changing): no frames are drawn, 0% CPU.
+- The CPU renderer is the fallback for PCs where OpenGL can't start; on this laptop it was forced with `DISKROOT_RENDERER=software`. Slower CPUs will be slower; the speed guard turns transitions off below ~20 frames a second.
+
 ## Compression
 
 How much DiskRoot's **Compress** saves, by file type. Measured 12 Nov 2026 on copies of real files (the originals were only read) with the open probe [`tools/compress-probe`](../tools/compress-probe): each copy compressed with every Windows (WOF) algorithm on one thread, checked byte-for-byte identical afterwards, then uncompressed. zstd and lz4 (in memory, not usable transparently by Windows) are there for comparison. Percent = space saved; MB/s = input per second, one thread (the engine runs many files in parallel).

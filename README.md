@@ -92,6 +92,20 @@ Right-click → **Compress…**: Windows' own file compression, on many files at
 
 </td>
 </tr>
+<tr>
+<td valign="top">
+
+### 🗺️ A map that answers questions
+Colour it by **Size**, by **Growth** since the last scan, or by what's **Reclaimable** (safe to clear in green, caches to check in amber). Tilt it into **2.5D** if you like. **Ctrl+K** finds any command or folder by name.
+
+</td>
+<td valign="top">
+
+### 🖥️ Runs on any PC
+One small exe. No graphics driver? DiskRoot draws on the CPU by itself (virtual machines, Remote Desktop). Slow PC? It turns its animations off by itself. Idle, it draws nothing.
+
+</td>
+</tr>
 </table>
 
 <p align="center">
@@ -107,7 +121,8 @@ Right-click → **Compress…**: Windows' own file compression, on many files at
 - **Instant reopen:** your last scan opens in under a second; **What changed** points at the exact folders that grew or shrank.
 - Largest files and types, duplicate finder, similar folders (`project`, `project_v2`, `project - Copy`), leftovers of uninstalled programs, live updates while open, size alerts.
 - **Teach DiskRoot:** right-click a folder → *This is…* (my project, a dataset, a game…), or write your own rules.
-- Its own RAM and CPU in the status bar, free its memory with one click, gentle scanning, light and dark themes, keyboard shortcuts, screen-reader names for the map.
+- **Studio window:** the map in the middle, a folder list and an Inspector you can resize or minimize (Ctrl+B, Ctrl+J), Focus mode (F), breadcrumbs, notices. Studio look (dark or Daylight) or the Classic look.
+- Its own RAM and CPU at the top, free its memory with one click, gentle scanning, keyboard shortcuts, screen-reader names for the map and the palette.
 
 Every feature, with what happens underneath: [FEATURES-AND-DEVELOPMENT.md](docs/FEATURES-AND-DEVELOPMENT.md).
 </details>

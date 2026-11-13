@@ -701,7 +701,7 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "diskroot"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "diskroot-session",
  "eframe",
@@ -715,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "diskroot-bench"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "clap",
  "diskroot-core",
@@ -725,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "diskroot-core"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -733,7 +733,7 @@ dependencies = [
 
 [[package]]
 name = "diskroot-scan-mft"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "diskroot-core",
  "diskroot-scan-walk",
@@ -741,14 +741,14 @@ dependencies = [
 
 [[package]]
 name = "diskroot-scan-walk"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "diskroot-core",
 ]
 
 [[package]]
 name = "diskroot-session"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "blake3",
  "diskroot-core",
@@ -807,7 +807,7 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
 name = "droot"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "clap",
  "diskroot-core",

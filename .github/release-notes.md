@@ -2,6 +2,18 @@
 
 **DiskRoot {{VERSION}}**: a fast disk space analyzer for Windows 10/11. It shows what fills your drive, what each thing is, and whether it's safe to delete.
 
+## New in 0.7.0
+A new window, designed as "DiskRoot Studio", and a map that answers more questions. Still one small exe, offline, read-only scanning.
+
+- **Studio window:** the map in the middle, the folder list on the left and the Inspector (what it is, is it safe, its size history) under the map. Both sides resize and minimize (**Ctrl+B**, **Ctrl+J**); **F** shows only the map.
+- **Ctrl+K command palette:** every command and every folder or file by name, biggest first.
+- **Map colours: Size, Growth, Reclaimable.** Growth shows what grew or shrank since the previous scan; Reclaimable shows what DiskRoot's rules label safe to clear (green) and caches or Windows leftovers to check first (amber). Personal folders aren't counted as reclaimable.
+- **Optional 2.5D map** (2D stays the default): a tilted treemap "city" or a stepped sunburst, boxes standing up by size.
+- **Breadcrumbs** on the map, short **transitions** when you open a folder, **notices** for what just happened, and a **Save space badge** with the biggest single way to get space back.
+- **Studio look** (dark and Daylight) is the new default; the **Classic look** is under View.
+- **Runs without a graphics driver:** if OpenGL can't start (virtual machines, some Remote Desktop sessions, the Basic Display Adapter), DiskRoot draws on the CPU instead, automatically. It redraws only what changed.
+- **Slow PCs:** if the map's transitions draw at under ~20 frames a second, DiskRoot turns them off by itself (and says so).
+
 ## New in 0.6.1
 - **New logo and app icon:** the DiskRoot leaf, without the dark tile, in the taskbar, Start menu, title bar, start screen and About.
 

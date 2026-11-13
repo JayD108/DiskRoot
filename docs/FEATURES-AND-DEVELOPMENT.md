@@ -51,6 +51,16 @@ This page explains every feature of DiskRoot 0.2: **what it does, how to use it,
 
 ## 2. Seeing where the space goes
 
+### The Studio window
+- **Layout:** the map in the middle, the folder list on the left, the **Inspector** under the map (what the selected item is, whether it's safe to delete, its size history, and Compress / Recycle Bin). Drag the edges to resize; **Ctrl+B** / **Ctrl+J** (or View) minimize the list / the Inspector; DiskRoot remembers that.
+- **Focus (F):** only the map; Esc brings the rest back.
+- **Command palette (Ctrl+K, or Commands at the top):** type a few letters: every command, and every folder or file in the scan by name, biggest first. ↑ ↓ Enter.
+- **Top row:** DiskRoot's own RAM and CPU (click for details), Free memory, Focus, Commands, Security. The status bar ends with "Read-only · no network".
+- **Save space badge:** the biggest single way to get space back (not a sum: some ways overlap).
+- **Notices:** what just happened (moved to the Recycle Bin, exported, memory freed, errors) pops up bottom-right for a few seconds.
+- **Looks:** Studio (dark or Daylight) by default; View → Classic look for the warm paper and moss green of earlier versions.
+- **Underneath:** the palette's name search is one pass over the scan with no allocation per name (about 4 ms on a 1.7M-file drive).
+
 ### The tree-table
 - **What it shows:** each folder's size on disk, a bar and percentage of its parent, the number of files, the category, and (after a rescan) how much it changed.
 - **Use it:** click the triangle or press → to open a folder, ← to close it. Double-click opens too. **Ctrl+F** filters by name.
@@ -61,6 +71,14 @@ This page explains every feature of DiskRoot 0.2: **what it does, how to use it,
 - **Treemap:** nested rectangles, area = size.
 - **Use it:** click a slice to go into it, click the middle (or press Backspace) to go up. Hover for details. Switch in the toolbar or the View menu.
 - **Underneath:** the engine sends the map a *pruned view*: about 6 levels deep, with anything under 0.2% merged into "N small items". The map never draws millions of shapes, and its layout is cached until the window size or the folder changes. It only redraws when you move the mouse or something changes.
+- **Breadcrumbs:** the path to the folder on the map, each level clickable.
+- **Colours: Size / Growth / Reclaimable** (switch in the map's title, or Ctrl+K):
+  - **Size:** by category (or by age, below).
+  - **Growth:** each folder against the previous scan of the same place: grew a lot, grew, about the same, shrank, new. Files and folders under 1 MB aren't tracked between scans (grey).
+  - **Reclaimable:** green = what DiskRoot's rules label *safe to clear*; amber = *check first* places that are still space to get back (caches, Windows leftovers with a Windows cleanup tool). Documents, Downloads and other personal folders are "check first" too, but they aren't reclaimable space, so they're not counted. Each place is counted once; protected places never. About 9 ms for a whole drive.
+- **2.5D (optional, the "2.5D" switch or View → Tilted map):** the same map tilted: treemap boxes stand up by size (square root, so small ones still show), the sunburst becomes a low stepped relief. Flat polygons drawn back to front, no 3D engine; clicks and hover hit what you see.
+  ![The tilted 2.5D treemap of C:\Windows](screenshots/diskroot-25d.png)
+- **Transitions:** a short sweep / grow (220 ms) when the map opens a folder or goes up; it redraws only while it moves. View → Smooth transitions turns it off.
 
 ### Group by location or by category
 - **Location:** the folder tree as it is on disk.
@@ -81,7 +99,7 @@ This page explains every feature of DiskRoot 0.2: **what it does, how to use it,
 - **Underneath:** built on a worker thread from a cheap copy of the scan (its big parts are shared, not copied), like Save space now: about 0.2 s on a whole 1.7M-file drive that no longer freezes the window.
 
 ### Keyboard and screen readers
-- **Help → Keyboard shortcuts** lists them: F5, Ctrl+F5, Ctrl+H, Ctrl+F, arrows, Enter, Backspace, Space / Ctrl+click to mark, Delete, Esc.
+- **Help → Keyboard shortcuts** lists them: Ctrl+K, F, Ctrl+B, Ctrl+J, F5, Ctrl+F5, Ctrl+H, Ctrl+F, arrows, Enter, Backspace, Space / Ctrl+click to mark, Delete, Esc.
 - Tree rows, the map ("Sunburst map of C:\. The biggest items are listed below it and in the tree") and every legend entry ("AI & data: 639 GB (42%)") have names for screen readers (checked with Windows UI Automation).
 
 ---
@@ -259,6 +277,10 @@ All opt-in, and all done by Windows' own tools.
 
 ---
 
+### Runs on any PC, also without a graphics driver
+- DiskRoot normally draws with OpenGL. Where OpenGL can't start (virtual machines, some Remote Desktop sessions, the "Microsoft Basic Display Adapter"), it opens again drawn on the CPU, by itself. `DISKROOT_RENDERER=software` forces that.
+- **Speed guard:** if the map's transitions draw at under ~20 frames a second, DiskRoot turns them off (very slow: the 2.5D map too) and says so, once. Whatever you turn back on stays on.
+
 ## 8. Settings, files and shortcuts
 
 | Key | Action |
@@ -270,6 +292,9 @@ All opt-in, and all done by Windows' own tools.
 | Delete | Move to Recycle Bin (the marked items if any are marked) |
 | Space / Ctrl+click | Mark / unmark |
 | Ctrl+F | Filter the tree by name |
+| Ctrl+K | Command palette: every command and folder |
+| F / Esc | Focus on the map / back |
+| Ctrl+B / Ctrl+J | Minimize or show the folder list / the Inspector |
 
 | File | What's in it |
 |---|---|

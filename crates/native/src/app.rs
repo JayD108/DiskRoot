@@ -2162,13 +2162,18 @@ impl DiskRootApp {
             let mut hovered: Option<Key_> = None;
             let scroll_to = if self.scroll_to_selected { sel_idx } else { None };
             ui.spacing_mut().item_spacing.y = 0.0;
-            ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, ROW_H, rows.len(), |ui, range| {
+            // Bring the selected row to the middle by setting this list's own
+            // offset (a "scroll to me" request can be picked up by another
+            // scrolling area, e.g. the Inspector's).
+            let mut area = ScrollArea::vertical().auto_shrink([false, false]);
+            if let Some(i) = scroll_to {
+                let view_h = ui.available_height();
+                area = area.vertical_scroll_offset((i as f32 * ROW_H + ROW_H / 2.0 - view_h / 2.0).max(0.0));
+            }
+            area.show_rows(ui, ROW_H, rows.len(), |ui, range| {
                 for i in range {
                     let r = &rows[i];
                     let (rect, resp) = ui.allocate_exact_size(vec2(full, ROW_H), Sense::click());
-                    if scroll_to == Some(i) {
-                        resp.scroll_to_me(Some(Align::Center));
-                    }
                     let p = ui.painter_at(rect);
                     let selected = sel_idx == Some(i);
                     // Accessible name + state for screen readers (and UI Automation).
@@ -3932,17 +3937,17 @@ impl DiskRootApp {
                                     }
                                 }
                                 if ch.hardlink_switch() {
-                                    cols[0].add(egui::Label::new(RichText::new("Partly because hardlinked files now count once.").color(theme::WARN).size(12.0)).wrap());
+                                    plain_note(&mut cols[0], RichText::new("Partly because hardlinked files now count once.").color(theme::WARN).size(12.0));
                                 }
                                 if cols[0].small_button("All changes…").clicked() {
                                     action = Some("home-changes");
                                 }
                             }
                             Some(_) => {
-                                cols[0].label(RichText::new("Nothing changed by more than 1 MB since the previous scan.").color(t.faint));
+                                plain_note(&mut cols[0], RichText::new("Nothing changed by more than 1 MB since the previous scan.").color(t.faint));
                             }
                             None => {
-                                cols[0].add(egui::Label::new(RichText::new("No earlier scan to compare with yet. Scan again later, or turn on scheduled scans.").color(t.faint)).wrap());
+                                plain_note(&mut cols[0], RichText::new("No earlier scan to compare with yet. Scan again later, or turn on scheduled scans.").color(t.faint));
                             }
                         }
                         cols[1].label(RichText::new("Get space back").font(theme::semibold(13.5)));
@@ -6119,7 +6124,8 @@ impl DiskRootApp {
                                 self.inspector_bar(ui);
                             });
                             ui.add_space(4.0);
-                            ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.details_pane(ui));
+                            // Each selection starts at the top of its details.
+                            ScrollArea::vertical().id_salt(("details", self.selected.clone())).auto_shrink([false, false]).show(ui, |ui| self.details_pane(ui));
                         });
                 }
             }
@@ -6303,4 +6309,12 @@ fn changes_summary(ch: &Changes) -> String {
 fn lerp(a: Color32, b: Color32, k: f32) -> Color32 {
     let m = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * k.clamp(0.0, 1.0)).round() as u8;
     Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
+}
+
+/// Wrapped text in a column, left-aligned. (`ui.columns` lays out
+/// "justified", which would stretch the spaces of wrapped lines.)
+fn plain_note(ui: &mut Ui, text: RichText) {
+    ui.with_layout(Layout::top_down(Align::Min), |ui| {
+        ui.add(egui::Label::new(text).wrap());
+    });
 }

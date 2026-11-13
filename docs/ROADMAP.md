@@ -18,7 +18,10 @@
 | v0.3.0 | Own fast compression engine (right-click Compress), Similar folders, real size of compressed files in the normal scan, "what changed" knows the scan method | Released (unsigned) |
 | v0.4.0 | Ways to save space (what to compress, other ways to get space back), arrival dates ("changed or added"), measured compression estimates, cache rules safe only in app data, compression research call | Released (unsigned) |
 | v0.4.1 | One download with the CLI on PATH, always-latest download links | Released (unsigned) |
-| v0.5.0 | Home, Drive health and Who's writing (no admin), scheduled scans, size history and forecast, warnings, Where every GB is, hardlinks once in the folder walk, smarter categories (projects, owners, teach DiskRoot), DiskRoot's own RAM/CPU | Ready, waiting for the final test and the owner's go |
+| v0.5.0 | Home, Drive health and Who's writing (no admin), scheduled scans, size history and forecast, warnings, Where every GB is, hardlinks once in the folder walk, smarter categories (projects, owners, teach DiskRoot), DiskRoot's own RAM/CPU | Released (unsigned) |
+| v0.5.1 | Fixes from a full audit: compressed saved scans, hardlinks only where reliable, admin warning, honest numbers | Released (unsigned) |
+| v0.6.0 / 0.6.1 | New name DiskRoot (`droot`), new logo | Released (unsigned) |
+| v0.7.0 | Studio window (map-first, docks, Focus, Ctrl+K), map colours Size / Growth / Reclaimable, optional 2.5D map, transitions, Studio look, runs without a graphics driver (own CPU renderer), speed guard | In testing |
 | 1.0 | Signed, tested on more hardware | Planned |
 
 ## Done
