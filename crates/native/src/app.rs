@@ -5847,95 +5847,105 @@ impl DiskRootApp {
         }
     }
 
-    /// While a scan runs: a radar sweep over growth rings, the items found
-    /// so far, and (when this place was scanned before) how far along it is.
+    /// While a scan runs: growth rings, one per order of magnitude of items
+    /// found (100 → 1,000 → 10,000 → …). Each ring closes as the count
+    /// passes it, so the picture says how big the scan already is. Then the
+    /// count, the speed, and (when this place was scanned before) how far
+    /// along it is. No decoration that doesn't mean anything.
     fn scan_view(&mut self, ui: &mut Ui) {
         let t = self.tokens();
         let Some(job) = &self.job else { return };
         let secs = job.started.elapsed().as_secs_f32();
         let (title, sub, fast, path) = match &job.kind {
-            JobKind::Fast(p) => (format!("Fast scan of {}", visible(p)), "Reads the drive's file table, read-only, in a locked-down helper.", true, p.clone()),
+            JobKind::Fast(p) => (format!("Fast scan of {}", visible(p)), "Reading the drive's file table, read-only, in a locked-down helper.", true, p.clone()),
             JobKind::Reopen(p) => (format!("Opening the remembered scan of {}", visible(p)), "Loading the last scan from this PC.", false, p.clone()),
             JobKind::Scan(p) => (format!("Scanning {}", visible(p)), "Walking the folders, read-only, no admin needed.", false, p.clone()),
             _ => return,
         };
         let found = if matches!(job.kind, JobKind::Reopen(_)) { 0 } else { diskroot_session::scan_progress() };
-        // How far along: only when this same place was scanned before.
         let expected = self.summary.as_ref().filter(|s| s.root.eq_ignore_ascii_case(path.trim())).map(|s| s.files + s.dirs);
         let area = ui.available_rect_before_wrap();
-        let r = (area.width().min(area.height()) * 0.28).clamp(60.0, 260.0);
-        let c = pos2(area.center().x, area.min.y + area.height() * 0.42);
+        let big_r = (area.width().min(area.height()) * 0.22).clamp(70.0, 200.0);
+        let c = pos2(area.center().x, area.min.y + area.height() * 0.40);
         let p = ui.painter();
-        let beam = if fast { t.accent } else { theme::cat_color(6) };
-        // Growth rings and cross hairs.
-        for k in 1..=4 {
-            p.circle_stroke(c, r * k as f32 / 4.0, Stroke::new(1.0, t.line_strong));
-        }
-        p.line_segment([c - vec2(r, 0.0), c + vec2(r, 0.0)], Stroke::new(1.0, t.line));
-        p.line_segment([c - vec2(0.0, r), c + vec2(0.0, r)], Stroke::new(1.0, t.line));
-        // The sweep: a bright edge with a fading trail behind it.
-        let a = (secs / 1.6).fract() * std::f32::consts::TAU;
-        let trail = 1.1f32;
-        let steps = 40;
-        let mut mesh = egui::epaint::Mesh::default();
-        mesh.colored_vertex(c, Color32::TRANSPARENT);
-        for k in 0..=steps {
-            let f = k as f32 / steps as f32;
-            let ang = a - trail * (1.0 - f) - std::f32::consts::FRAC_PI_2;
-            let alpha = (f * f * 150.0) as u8;
-            mesh.colored_vertex(c + vec2(ang.cos(), ang.sin()) * r, Color32::from_rgba_unmultiplied(beam.r(), beam.g(), beam.b(), alpha));
-            if k > 0 {
-                mesh.add_triangle(0, k, k + 1);
+        // Ring k covers 10^(k+1) .. 10^(k+2) items: 100, 1,000, 10,000 …
+        let lf = (found.max(1) as f64).log10() as f32;
+        let current = ((lf - 2.0).floor().max(0.0)) as usize; // ring being filled
+        let rings = (current + 1).max(4);
+        let inner = big_r * 0.34;
+        let step = (big_r - inner) / rings as f32;
+        let arc = |p: &egui::Painter, r: f32, frac: f32, stroke: Stroke| {
+            let n = ((frac * 96.0).ceil() as usize).max(2);
+            let pts: Vec<egui::Pos2> = (0..=n)
+                .map(|k| {
+                    let a = -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * frac * k as f32 / n as f32;
+                    c + vec2(a.cos(), a.sin()) * r
+                })
+                .collect();
+            p.add(egui::Shape::line(pts, stroke));
+        };
+        let w = (step * 0.42).clamp(3.0, 9.0);
+        // How full ring k is: linear from 10^(k+2) to 10^(k+3) items.
+        let ring_frac = |k: usize| {
+            let (lo, hi) = (10f64.powi(k as i32 + 2), 10f64.powi(k as i32 + 3));
+            ((found as f64 - lo) / (hi - lo)).clamp(0.0, 1.0) as f32
+        };
+        for k in 0..rings {
+            let r = inner + step * (k as f32 + 0.5);
+            let frac = if k < current { 1.0 } else if k == current { ring_frac(k) } else { 0.0 };
+            p.circle_stroke(c, r, Stroke::new(w, t.head));
+            if frac > 0.0 {
+                // Inner (older) rings a little deeper in colour, like wood.
+                let col = theme::tint(t.accent, (rings - k) as u8, &t);
+                arc(p, r, frac, Stroke::new(w, if k == current { t.accent } else { col }));
             }
         }
-        p.add(egui::Shape::mesh(mesh));
-        let edge = a - std::f32::consts::FRAC_PI_2;
-        p.line_segment([c, c + vec2(edge.cos(), edge.sin()) * r], Stroke::new(2.0, beam));
-        // Pings: one for every ~1,500 items found, placed the same way every
-        // time, brightest just after the beam passes them.
-        let n = ((found / 1500) as usize).min(160);
-        for k in 0..n {
-            let h = (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xD1B5_4A32_D192_ED03;
-            let ang = (h & 0xFFFF) as f32 / 65_535.0 * std::f32::consts::TAU;
-            let rad = r * (0.18 + 0.78 * (((h >> 16) & 0xFFFF) as f32 / 65_535.0));
-            let behind = (a - ang).rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU;
-            let glow = (1.0 - behind).powi(3);
-            let col = Color32::from_rgba_unmultiplied(beam.r(), beam.g(), beam.b(), (60.0 + 195.0 * glow) as u8);
-            let pa = ang - std::f32::consts::FRAC_PI_2;
-            p.circle_filled(c + vec2(pa.cos(), pa.sin()) * rad, 1.5 + 2.0 * glow, col);
+        // What the rings stand for: a small legend beside them, innermost first.
+        let lx = c.x + big_r + 28.0;
+        let row_h = 20.0;
+        let top = c.y - row_h * rings as f32 / 2.0;
+        for k in 0..rings {
+            let y = top + row_h * k as f32;
+            let goal = 10u64.pow(k as u32 + 3);
+            let (mark, col) = if found >= goal {
+                ("✓".to_owned(), t.accent)
+            } else if k == current {
+                (format!("{:.0}%", ring_frac(k) * 100.0), t.text)
+            } else {
+                (String::new(), t.faint)
+            };
+            p.circle_stroke(pos2(lx + 5.0, y + 8.0), 4.0, Stroke::new(2.0, if found >= goal || k == current { t.accent } else { t.head }));
+            p.text(pos2(lx + 16.0, y), Align2::LEFT_TOP, format!("{} items", fmt_count(goal)), theme::regular(11.5), if found >= goal { t.muted } else { t.faint });
+            p.text(pos2(lx + 120.0, y), Align2::LEFT_TOP, mark, theme::regular(11.5), col);
         }
-        // Centre: what's found so far.
-        p.circle_filled(c, r * 0.38, t.panel);
-        p.circle_stroke(c, r * 0.38, Stroke::new(1.0, t.line_strong));
-        let count = if found > 1 { fmt_count(found) } else if fast { "…".to_owned() } else { "0".to_owned() };
-        p.text(c - vec2(0.0, 8.0), Align2::CENTER_CENTER, count, theme::num(22.0), t.text);
-        p.text(c + vec2(0.0, 16.0), Align2::CENTER_CENTER, "items found", theme::regular(11.5), t.muted);
-        // Text and progress under the radar.
-        let mut y = c.y + r + 28.0;
-        p.text(pos2(c.x, y), Align2::CENTER_TOP, &title, theme::semibold(17.0), t.text);
-        y += 26.0;
+        // The leaf in the middle.
+        let logo = Rect::from_center_size(c, vec2(inner * 1.2, inner * 1.2));
+        egui::Image::new(&self.logo).paint_at(ui, logo);
+        // Numbers.
+        let p = ui.painter();
+        let mut y = c.y + big_r + 26.0;
+        let count = if found > 1 { fmt_count(found) } else { "…".to_owned() };
+        p.text(pos2(c.x, y), Align2::CENTER_TOP, count, theme::num(30.0), t.text);
+        y += 40.0;
+        let rate = if secs > 0.3 && found > 1 { format!(" · {}/s", fmt_count((found as f32 / secs) as u64)) } else { String::new() };
+        p.text(pos2(c.x, y), Align2::CENTER_TOP, format!("items found{rate} · {secs:.0} s"), theme::regular(12.5), t.muted);
+        y += 30.0;
+        p.text(pos2(c.x, y), Align2::CENTER_TOP, &title, theme::semibold(16.0), t.text);
+        y += 24.0;
         let sub = if fast && found <= 1 { "Approve the Windows prompt. DiskRoot then reads the drive's file table, read-only." } else { sub };
-        p.text(pos2(c.x, y), Align2::CENTER_TOP, sub, theme::regular(13.0), t.muted);
-        y += 28.0;
-        let bar = Rect::from_center_size(pos2(c.x, y + 4.0), vec2((r * 2.4).min(area.width() - 40.0), 6.0));
-        p.rect_filled(bar, CornerRadius::same(3), t.head);
-        match expected.filter(|&e| e > 0 && found > 1) {
-            Some(e) => {
-                let frac = (found as f32 / e as f32).min(0.99);
-                p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac, bar.height())), CornerRadius::same(3), beam);
-                p.text(pos2(c.x, y + 16.0), Align2::CENTER_TOP, format!("about {:.0}% · {:.0} s (compared with the last scan of this place)", frac * 100.0, secs), theme::regular(11.5), t.faint);
-            }
-            None => {
-                let w = bar.width() * 0.25;
-                let k = (1.0 - (secs * 2.2).cos()) / 2.0;
-                p.rect_filled(Rect::from_min_size(pos2(bar.min.x + k * (bar.width() - w), bar.min.y), vec2(w, bar.height())), CornerRadius::same(3), beam);
-                p.text(pos2(c.x, y + 16.0), Align2::CENTER_TOP, format!("{secs:.0} s"), theme::regular(11.5), t.faint);
-            }
+        p.text(pos2(c.x, y), Align2::CENTER_TOP, sub, theme::regular(12.5), t.muted);
+        y += 30.0;
+        if let Some(e) = expected.filter(|&e| e > 0 && found > 1) {
+            let bar = Rect::from_center_size(pos2(c.x, y + 3.0), vec2((big_r * 2.2).min(area.width() - 40.0), 6.0));
+            let frac = (found as f32 / e as f32).min(0.99);
+            p.rect_filled(bar, CornerRadius::same(3), t.head);
+            p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac, bar.height())), CornerRadius::same(3), t.accent);
+            p.text(pos2(c.x, y + 14.0), Align2::CENTER_TOP, format!("about {:.0}% (the last scan of this place found {})", frac * 100.0, fmt_count(e)), theme::regular(11.5), t.faint);
+            y += 40.0;
         }
-        // Fast scan can be cancelled (it waits for the admin helper).
         if fast {
             let stopping = job.cancel.load(Ordering::Relaxed);
-            let b = Rect::from_center_size(pos2(c.x, y + 56.0), vec2(120.0, 28.0));
+            let b = Rect::from_center_size(pos2(c.x, y + 16.0), vec2(120.0, 28.0));
             if ui.put(b, egui::Button::new(if stopping { "Cancelling…" } else { "Cancel" })).clicked() && !stopping {
                 job.cancel.store(true, Ordering::Relaxed);
             }
