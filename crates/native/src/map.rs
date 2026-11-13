@@ -423,11 +423,14 @@ impl Tilt {
             Layout::Tree { tiles } => {
                 let g = tiles.iter().fold(Rect::NOTHING, |r, t| r.union(t.rect));
                 let (gw, gh) = (g.width().max(1.0), g.height().max(1.0));
-                let sh = 0.35;
+                // A gentle lean and low boxes: the tops (with their names)
+                // stay the main thing you see.
+                let sh = 0.18;
+                let lift = (area.height() * 0.14).clamp(18.0, 80.0);
                 let mut ey = (area.height() - lift - 2.0 * pad) / gh;
                 let mut ex = (area.width() - 2.0 * pad - gh * ey * sh) / gw;
-                if ey > ex * 0.65 {
-                    ey = ex * 0.65;
+                if ey > ex * 0.6 {
+                    ey = ex * 0.6;
                     ex = (area.width() - 2.0 * pad - gh * ey * sh) / gw;
                 }
                 let used_w = gw * ex + gh * ey * sh;
@@ -470,14 +473,48 @@ fn shade(c: Color32, k: f32) -> Color32 {
 }
 
 /// Treemap boxes back to front: (tile index, height). Folder headers lie
-/// flat on the ground and come first.
+/// flat on the ground and come first. Boxes are ordered by what is really
+/// behind what (the view comes from the front-left): A goes before B when A
+/// is further back, or level with B and to its right. A plain sort by one
+/// key gets this wrong for boxes of different depths side by side.
 fn tree_order(tiles: &[Tile], nodes: &[Node], tilt: &Tilt) -> Vec<(usize, f32)> {
-    let mut v: Vec<(usize, f32)> = tiles.iter().enumerate().map(|(k, t)| (k, if t.header { 0.0 } else { tilt.box_z(nodes[t.i].size) })).collect();
-    v.sort_by(|a, b| {
-        let (ta, tb) = (&tiles[a.0], &tiles[b.0]);
-        tb.header.cmp(&ta.header).then(ta.rect.max.y.total_cmp(&tb.rect.max.y)).then(tb.rect.min.x.total_cmp(&ta.rect.min.x))
-    });
-    v
+    let z = |k: usize| if tiles[k].header { 0.0 } else { tilt.box_z(nodes[tiles[k].i].size) };
+    let mut out: Vec<(usize, f32)> = (0..tiles.len()).filter(|&k| tiles[k].header).map(|k| (k, 0.0)).collect();
+    let boxes: Vec<usize> = (0..tiles.len()).filter(|&k| !tiles[k].header).collect();
+    let eps = 0.5;
+    let behind = |a: Rect, b: Rect| {
+        let y_overlap = a.min.y < b.max.y - eps && b.min.y < a.max.y - eps;
+        a.max.y <= b.min.y + eps || (y_overlap && a.min.x >= b.max.x - eps)
+    };
+    // Kahn's algorithm over "is behind".
+    let n = boxes.len();
+    let mut before = vec![0usize; n];
+    let mut after: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for i in 0..n {
+        for j in 0..n {
+            if i != j && behind(tiles[boxes[i]].rect, tiles[boxes[j]].rect) {
+                after[i].push(j);
+                before[j] += 1;
+            }
+        }
+    }
+    let mut ready: Vec<usize> = (0..n).filter(|&i| before[i] == 0).collect();
+    let mut done = vec![false; n];
+    while let Some(i) = ready.pop() {
+        done[i] = true;
+        out.push((boxes[i], z(boxes[i])));
+        for &j in &after[i] {
+            before[j] -= 1;
+            if before[j] == 0 {
+                ready.push(j);
+            }
+        }
+    }
+    // A cycle can't happen for a treemap, but never drop a box.
+    for i in (0..n).filter(|&i| !done[i]) {
+        out.push((boxes[i], z(boxes[i])));
+    }
+    out
 }
 
 pub fn paint_25d(p: &Painter, layout: &Layout, tilt: &Tilt, cx: &PaintCtx) {
@@ -575,14 +612,35 @@ pub fn paint_25d(p: &Painter, layout: &Layout, tilt: &Tilt, cx: &PaintCtx) {
                 if g >= 1.0 && (Some(tile.i) == cx.hover || Some(tile.i) == cx.selected) {
                     p.add(Shape::closed_line(top, Stroke::new(2.0, t.text)));
                 }
-                // Names on tops (and folder headers) that are big enough.
-                let w = (tilt.at(b, z) - tilt.at(a, z)).length();
-                let h = (tilt.at(d, z) - tilt.at(a, z)).length();
-                if g >= 1.0 && w > 54.0 && h > 14.0 {
-                    let ink = theme::ink(tile.depth, t);
-                    if let Some(name) = fit(p, &n.name, 11.0, w - 10.0) {
-                        p.text(tilt.at(a, z) + vec2(5.0, 2.0), Align2::LEFT_TOP, name, if tile.header { theme::semibold(11.0) } else { theme::regular(11.0) }, ink);
+            }
+            // Names last, on small chips, so no box in front can cut them:
+            // the biggest tops first, at most 16, none overlapping.
+            if g >= 1.0 {
+                let mut tops: Vec<(usize, f32, f32, Pos2)> = tiles
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, x)| !x.header)
+                    .map(|(k, x)| {
+                        let z = tilt.box_z(cx.nodes[x.i].size);
+                        let w = (tilt.at(x.rect.right_top(), z) - tilt.at(x.rect.left_top(), z)).length();
+                        let h = (tilt.at(x.rect.left_bottom(), z) - tilt.at(x.rect.left_top(), z)).length();
+                        (k, w, h, tilt.at(x.rect.left_top(), z))
+                    })
+                    .filter(|x| x.1 > 60.0 && x.2 > 16.0)
+                    .collect();
+                tops.sort_by(|a, b| (b.1 * b.2).total_cmp(&(a.1 * a.2)));
+                let mut used: Vec<Rect> = Vec::new();
+                for (k, w, _, at) in tops.into_iter().take(16) {
+                    let n = &cx.nodes[tiles[k].i];
+                    let Some(name) = fit(p, &n.name, 11.0, (w - 16.0).min(220.0)) else { continue };
+                    let galley = p.layout_no_wrap(name, theme::regular(11.0), t.text);
+                    let chip = Rect::from_min_size(at + vec2(6.0, 4.0), galley.size() + vec2(10.0, 4.0));
+                    if used.iter().any(|u| u.intersects(chip)) {
+                        continue;
                     }
+                    used.push(chip);
+                    p.rect_filled(chip, CornerRadius::same(4), Color32::from_rgba_unmultiplied(t.panel.r(), t.panel.g(), t.panel.b(), 215));
+                    p.galley(chip.min + vec2(5.0, 2.0), galley, t.text);
                 }
             }
         }
@@ -653,6 +711,21 @@ mod tests {
         }
         assert!(matches!(hit_25d(&lay, &tilt, &n, tilt.at(*center, tilt.ring_z(1))), Some(Hit::Pith)));
         assert!(hit_25d(&lay, &tilt, &n, pos2(2.0, 2.0)).is_none(), "corner: nothing");
+    }
+
+    #[test]
+    fn tilted_boxes_are_drawn_back_to_front() {
+        let n = nodes();
+        let tile = |i: usize, x0: f32, y0: f32, x1: f32, y1: f32| Tile { i, rect: Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)), header: false, depth: 1 };
+        // 1: back row; 2: front-left; 3: front-right (level with 2).
+        let tiles = vec![tile(1, 0.0, 0.0, 100.0, 50.0), tile(2, 0.0, 50.0, 50.0, 100.0), tile(3, 50.0, 50.0, 100.0, 100.0)];
+        let lay = Layout::Tree { tiles };
+        let tilt = Tilt::new(&lay, &n, Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 400.0)));
+        let Layout::Tree { tiles } = &lay else { panic!() };
+        let order: Vec<usize> = tree_order(tiles, &n, &tilt).into_iter().map(|x| x.0).collect();
+        let pos = |k: usize| order.iter().position(|&o| o == k).unwrap();
+        assert!(pos(0) < pos(1) && pos(0) < pos(2), "the back row first: {order:?}");
+        assert!(pos(2) < pos(1), "level boxes: the right one first (its left face is hidden by the left one): {order:?}");
     }
 
     #[test]
