@@ -1,10 +1,15 @@
-//! DiskRoot's look: "classic utility, modern finish".
+//! DiskRoot's look. Two styles:
+//! - **Studio** (default): the "DiskRoot Studio" design. Near-black panes
+//!   (dark) or alabaster (Daylight), hairline borders, an emerald accent,
+//!   clear category colours, numbers in a monospaced font so they line up.
+//! - **Classic**: warm paper surfaces, a moss-green accent and one
+//!   botanical colour per category.
 //!
-//! Warm paper surfaces, hairline borders, a moss-green accent
-//! (the sap), and one botanical colour per category. Segoe UI is loaded
-//! from Windows at start-up instead of being bundled (keeps the exe small).
+//! Segoe UI and Consolas are loaded from Windows at start-up instead of
+//! being bundled (keeps the exe small; nothing to license).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui::{
     self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Visuals,
@@ -33,6 +38,8 @@ pub struct Tokens {
     pub accent: Color32,
     pub accent_ink: Color32,
     pub dark: bool,
+    /// Corner radius of panes (widgets use a little less).
+    pub radius: u8,
 }
 
 const fn hex(c: u32) -> Color32 {
@@ -54,6 +61,7 @@ pub const LIGHT: Tokens = Tokens {
     accent: hex(0x3e6b35),
     accent_ink: hex(0xffffff),
     dark: false,
+    radius: 4,
 };
 
 pub const DARK: Tokens = Tokens {
@@ -71,12 +79,66 @@ pub const DARK: Tokens = Tokens {
     accent: hex(0x8fbf74),
     accent_ink: hex(0x10140e),
     dark: true,
+    radius: 4,
 };
 
+/// Studio dark ("Root Void" / "Pane Glass"); hairlines are the prototype's
+/// white-at-6% / 11% over the pane colour.
+pub const STUDIO_DARK: Tokens = Tokens {
+    win: hex(0x07090c),
+    panel: hex(0x0d1117),
+    field: hex(0x0a0d12),
+    line: hex(0x1c2026),
+    line_strong: hex(0x2a2e34),
+    head: hex(0x121821),
+    text: hex(0xe6edf3),
+    muted: hex(0x8a95a3),
+    faint: hex(0x56606d),
+    sel: hex(0x0f2a24),
+    hover: hex(0x151b23),
+    accent: hex(0x10b981),
+    accent_ink: hex(0x03140d),
+    dark: true,
+    radius: 8,
+};
+
+/// Studio "Daylight".
+pub const STUDIO_LIGHT: Tokens = Tokens {
+    win: hex(0xf6f5f2),
+    panel: hex(0xffffff),
+    field: hex(0xfbfaf8),
+    line: hex(0xe7eaee),
+    line_strong: hex(0xd8dee6),
+    head: hex(0xf8f7f4),
+    text: hex(0x0f172a),
+    muted: hex(0x586476),
+    faint: hex(0x8f98a6),
+    sel: hex(0xe2f6ef),
+    hover: hex(0xf1f0ec),
+    accent: hex(0x047857),
+    accent_ink: hex(0xffffff),
+    dark: false,
+    radius: 8,
+};
+
+/// Classic look instead of Studio (View → Look). Read wherever colours are
+/// picked, so it's a flag, not a parameter on every call.
+static CLASSIC: AtomicBool = AtomicBool::new(false);
+
+pub fn set_classic(on: bool) {
+    CLASSIC.store(on, Ordering::Relaxed);
+}
+
+pub fn classic() -> bool {
+    CLASSIC.load(Ordering::Relaxed)
+}
+
 pub fn tokens(t: Theme) -> Tokens {
-    match t {
-        Theme::Light => LIGHT,
-        Theme::Dark => DARK,
+    match (t, classic()) {
+        (Theme::Light, true) => LIGHT,
+        (Theme::Dark, true) => DARK,
+        (Theme::Light, false) => STUDIO_LIGHT,
+        (Theme::Dark, false) => STUDIO_DARK,
     }
 }
 
@@ -95,11 +157,26 @@ const CAT: [Color32; 10] = [
     hex(0x8c857b), // bark         Other
 ];
 
+/// Studio category colours (same order).
+const STUDIO_CAT: [Color32; 10] = [
+    hex(0x3b82f6), // Apps & Games
+    hex(0xa855f7), // Media
+    hex(0x22c55e), // Documents
+    hex(0x14b8a6), // Dev stuff
+    hex(0x6366f1), // AI & data
+    hex(0xef4444), // System
+    hex(0xf59e0b), // Temp & caches
+    hex(0xeab308), // Downloads
+    hex(0x06b6d4), // Cloud-synced
+    hex(0x64748b), // Other
+];
+
 /// Amber for warnings (cloud, Git, large deletes, integrity notes).
 pub const WARN: Color32 = hex(0xb7791f);
 
 pub fn cat_color(cat: u8) -> Color32 {
-    CAT.get(cat as usize).copied().unwrap_or(CAT[9])
+    let set = if classic() { &CAT } else { &STUDIO_CAT };
+    set.get(cat as usize).copied().unwrap_or(set[9])
 }
 
 /// Age view, newest to oldest (warm to cool), then "date unknown" (grey).
@@ -138,14 +215,14 @@ pub fn swatch(c: u8) -> Color32 {
 /// (light theme) or darker (dark theme).
 pub fn tint(c: Color32, depth: u8, t: &Tokens) -> Color32 {
     let k = ((depth.saturating_sub(1)) as f32 * 0.16).min(0.55);
-    let target = if t.dark { [24.0, 25.0, 22.0] } else { [252.0, 251.0, 248.0] };
+    let target = [f32::from(t.panel.r()), f32::from(t.panel.g()), f32::from(t.panel.b())];
     let mix = |a: u8, b: f32| (a as f32 * (1.0 - k) + b * k) as u8;
     Color32::from_rgb(mix(c.r(), target[0]), mix(c.g(), target[1]), mix(c.b(), target[2]))
 }
 
 /// Label colour that reads on a segment of the given depth.
 pub fn ink(depth: u8, t: &Tokens) -> Color32 {
-    if t.dark || depth <= 1 { Color32::from_rgba_unmultiplied(255, 255, 255, 235) } else { hex(0x1e1d1a) }
+    if t.dark || depth <= 1 { Color32::from_rgba_unmultiplied(255, 255, 255, 235) } else { t.text }
 }
 
 /// Loads Segoe UI (+ Semibold) from the Windows fonts folder. Falls back to
@@ -165,7 +242,7 @@ pub fn install_fonts(ctx: &egui::Context) {
     };
     let regular = first("ui", &["segoeui.ttf", "tahoma.ttf", "arial.ttf"]);
     let semibold = first("ui-semibold", &["seguisb.ttf", "segoeuib.ttf", "tahomabd.ttf", "arialbd.ttf"]);
-    let mono = first("mono", &["consola.ttf", "cour.ttf"]);
+    let mono = first("mono", &["CascadiaMono.ttf", "consola.ttf", "cour.ttf"]);
     let symbols = first("symbols", &["seguisym.ttf"]);
     let chain = |main: &Option<String>| -> Vec<String> {
         [main, &regular, &symbols].into_iter().flatten().cloned().fold(Vec::new(), |mut v, n| {
@@ -189,6 +266,12 @@ pub fn regular(size: f32) -> FontId {
     FontId::proportional(size)
 }
 
+/// Sizes and counts: monospaced in Studio (digits line up in columns),
+/// the normal font in Classic.
+pub fn num(size: f32) -> FontId {
+    if classic() { regular(size) } else { FontId::monospace(size - 0.5) }
+}
+
 /// Applies the tokens to egui's widgets.
 pub fn apply(ctx: &egui::Context, theme: Theme) {
     let t = tokens(theme);
@@ -196,8 +279,8 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
     v.panel_fill = t.win;
     v.window_fill = t.win;
     v.window_stroke = Stroke::new(1.0, t.line_strong);
-    v.window_corner_radius = CornerRadius::same(8);
-    v.menu_corner_radius = CornerRadius::same(6);
+    v.window_corner_radius = CornerRadius::same(t.radius + 4);
+    v.menu_corner_radius = CornerRadius::same(t.radius);
     v.extreme_bg_color = t.field;
     v.faint_bg_color = t.head;
     v.code_bg_color = t.head;
@@ -208,7 +291,7 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
     v.window_shadow.color = Color32::from_black_alpha(if t.dark { 110 } else { 40 });
     v.popup_shadow.color = Color32::from_black_alpha(if t.dark { 90 } else { 30 });
 
-    let r = CornerRadius::same(4);
+    let r = CornerRadius::same(if t.radius > 4 { 6 } else { 4 });
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = t.panel;
     w.noninteractive.weak_bg_fill = t.panel;

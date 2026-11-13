@@ -134,6 +134,7 @@ enum Cmd {
     ModeReclaim,
     Animations,
     Tilt,
+    Look,
     ByLocation,
     ByCategory,
     ColorCategory,
@@ -621,6 +622,7 @@ impl DiskRootApp {
         // Upgrading from the previous version: move its settings and saved scans first.
         let migrated = diskroot_session::migrate_previous();
         let settings = Settings::load();
+        theme::set_classic(settings.classic);
         theme::apply(ctx, if settings.dark { Theme::Dark } else { Theme::Light });
         let mut app = Self {
             path: start.clone().unwrap_or_else(|| settings.last_path.clone()),
@@ -1680,6 +1682,17 @@ impl DiskRootApp {
                     self.regroup();
                 }
                 ui.separator();
+                let classic = self.settings.classic;
+                ui.radio_value(&mut self.settings.classic, false, "Studio look");
+                ui.radio_value(&mut self.settings.classic, true, "Classic look");
+                if classic != self.settings.classic {
+                    theme::set_classic(self.settings.classic);
+                    theme::apply(ui.ctx(), if self.settings.dark { Theme::Dark } else { Theme::Light });
+                    self.map = None;
+                    self.rows = None;
+                    changed = true;
+                }
+                ui.separator();
                 let dark = self.settings.dark;
                 ui.radio_value(&mut self.settings.dark, false, "Light theme");
                 ui.radio_value(&mut self.settings.dark, true, "Dark theme");
@@ -2093,7 +2106,7 @@ impl DiskRootApp {
         Frame::new()
             .fill(t.panel)
             .stroke(Stroke::new(1.0, t.line_strong))
-            .corner_radius(CornerRadius::same(4))
+            .corner_radius(CornerRadius::same(t.radius))
             .inner_margin(Margin::ZERO)
     }
 
@@ -2109,7 +2122,7 @@ impl DiskRootApp {
             // Header
             let (hr, _) = ui.allocate_exact_size(vec2(full, 26.0), Sense::hover());
             let p = ui.painter();
-            p.rect_filled(hr, CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 }, t.head);
+            p.rect_filled(hr, CornerRadius { nw: t.radius, ne: t.radius, sw: 0, se: 0 }, t.head);
             p.line_segment([hr.left_bottom(), hr.right_bottom()], Stroke::new(1.0, t.line));
             let f = theme::regular(11.5);
             p.text(pos2(hr.min.x + 10.0, hr.center().y), Align2::LEFT_CENTER, "Name", f.clone(), t.muted);
@@ -2205,7 +2218,7 @@ impl DiskRootApp {
                         p.text(pos2(nr.max.x + 6.0, y), Align2::LEFT_CENTER, r.tag, theme::regular(10.5), t.faint);
                     }
                     if r.more == 0 {
-                        p.text(pos2(rect.min.x + cols.size_r, y), Align2::RIGHT_CENTER, fmt_bytes(r.bytes), theme::regular(12.5), t.text);
+                        p.text(pos2(rect.min.x + cols.size_r, y), Align2::RIGHT_CENTER, fmt_bytes(r.bytes), theme::num(12.5), t.text);
                         // % bar
                         let track = Rect::from_min_size(pos2(rect.min.x + cols.bar_x, y - 4.0), vec2(cols.bar_w, 8.0));
                         p.rect_filled(track, CornerRadius::same(2), t.head);
@@ -2942,7 +2955,7 @@ impl DiskRootApp {
             // Title strip
             let (hr, _) = ui.allocate_exact_size(vec2(full, 26.0), Sense::hover());
             let p = &ui.painter().clone(); // a handle, so the strip can add widgets below
-            p.rect_filled(hr, CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 }, t.head);
+            p.rect_filled(hr, CornerRadius { nw: t.radius, ne: t.radius, sw: 0, se: 0 }, t.head);
             p.line_segment([hr.left_bottom(), hr.right_bottom()], Stroke::new(1.0, t.line));
             let Some(m) = &self.map else {
                 p.text(pos2(hr.min.x + 10.0, hr.center().y), Align2::LEFT_CENTER, "Map", theme::semibold(12.0), t.text);
@@ -5541,6 +5554,7 @@ impl DiskRootApp {
             (if self.focus { "Leave focus" } else { "Focus on the map" }, "F", Cmd::Focus, scan),
             (if self.settings.hide_list { "Show the folder list" } else { "Minimize the folder list" }, "Ctrl+B", Cmd::ToggleList, true),
             (if self.settings.hide_inspector { "Show the Inspector" } else { "Minimize the Inspector" }, "Ctrl+J", Cmd::ToggleInspector, true),
+            (if self.settings.classic { "Look: Studio" } else { "Look: Classic" }, "", Cmd::Look, true),
             ("Light theme", "", Cmd::Light, self.settings.dark),
             ("Dark theme", "", Cmd::Dark, !self.settings.dark),
             ("Export to CSV", "", Cmd::Export, scan && idle),
@@ -5597,6 +5611,14 @@ impl DiskRootApp {
                 };
                 self.settings.save();
                 self.map = None;
+            }
+            Cmd::Look => {
+                self.settings.classic = !self.settings.classic;
+                self.settings.save();
+                theme::set_classic(self.settings.classic);
+                theme::apply(ctx, if self.settings.dark { Theme::Dark } else { Theme::Light });
+                self.map = None;
+                self.rows = None;
             }
             Cmd::Tilt => {
                 self.settings.map_25d = !self.settings.map_25d;
