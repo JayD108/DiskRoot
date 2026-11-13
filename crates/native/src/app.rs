@@ -20,13 +20,16 @@ use diskroot_session::schedule::{self, Schedule};
 use diskroot_session::health::{self, Level as Health};
 use diskroot_session::history::{self, Forecast, History};
 use diskroot_session::remember::{self, Changes, PrevSizes};
-use diskroot_session::safety::{DeleteWarnings, LogEntry, visible};
+use diskroot_session::safety::{DeleteWarnings, visible};
 use diskroot_session::{Action, DeleteOut, FileRow, ItemInfo, Leftover, PendingDelete, RulesStatus, Safety, Scanned, Shape, Summary, TypeRow};
 
 use crate::map::{self, Hit, Kind, Layout as MapLayout, PaintCtx};
 use crate::settings::{Alert, Settings};
 use crate::theme::{self, Theme, Tokens};
 use crate::{fmt_bytes, fmt_count, fmt_files, fmt_pct};
+
+mod pages;
+use pages::{ActivityView, DupesPage, ReviewView};
 
 const ROW_H: f32 = 24.0;
 const LIST_LIMIT: usize = 2000;
@@ -122,6 +125,8 @@ enum Cmd {
     Space,
     Writers,
     Health,
+    Status,
+    Review,
     Schedule,
     Dupes,
     Files,
@@ -163,8 +168,14 @@ enum Page {
     Map,
     /// Home: the drive at a glance, as its own page.
     Home,
-    /// Drive health, as its own page.
-    Health,
+    /// Your drive status: health, who's writing, size history, past scans (tabs).
+    Status,
+    /// Duplicates: identical files (resolver), similar folders, past searches.
+    Dupes,
+    /// Every marked item, ticked to delete or not, before the confirmation.
+    Review,
+    /// What was deleted and compressed through DiskRoot, and what changed.
+    Activity,
 }
 
 /// What was picked in the palette.
@@ -178,10 +189,8 @@ enum Dialog {
     /// First launch: what DiskRoot does and doesn't do.
     Welcome,
     Security(Box<Integrity>),
-    History(Vec<LogEntry>),
     Changes(Box<Changes>),
     Files(Box<FilesView>),
-    Dupes(Box<DupesView>),
     Message(String, String),
     ConfirmDelete(Box<Confirm>),
     ConfirmMany(Box<ConfirmMany>),
@@ -191,8 +200,6 @@ enum Dialog {
     Alerts,
     /// Compress (or uncompress) a folder with DiskRoot's engine.
     Compress(Box<CompressAsk>),
-    /// View > Similar folders.
-    Similar(Box<similar::Found>),
     /// Compacting a WSL/Docker virtual disk: (path, size, in use).
     Vhdx(String, u64, bool),
     /// View > Leftovers.
@@ -203,10 +210,6 @@ enum Dialog {
     Memory,
     /// View > Scheduled scans.
     Schedule(Box<ScheduleView>),
-    /// View > Size history.
-    Growth(Box<GrowthView>),
-    /// View > Who's writing.
-    Writers(Box<WritersView>),
     /// View > Where every GB is.
     Space(Box<diskroot_session::SpaceReport>),
     /// Folders the scan couldn't read: (scan root, paths).
@@ -434,17 +437,6 @@ struct DriveBar {
     nearly_full: Option<String>,
 }
 
-/// A running duplicate search: shared progress, the cancel flag, and where
-/// the result arrives.
-type DupesRun = (Arc<diskroot_session::dupes::Progress>, Arc<AtomicBool>, Receiver<Vec<diskroot_session::dupes::DupGroup>>);
-
-/// The duplicate finder window: intro, running (progress), or results.
-struct DupesView {
-    min_mb: u64,
-    running: Option<DupesRun>,
-    groups: Option<Vec<diskroot_session::dupes::DupGroup>>,
-}
-
 /// "Largest files & file types": the search text and current results.
 struct FilesView {
     query: String,
@@ -605,6 +597,20 @@ pub struct DiskRootApp {
     minimized_since: Option<Instant>,
     /// The scan was freed from memory and can be reopened: its root.
     freed: Option<String>,
+    /// Drive status page: the tab shown, and the views of its tabs.
+    status_tab: u8,
+    writers_view: Option<Box<WritersView>>,
+    growth_view: Option<Result<Box<GrowthView>, String>>,
+    /// The Duplicates page (kept while a search runs on another page).
+    dupes: Option<Box<DupesPage>>,
+    /// Review marked page.
+    review: ReviewView,
+    /// Marked duplicate copies: node -> the copy that is kept.
+    dupe_of: std::collections::HashMap<u32, String>,
+    /// The Activity page.
+    activity: Option<ActivityView>,
+    /// When DiskRoot was last opened before this time (0 = first time).
+    prev_visit: u64,
 }
 
 /// This process's memory and CPU, for the status bar and the Memory dialog.
@@ -649,7 +655,11 @@ impl DiskRootApp {
         theme::install_fonts(ctx);
         // Upgrading from the previous version: move its settings and saved scans first.
         let migrated = diskroot_session::migrate_previous();
-        let settings = Settings::load();
+        let mut settings = Settings::load();
+        // "Since your last visit" on the Activity page.
+        let prev_visit = settings.last_visit;
+        settings.last_visit = diskroot_session::activity::now();
+        settings.save();
         theme::set_classic(settings.classic);
         theme::apply(ctx, if settings.dark { Theme::Dark } else { Theme::Light });
         let mut app = Self {
@@ -673,6 +683,14 @@ impl DiskRootApp {
             footprint: Footprint::default(),
             minimized_since: None,
             freed: None,
+            status_tab: 0,
+            writers_view: None,
+            growth_view: None,
+            dupes: None,
+            review: ReviewView::default(),
+            dupe_of: std::collections::HashMap::new(),
+            activity: None,
+            prev_visit,
             scan_after_welcome: false,
             remember_rx: None,
             changes: None,
@@ -1085,6 +1103,11 @@ impl DiskRootApp {
     fn show_scan(&mut self, s: Scanned, sum: Summary) {
         self.freed = None;
         self.marked.clear();
+        self.dupe_of.clear();
+        if let Some(d) = &mut self.dupes {
+            d.similar = None;
+        }
+        self.growth_view = None;
         self.summary = Some(sum);
         self.scanned = Some(s);
         self.expanded.clear();
@@ -1603,8 +1626,8 @@ impl DiskRootApp {
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Deletion history…").clicked() {
-                    self.open_history();
+                if ui.button("Activity…").on_hover_text("What you deleted and compressed with DiskRoot, and what changed on the drive, with times").clicked() {
+                    self.open_activity();
                     ui.close();
                 }
                 ui.separator();
@@ -1643,8 +1666,12 @@ impl DiskRootApp {
                     self.open_space();
                     ui.close();
                 }
+                if ui.button("Your drive status…").on_hover_text("Health, who's writing, size history and past scans, as one page").clicked() {
+                    self.open_status(0);
+                    ui.close();
+                }
                 if ui.button("Who's writing…").on_hover_text("Which programs write to your drives right now and while the PC is idle, and which folders change most (no admin)").clicked() {
-                    self.dialog = Some(Dialog::Writers(Box::new(WritersView::open())));
+                    self.open_status(1);
                     ui.close();
                 }
                 if ui.button("Drive health…").on_hover_text("How worn your SSDs are, how much was written to them, temperature and errors (the drives' own reports; no admin)").clicked() {
@@ -1653,6 +1680,10 @@ impl DiskRootApp {
                 }
                 if ui.button("Scheduled scans…").on_hover_text("Let DiskRoot scan by itself every few hours (no admin, no window), so it can show what changed").clicked() {
                     self.open_schedule();
+                    ui.close();
+                }
+                if ui.add_enabled(!self.marked.is_empty(), egui::Button::new(format!("Review marked ({})…", self.marked.len()))).clicked() {
+                    self.open_review();
                     ui.close();
                 }
                 if ui.add_enabled(self.scanned.is_some(), egui::Button::new("Find duplicate files…")).clicked() {
@@ -1927,6 +1958,19 @@ impl DiskRootApp {
             if (hr.clicked() || home_key) && self.scanned.is_some() {
                 self.toggle_home();
             }
+            let on_status = self.page == Page::Status;
+            let sr = ui.add(egui::Button::new(if compact { "Drive status" } else { "◉ Drive status" }).selected(on_status)).on_hover_text("Your drive status: health, who's writing, size history and past scans, in one page");
+            self.anchors.insert("status", sr.rect);
+            if sr.clicked() {
+                if on_status { self.page = Page::Map } else { self.open_status(self.status_tab) }
+            }
+            if !self.marked.is_empty() {
+                let on_review = self.page == Page::Review;
+                let label = RichText::new(format!("Review {} marked", self.marked.len())).color(theme::warn());
+                if ui.add(egui::Button::new(label).selected(on_review)).on_hover_text("Check each marked item and decide: delete or keep").clicked() {
+                    if on_review { self.page = Page::Map } else { self.open_review() }
+                }
+            }
             let mut job = egui::text::LayoutJob::default();
             let body = ui.style().text_styles.get(&egui::TextStyle::Button).cloned().unwrap_or_else(|| theme::regular(13.0));
             job.append("Save space", 0.0, egui::TextFormat { font_id: body, color: t.text, valign: Align::Center, ..Default::default() });
@@ -1973,7 +2017,7 @@ impl DiskRootApp {
         ui.horizontal_centered(|ui| {
             let msg = match &self.status {
                 Some((m, at)) if at.elapsed() < Duration::from_secs(8) => m.clone(),
-                _ if !self.marked.is_empty() => format!("{} marked (Ctrl+click) · press Delete to move them to the Recycle Bin", self.marked.len()),
+                _ if !self.marked.is_empty() => format!("{} marked (Ctrl+click) · press Delete to review them", self.marked.len()),
                 _ => "Ready".into(),
             };
             // Right-hand items first; the message gets the space that's
@@ -2609,14 +2653,19 @@ impl DiskRootApp {
         }
     }
 
-    fn open_health(&mut self) {
+    /// Reads the drives' reports for the Health tab.
+    fn read_health(&mut self) {
         let mut v = HealthView::read();
         v.at_risk = self.scanned.as_ref().and_then(|s| {
             let root = s.summary().root;
             (root.len() == 3 && root.ends_with(":\\")).then(|| (root.trim_end_matches('\\').to_owned(), s.at_risk()))
         });
         self.health_view = Some(Box::new(v));
-        self.page = Page::Health;
+    }
+
+    fn open_health(&mut self) {
+        self.read_health();
+        self.open_status(0);
     }
 
     fn open_unreadable(&mut self) {
@@ -2634,26 +2683,27 @@ impl DiskRootApp {
         }
     }
 
-    /// View > Size history.
+    /// View > Size history: the Size history tab of Drive status.
     fn open_growth(&mut self) {
-        let Some(sum) = &self.summary else { return };
+        self.open_status(2);
+    }
+
+    /// The Size history tab's numbers, or why there are none.
+    fn build_growth(&self) -> Result<GrowthView, String> {
+        let Some(sum) = &self.summary else { return Err("Scan a drive or folder first: its size history is shown here.".into()) };
         let root = sum.root.clone();
         let h = self.hist.clone().or_else(|| history::load(&root).map(Arc::new));
         let Some(h) = h.filter(|h| !h.points.is_empty()) else {
-            self.dialog = Some(Dialog::Message(
-                "No size history yet".into(),
-                format!(
-                    "DiskRoot keeps a small size history of every scan it remembers (folders of 1 MB or more, on this PC only). Scan {} again later, or turn on View → Scheduled scans, and the history starts filling.{}",
-                    visible(&root),
-                    if self.settings.remember_scans { "" } else { "\n\nRemembering scans is off (File menu), so no history is kept." }
-                ),
+            return Err(format!(
+                "No size history yet. DiskRoot keeps a small size history of every scan it remembers (folders of 1 MB or more, on this PC only). Scan {} again later, or turn on Scheduled scans, and the history starts filling.{}",
+                visible(&root),
+                if self.settings.remember_scans { "" } else { "\n\nRemembering scans is off (File menu), so no history is kept." }
             ));
-            return;
         };
         let drive = root.len() <= 3 && h.points.iter().any(|p| p.used().is_some());
         let chart = if drive { h.points.iter().filter_map(|p| Some((p.time, p.used()?))).collect() } else { h.series("") };
         let growers = [86_400, 7 * 86_400, 30 * 86_400].map(|secs| h.growers(secs, 30));
-        self.dialog = Some(Dialog::Growth(Box::new(GrowthView {
+        Ok(GrowthView {
             drive,
             chart,
             forecast: drive.then(|| history::forecast(&h.points)),
@@ -2664,7 +2714,7 @@ impl DiskRootApp {
             disk: history::disk_usage(),
             logs: diskroot_session::logs::growing(&diskroot_session::logs::load(&root)),
             root,
-        })));
+        })
     }
 
     /// View > Scheduled scans: the saved schedule (or a default for the
@@ -2703,9 +2753,7 @@ impl DiskRootApp {
     }
 
     fn open_similar(&mut self) {
-        if let Some(s) = &self.scanned {
-            self.dialog = Some(Dialog::Similar(Box::new(s.similar_folders())));
-        }
+        self.open_dupes_tab(1);
     }
 
     fn open_leftovers(&mut self) {
@@ -2718,7 +2766,7 @@ impl DiskRootApp {
     }
 
     fn open_dupes(&mut self) {
-        self.dialog = Some(Dialog::Dupes(Box::new(DupesView { min_mb: 10, running: None, groups: None })));
+        self.open_dupes_tab(0);
     }
 
     /// The Compact dialog for a WSL/Docker virtual disk.
@@ -2747,6 +2795,7 @@ impl DiskRootApp {
         let pr = Arc::clone(&progress);
         std::thread::spawn(move || {
             let r = compress::run(&plan, level, compress::default_threads(), &pr);
+            diskroot_session::activity::log_compress(&plan.root, &r);
             let _ = tx.send(Done::Compressed(Box::new(r)));
         });
         self.job = Some(Job { kind: JobKind::Compress(title, progress, total, files), started: Instant::now(), rx, cancel: Arc::default() });
@@ -2889,7 +2938,7 @@ impl DiskRootApp {
         // Anything marked (Ctrl+click, Space, "Mark extra copies"): Delete
         // means "the marked items", whatever row is selected.
         if !self.marked.is_empty() && (self.marked.len() > 1 || self.marked.contains(&n) || n == 0) {
-            self.ask_delete_many();
+            self.open_review();
             return;
         }
         let Some(s) = &self.scanned else { return };
@@ -3021,7 +3070,7 @@ impl DiskRootApp {
     }
 
     fn open_history(&mut self) {
-        self.dialog = Some(Dialog::History(diskroot_session::safety::read_log(200)));
+        self.open_activity();
     }
 
     fn map_pane(&mut self, ui: &mut Ui) {
@@ -3537,8 +3586,8 @@ impl DiskRootApp {
             if !self.marked.is_empty() {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{} items marked", self.marked.len())).font(theme::semibold(13.0)).color(theme::warn()));
-                    if ui.add_enabled(self.job.is_none(), egui::Button::new(format!("Move {} marked to Recycle Bin…", self.marked.len()))).clicked() {
-                        action = Some(("delete-marked", 0));
+                    if ui.add_enabled(self.job.is_none(), egui::Button::new(format!("Review {} marked…", self.marked.len()))).on_hover_text("Check each one and decide: delete or keep").clicked() {
+                        action = Some(("review-marked", 0));
                     }
                     if ui.button("Clear marks").clicked() {
                         action = Some(("clear-marks", 0));
@@ -3735,6 +3784,7 @@ impl DiskRootApp {
                     "compress" => self.ask_compress(n),
                     "vhdx" => self.ask_vhdx(n),
                     "delete-marked" => self.ask_delete_many(),
+                    "review-marked" => self.open_review(),
                     "clear-marks" => {
                         self.marked.clear();
                         self.rows = None;
@@ -3851,11 +3901,9 @@ impl DiskRootApp {
         let mut confirm: Option<u32> = None;
         let mut action: Option<&'static str> = None;
         let mut jump: Option<String> = None;
-        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_) | Dialog::Savings(_) | Dialog::Schedule(_) | Dialog::Growth(_) | Dialog::Writers(_) | Dialog::Space(_) | Dialog::Unreadable(_));
+        let wide = matches!(d, Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Leftovers(_) | Dialog::Savings(_) | Dialog::Schedule(_) | Dialog::Space(_) | Dialog::Unreadable(_));
         let mut leftover_marks: Option<Vec<u32>> = None;
         let mut tool_start: Option<(Action, bool)> = None;
-        let mut dupes_start = false;
-        let mut dupes_mark: Option<Vec<u32>> = None;
         let mut requery: Option<String> = None;
         let mut jump_node: Option<u32> = None;
         let mut savings_go: Option<SavingsGo> = None;
@@ -4047,174 +4095,6 @@ impl DiskRootApp {
                         }
                     });
                 }
-                Dialog::Writers(v) => {
-                    if v.last.elapsed() >= Duration::from_secs(2) {
-                        v.sampler.tick();
-                        v.last = Instant::now();
-                    }
-                    ctx.request_repaint_after(Duration::from_secs(2));
-                    let rate = |b: f64| if b < 1024.0 { "0".to_owned() } else { format!("{}/s", fmt_bytes(b as u64)) };
-                    ui.label(RichText::new("Who's writing").font(theme::semibold(16.0)));
-                    ui.add(egui::Label::new(RichText::new("Programs writing right now, measured every 2 s while this window is open. \"Writes\" counts everything a program writes (files, and also pipes and some network), so the drive's own counter is shown too: when the drive is busy while you're idle and one program leads, that's the one.").color(t.muted)).wrap());
-                    ui.add_space(4.0);
-                    for (n, letters) in &v.disks {
-                        let now = v.sampler.disks.iter().find(|d| d.0 == *n).map_or(0.0, |d| d.1);
-                        let total = v.sampler.disk_totals.get(n).copied().unwrap_or(0);
-                        ui.label(RichText::new(format!("Drive {letters} · writing {} now · {} since this window opened", rate(now), fmt_bytes(total))).font(theme::semibold(13.0)));
-                    }
-                    let secs = v.sampler.seconds;
-                    ui.label(RichText::new(format!("Measured for {:.0} s ({:.0} s of it idle: no key or mouse for 5 min)", secs, v.sampler.idle_seconds)).color(t.faint).size(12.0));
-                    ui.add_space(4.0);
-                    egui::ScrollArea::vertical().id_salt("writers-scroll").max_height(520.0).show(ui, |ui| {
-                    let top = v.sampler.top(8);
-                    if top.is_empty() {
-                        ui.label(RichText::new(if secs < 1.0 { "Measuring…" } else { "Nothing written yet." }).color(t.faint));
-                    } else {
-                        egui::Grid::new("writers").num_columns(4).striped(true).spacing([14.0, 4.0]).show(ui, |ui| {
-                            for h in ["Program", "Now", "While you used the PC", "While idle"] {
-                                ui.label(RichText::new(h).color(t.muted).size(12.0));
-                            }
-                            ui.end_row();
-                            for w in &top {
-                                if diskroot_session::offenders::for_process(&w.name).is_some() {
-                                    ui.label(RichText::new(format!("⚠ {}", w.name)).color(theme::warn()));
-                                } else {
-                                    ui.label(&w.name);
-                                }
-                                ui.label(rate(w.now));
-                                ui.label(fmt_bytes(w.active));
-                                ui.label(RichText::new(fmt_bytes(w.idle)).color(if w.idle > 100 << 20 { theme::warn() } else { t.text }));
-                                ui.end_row();
-                            }
-                        });
-                    }
-                    let known: Vec<&diskroot_session::offenders::Offender> = top.iter().map(|w| w.name.as_str()).chain(v.away.iter().map(|a| a.0.as_str())).filter_map(diskroot_session::offenders::for_process).collect();
-                    let mut shown_titles: Vec<&str> = Vec::new();
-                    for o in known {
-                        if shown_titles.contains(&o.title) {
-                            continue;
-                        }
-                        shown_titles.push(o.title);
-                        ui.add_space(4.0);
-                        ui.add(egui::Label::new(RichText::new(format!("⚠ {}: {} {}", o.title, o.what, o.todo)).color(theme::warn())).wrap())
-                            .on_hover_text(format!("Checked {} against:\n{}", o.checked, o.sources.join("\n")));
-                    }
-                    ui.add_space(8.0);
-                    ui.label(RichText::new("While you were away (background scans, last 7 days)").font(theme::semibold(13.0)));
-                    if v.away_runs == 0 {
-                        ui.add(egui::Label::new(RichText::new("No idle samples yet. Each scheduled scan first measures 30 s of writes; turn on View → Scheduled scans to catch programs that write while nobody is using the PC.").color(t.faint)).wrap());
-                    } else {
-                        ui.label(RichText::new(format!("{} idle samples of 30 s; average while idle:", v.away_runs)).color(t.muted).size(12.0));
-                        for (name, r, c) in &v.away {
-                            ui.label(format!("{name}: {} (≈ {} a day) · in {c} of {} samples", rate(*r), fmt_bytes((*r * 86_400.0) as u64), v.away_runs));
-                        }
-                    }
-                    ui.add_space(8.0);
-                    ui.label(RichText::new("Settings that write a lot (advice only: DiskRoot changes nothing)").font(theme::semibold(13.0)));
-                    for tip in &v.advice {
-                        ui.add(egui::Label::new(RichText::new(format!("• {tip}")).color(t.muted)).wrap());
-                    }
-                    if v.advice.is_empty() {
-                        ui.label(RichText::new("Nothing to point out.").color(t.faint));
-                    }
-                    ui.add_space(8.0);
-                    ui.label(RichText::new("Folders changed most often").font(theme::semibold(13.0)));
-                    if self.watcher.is_none() {
-                        ui.label(RichText::new("Needs live updates on and a scan on screen (it watches the scanned folder while DiskRoot is open).").color(t.faint));
-                    } else {
-                        let mut hot: Vec<(&String, &u32)> = self.hot.iter().collect();
-                        hot.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
-                        let root = self.summary.as_ref().map(|s| s.root.trim_end_matches('\\').to_owned()).unwrap_or_default();
-                        ui.label(RichText::new(format!("Changes Windows reported under {} in the last {} (counts, not bytes):", visible(&root), remember::gap_text(self.hot_since.elapsed().as_secs()))).color(t.muted).size(12.0));
-                        if hot.is_empty() {
-                            ui.label(RichText::new("None yet.").color(t.faint));
-                        }
-                        for (folder, n) in hot.into_iter().take(8) {
-                            let shown = if folder.is_empty() { root.clone() } else { format!("{root}\\{folder}") };
-                            ui.label(format!("{n} × {}", visible(&shown)));
-                        }
-                    }
-                    });
-                }
-                Dialog::Growth(v) => {
-                    ui.label(RichText::new("Size history").font(theme::semibold(16.0)));
-                    ui.add(egui::Label::new(RichText::new(format!(
-                        "{} · {} scans since {} · the history uses {} on this PC",
-                        visible(&v.root),
-                        v.points,
-                        diskroot_session::date_text((v.first / 86_400) as u16),
-                        fmt_bytes(v.disk)
-                    )).color(t.muted)).wrap());
-                    ui.add_space(6.0);
-                    ui.label(RichText::new(if v.drive { "Used space on the drive" } else { "Size of the folder" }).font(theme::semibold(13.0)));
-                    if v.chart.len() >= 2 {
-                        size_chart(ui, &t, &v.chart, vec2(ui.available_width(), 120.0), true);
-                    } else {
-                        ui.label(RichText::new("One scan so far: the chart starts with the next one.").color(t.faint));
-                    }
-                    if let Some(f) = &v.forecast {
-                        ui.add_space(4.0);
-                        let col = if matches!(f, Forecast::Full { low, .. } if *low < 60) { theme::warn() } else { t.text };
-                        ui.add(egui::Label::new(RichText::new(f.text(v.root.trim_end_matches('\\'))).color(col)).wrap())
-                            .on_hover_text("From the drive's free space at the last scan of each day, over up to 60 days. Sudden one-off jumps (one big download) aren't counted as the pace. A rough guide, not a promise.");
-                    }
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("What grew").font(theme::semibold(13.0)));
-                        for (i, name) in ["Last day", "Last week", "Last month"].into_iter().enumerate() {
-                            ui.selectable_value(&mut v.tab, i, name);
-                        }
-                    });
-                    match &v.growers[v.tab] {
-                        None => {
-                            ui.label(RichText::new("Needs at least two scans.").color(t.faint));
-                        }
-                        Some(ch) => {
-                            ui.label(RichText::new(format!(
-                                "Comparing the scan from {} with the latest ({}). {} → {} ({})",
-                                remember::age_text(ch.before_time),
-                                remember::age_text(ch.after_time),
-                                fmt_bytes(ch.before_total),
-                                fmt_bytes(ch.after_total),
-                                fmt_delta(i128::from(ch.after_total) - i128::from(ch.before_total))
-                            )).color(t.muted).size(12.0));
-                            if ch.mixed_methods() {
-                                ui.add(egui::Label::new(RichText::new("One of these scans was a Fast scan and the other a folder walk: they count some things differently, so part of the change comes from the method.").color(theme::warn()).size(12.0)).wrap());
-                            }
-                            if ch.items.is_empty() {
-                                ui.label(RichText::new("No folder changed by more than 1 MB (or 0.1% of the total).").color(t.faint));
-                            } else {
-                                egui::ScrollArea::vertical().id_salt("growers").max_height(220.0).show(ui, |ui| {
-                                    egui::Grid::new("growers").num_columns(3).striped(true).spacing([14.0, 4.0]).show(ui, |ui| {
-                                        for c in &ch.items {
-                                            let d = c.delta();
-                                            ui.label(RichText::new(fmt_delta(d)).color(if d > 0 { theme::warn() } else { t.accent }).strong());
-                                            ui.label(RichText::new(fmt_bytes(c.after)).color(t.muted));
-                                            let shown = if c.path.is_empty() { "(the scanned folder itself)".to_owned() } else { c.path.clone() };
-                                            let note = if c.before == 0 { "  new" } else if c.after == 0 { "  gone" } else { "" };
-                                            let r = ui.add(egui::Label::new(format!("{shown}{note}")).truncate().sense(Sense::click()));
-                                            if r.on_hover_text("Click to show it in the tree").clicked() {
-                                                jump = Some(c.path.clone());
-                                            }
-                                            ui.end_row();
-                                        }
-                                    });
-                                });
-                            }
-                        }
-                    }
-                    if !v.logs.is_empty() {
-                        ui.add_space(8.0);
-                        ui.label(RichText::new("Log files that keep growing").font(theme::semibold(13.0)));
-                        ui.label(RichText::new("They grew in every one of the last scans: space now, and SSD writes all the time. Check what writes them before deleting (a program may need its log).").color(t.muted).size(12.0));
-                        for g in v.logs.iter().take(8) {
-                            let r = ui.add(egui::Label::new(format!("{} → {} over {} ({} scans) · {}", fmt_bytes(g.first), fmt_bytes(g.last), remember::gap_text(g.over), g.scans, g.path)).truncate().sense(Sense::click()));
-                            if r.on_hover_text("Click to show it in the tree").clicked() {
-                                jump = Some(g.path.clone());
-                            }
-                        }
-                    }
-                }
                 Dialog::Memory => {
                     self.footprint.sample();
                     let f = self.footprint;
@@ -4322,33 +4202,6 @@ impl DiskRootApp {
                     }
                     ui.add_space(2.0);
                     ui.label(RichText::new(&ig.exe).monospace().size(11.0).color(t.faint));
-                }
-                Dialog::History(entries) => {
-                    ui.label(RichText::new("Deletion history").font(theme::semibold(16.0)));
-                    ui.label(RichText::new("Everything deleted through DiskRoot on this PC, newest first. Recycled items can be restored from the Recycle Bin.").color(t.muted));
-                    ui.add_space(8.0);
-                    if entries.is_empty() {
-                        ui.label(RichText::new("Nothing has been deleted with DiskRoot yet.").color(t.faint));
-                    } else {
-                        egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
-                            egui::Grid::new("history").num_columns(4).striped(true).spacing([14.0, 5.0]).show(ui, |ui| {
-                                for h in ["When (UTC)", "Result", "Size", "Item"] {
-                                    ui.label(RichText::new(h).color(t.muted).size(12.0));
-                                }
-                                ui.end_row();
-                                for e in entries.iter() {
-                                    ui.label(RichText::new(&e.time).monospace().size(11.5));
-                                    let col = if e.outcome == "recycled" { t.accent } else { t.muted };
-                                    let short = e.outcome.split(':').next().unwrap_or("");
-                                    ui.label(RichText::new(short).color(col)).on_hover_text(&e.outcome);
-                                    ui.label(fmt_bytes(e.bytes));
-                                    ui.add(egui::Label::new(visible(&e.path)).truncate())
-                                        .on_hover_text(format!("{}\n{} · {}", e.path, e.category, fmt_files(u64::from(e.files))));
-                                    ui.end_row();
-                                }
-                            });
-                        });
-                    }
                 }
                 Dialog::Changes(ch) => {
                     ui.label(RichText::new("What changed").font(theme::semibold(16.0)));
@@ -4459,61 +4312,6 @@ impl DiskRootApp {
                         ui.checkbox(&mut c.ack, "I understand. Move them to the Recycle Bin.");
                     }
                 }
-                Dialog::Dupes(dv) => {
-                    ui.label(RichText::new("Find duplicate files").font(theme::semibold(16.0)));
-                    ui.add_space(4.0);
-                    // Results arrived?
-                    if let Some((_, _, rx)) = &dv.running
-                        && let Ok(g) = rx.try_recv()
-                    {
-                        dv.groups = Some(g);
-                        dv.running = None;
-                    }
-                    if let Some((prog, cancel, _)) = &dv.running {
-                        let read = prog.read.load(Ordering::Relaxed);
-                        let total = prog.total.load(Ordering::Relaxed).max(1);
-                        ui.label(RichText::new(format!("Comparing files… {} of about {} read", fmt_bytes(read), fmt_bytes(total))).color(t.muted));
-                        ui.add(egui::ProgressBar::new((read as f32 / total as f32).min(1.0)).desired_width(ui.available_width()));
-                        ui.ctx().request_repaint_after(Duration::from_millis(100));
-                        if ui.button("Cancel").clicked() {
-                            cancel.store(true, Ordering::Relaxed);
-                        }
-                    } else if let Some(groups) = &dv.groups {
-                        let wasted: u64 = groups.iter().map(|g| g.wasted()).sum();
-                        ui.label(format!("{} {} of identical files · {} could be freed by keeping one copy of each", fmt_count(groups.len() as u64), if groups.len() == 1 { "set" } else { "sets" }, fmt_bytes(wasted)));
-                        ui.add_space(6.0);
-                        egui::ScrollArea::vertical().id_salt("dupes").max_height(380.0).show(ui, |ui| {
-                            for g in groups.iter().take(300) {
-                                ui.label(RichText::new(format!("{} × {}  ·  {} extra", g.files.len(), fmt_bytes(g.size), fmt_bytes(g.wasted()))).font(theme::semibold(12.5)));
-                                for (id, path) in &g.files {
-                                    let r = ui.add(egui::Label::new(RichText::new(format!("    {}", visible(path))).color(t.muted)).truncate().sense(Sense::click()));
-                                    if r.on_hover_text("Click to show it in the tree").clicked() {
-                                        jump_node = Some(*id);
-                                    }
-                                }
-                                ui.add_space(4.0);
-                            }
-                        });
-                        if !groups.is_empty() {
-                            ui.add_space(6.0);
-                            ui.label(RichText::new("\"Mark extra copies\" keeps the first file of each set (the original-looking one: not named \"copy\" or \"(1)\", not in a backup, old or Downloads folder) and marks the others. Then press Delete to review them in one confirmation.").color(t.muted).size(11.5));
-                            if ui.button("Mark extra copies").clicked() {
-                                dupes_mark = Some(groups.iter().flat_map(|g| g.files.iter().skip(1).map(|f| f.0)).collect());
-                            }
-                        }
-                    } else {
-                        ui.add(egui::Label::new(RichText::new("This is the only part of DiskRoot that reads file contents: it compares files of the same size, first by their beginning and end, then in full. Nothing leaves your PC. Online-only cloud files are skipped (reading them would download them), and hardlinks (one file with two names) aren't counted as copies.").color(t.muted)).wrap());
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            ui.label("Only files of at least");
-                            ui.add(egui::DragValue::new(&mut dv.min_mb).range(1..=100_000).suffix(" MB"));
-                        });
-                        ui.add_space(6.0);
-                        if ui.add(egui::Button::new(RichText::new("Start").color(t.accent_ink)).fill(t.accent)).clicked() {
-                            dupes_start = true;
-                        }
-                    }
-                }
                 Dialog::Files(fv) => {
                     ui.label(RichText::new("Largest files & file types").font(theme::semibold(16.0)));
                     ui.add_space(6.0);
@@ -4622,52 +4420,6 @@ impl DiskRootApp {
                         ("Note", "A file that's changed later is stored uncompressed again. Reading compressed files costs a little CPU."),
                         ("Undo", undo_text.as_str()),
                     ]);
-                }
-                Dialog::Similar(f) => {
-                    ui.label(RichText::new("Similar folders").font(theme::semibold(16.0)));
-                    ui.add(egui::Label::new(RichText::new(format!(
-                        "{} folders looked at in {:.2} s. Likely copies have the same size, file count and names inside (contents aren't compared). Similar names share a name once case, versions and copy marks are ignored. Click a folder to show it in the tree.",
-                        fmt_count(f.folders),
-                        f.secs
-                    )).color(t.muted)).wrap());
-                    ui.add_space(6.0);
-                    let member_rows = |ui: &mut Ui, g: &similar::Group, jump_node: &mut Option<u32>| {
-                        for m in &g.members {
-                            ui.horizontal(|ui| {
-                                ui.add_sized(vec2(70.0, 18.0), egui::Label::new(RichText::new(fmt_bytes(m.bytes)).color(t.muted)));
-                                let age = if m.mtime > 0 { diskroot_session::age_text(diskroot_session::today_days(), m.mtime) } else { String::new() };
-                                ui.add_sized(vec2(90.0, 18.0), egui::Label::new(RichText::new(age).color(t.faint).size(11.5)));
-                                let r = ui.add(egui::Label::new(visible(&m.path)).truncate().sense(Sense::click()));
-                                if r.on_hover_text(format!("{} · {}\nClick to show it in the tree", visible(&m.path), fmt_files(u64::from(m.files)))).clicked() {
-                                    *jump_node = Some(m.node);
-                                }
-                            });
-                        }
-                    };
-                    egui::ScrollArea::vertical().id_salt("similar").max_height(420.0).show(ui, |ui| {
-                        let freeable: u64 = f.copies.iter().map(|g| g.reclaim).sum();
-                        ui.label(RichText::new(format!("Likely copies ({}) · up to {} could be freed", f.copies.len(), fmt_bytes(freeable))).font(theme::semibold(13.5)));
-                        if f.copies.is_empty() {
-                            ui.label(RichText::new("None found.").color(t.faint));
-                        }
-                        for (gi, g) in f.copies.iter().enumerate() {
-                            egui::CollapsingHeader::new(format!("{} · {} copies · {} · {} could be freed", visible(&g.label), g.members.len(), fmt_bytes(g.bytes), fmt_bytes(g.reclaim)))
-                                .id_salt(("copies", gi))
-                                .show(ui, |ui| member_rows(ui, g, &mut jump_node));
-                        }
-                        ui.add_space(8.0);
-                        ui.label(RichText::new(format!("Similar names ({})", f.names.len())).font(theme::semibold(13.5)));
-                        if f.names.is_empty() {
-                            ui.label(RichText::new("None found.").color(t.faint));
-                        }
-                        for (gi, g) in f.names.iter().enumerate() {
-                            egui::CollapsingHeader::new(format!("{}… · {} folders · {}", visible(&g.label), g.members.len(), fmt_bytes(g.bytes)))
-                                .id_salt(("names", gi))
-                                .show(ui, |ui| member_rows(ui, g, &mut jump_node));
-                        }
-                    });
-                    ui.add_space(4.0);
-                    ui.add(egui::Label::new(RichText::new("DiskRoot never deletes from here. Check what a copy is before removing it: two folders can look alike and still differ inside.").color(t.muted).size(11.5)).wrap());
                 }
                 Dialog::Savings(v) => {
                     ui.label(RichText::new("Ways to save space").font(theme::semibold(16.0)));
@@ -5019,29 +4771,6 @@ impl DiskRootApp {
                         }
                         return;
                     }
-                    Dialog::Writers(_) => {
-                        let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
-                        if ui.add(ok).clicked() {
-                            close = true;
-                        }
-                        if ui.button("Drive health…").clicked() {
-                            action = Some("health-refresh");
-                        }
-                        return;
-                    }
-                    Dialog::Growth(_) => {
-                        let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
-                        if ui.add(ok).clicked() {
-                            close = true;
-                        }
-                        if ui.button("Scheduled scans…").on_hover_text("Background scans fill the history for you").clicked() {
-                            action = Some("open-schedule");
-                        }
-                        if ui.button("Clear history").on_hover_text("Deletes this drive's or folder's size history (DiskRoot's own file). Remembered scans stay.").clicked() {
-                            action = Some("history-clear");
-                        }
-                        return;
-                    }
                     Dialog::Memory => {
                         let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
                         if ui.add(ok).clicked() {
@@ -5114,16 +4843,6 @@ impl DiskRootApp {
                         }
                         return;
                     }
-                    Dialog::History(_) => {
-                        let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
-                        if ui.add(ok).clicked() {
-                            close = true;
-                        }
-                        if ui.button("Open log folder").clicked() {
-                            action = Some("open-log");
-                        }
-                        return;
-                    }
                     _ => {}
                 }
                 let ok = egui::Button::new(RichText::new("OK").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
@@ -5132,9 +4851,6 @@ impl DiskRootApp {
                 }
             });
         });
-        if close && let Some(Dialog::Dupes(dv)) = &self.dialog && let Some((_, c, _)) = &dv.running {
-            c.store(true, Ordering::Relaxed);
-        }
         // Escape / click outside closes everything except the first-run notice.
         if resp.should_close() && !matches!(self.dialog, Some(Dialog::Welcome)) {
             close = true;
@@ -5228,13 +4944,6 @@ impl DiskRootApp {
             Some("health-refresh") => {
                 self.open_health();
             }
-            Some("history-clear") => {
-                if let Some(Dialog::Growth(v)) = self.dialog.take() {
-                    history::clear(&v.root);
-                    self.set_hist(None);
-                    self.say(format!("Cleared the size history of {}.", visible(&v.root)));
-                }
-            }
             Some("free-memory") => {
                 self.dialog = None;
                 self.free_memory();
@@ -5255,19 +4964,6 @@ impl DiskRootApp {
                 }
             }
             _ => {}
-        }
-        if dupes_start
-            && let (Some(s), Some(Dialog::Dupes(dv))) = (&self.scanned, &mut self.dialog)
-        {
-            let cands = s.duplicate_candidates(dv.min_mb << 20);
-            let prog = Arc::new(diskroot_session::dupes::Progress::default());
-            let cancel = Arc::new(AtomicBool::new(false));
-            let (tx, rx) = mpsc::channel();
-            let (p2, c2) = (Arc::clone(&prog), Arc::clone(&cancel));
-            std::thread::spawn(move || {
-                let _ = tx.send(diskroot_session::dupes::find(cands, &c2, &p2));
-            });
-            dv.running = Some((prog, cancel, rx));
         }
         if let Some(go) = savings_go {
             match go {
@@ -5305,16 +5001,6 @@ impl DiskRootApp {
             self.marked = ids.into_iter().collect();
             self.rows = None;
             self.say(format!("{} downloads marked · press Delete to review them", self.marked.len()));
-        }
-        if let Some(ids) = dupes_mark {
-            self.dialog = None;
-            if self.settings.by_category {
-                self.settings.by_category = false;
-                self.regroup();
-            }
-            self.marked = ids.into_iter().collect();
-            self.say(format!("{} extra copies marked · press Delete to review and move them to the Recycle Bin", self.marked.len()));
-            self.rows = None;
         }
         if let (Some(q), Some(s), Some(Dialog::Files(fv))) = (requery, &self.scanned, &mut self.dialog) {
             fv.top = s.top_files(100, &q);
@@ -5468,8 +5154,10 @@ impl DiskRootApp {
             ("What changed since the previous scan", "", Cmd::Changes, self.changes.is_some()),
             ("Size history", "", Cmd::Growth, self.summary.is_some()),
             ("Where every GB is", "", Cmd::Space, scan),
+            ("Your drive status: health, writes, history, past scans", "", Cmd::Status, true),
             ("Who's writing to my drives", "", Cmd::Writers, true),
             ("Drive health", "", Cmd::Health, true),
+            ("Review marked items", "", Cmd::Review, !self.marked.is_empty()),
             ("Scheduled scans", "", Cmd::Schedule, true),
             ("Find duplicate files", "", Cmd::Dupes, scan),
             ("Largest files & file types", "", Cmd::Files, scan),
@@ -5495,7 +5183,7 @@ impl DiskRootApp {
             ("Export to CSV", "", Cmd::Export, scan && idle),
             ("Custom rules", "", Cmd::Rules, true),
             ("Size alerts", "", Cmd::Alerts, true),
-            ("Deletion history", "", Cmd::DeletionHistory, true),
+            ("Activity: what was deleted and compressed, and when", "", Cmd::DeletionHistory, true),
             ("Memory and CPU", "", Cmd::Memory, true),
             ("Free memory", "", Cmd::FreeMemory, scan),
             ("Take the tour of the window", "", Cmd::Tour, scan),
@@ -5525,7 +5213,9 @@ impl DiskRootApp {
             }
             Cmd::Growth => self.open_growth(),
             Cmd::Space => self.open_space(),
-            Cmd::Writers => self.dialog = Some(Dialog::Writers(Box::new(WritersView::open()))),
+            Cmd::Writers => self.open_status(1),
+            Cmd::Status => self.open_status(self.status_tab),
+            Cmd::Review => self.open_review(),
             Cmd::Health => self.open_health(),
             Cmd::Schedule => self.open_schedule(),
             Cmd::Dupes => self.open_dupes(),
@@ -5830,8 +5520,8 @@ impl DiskRootApp {
                         act = Some(("compress", *n));
                     }
                 }
-                if !self.marked.is_empty() {
-                    ui.label(RichText::new(format!("{} marked", self.marked.len())).color(theme::warn()).size(11.5));
+                if !self.marked.is_empty() && ui.small_button(RichText::new(format!("Review {} marked", self.marked.len())).color(theme::warn())).on_hover_text("Check each marked item and decide: delete or keep").clicked() {
+                    act = Some(("review", 0));
                 }
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.label(RichText::new("INSPECTOR").color(t.faint).size(10.5));
@@ -5858,6 +5548,7 @@ impl DiskRootApp {
             Some(("toggle", _)) => self.run_cmd(ui.ctx(), Cmd::ToggleInspector),
             Some(("delete", n)) => self.ask_delete(n),
             Some(("compress", n)) => self.ask_compress(n),
+            Some(("review", _)) => self.open_review(),
             _ => {}
         }
     }
@@ -5998,34 +5689,30 @@ impl DiskRootApp {
         ui.allocate_rect(area, Sense::hover());
     }
 
-    /// Drive health as a page: one card per drive (verdict, facts, writes per
-    /// day, life estimate, what you'd lose), then TRIM and what the words mean.
-    fn health_page(&mut self, ui: &mut Ui) {
+    /// The Health tab of Drive status: one card per drive (verdict, facts,
+    /// writes per day, life estimate, what you'd lose), then TRIM and what
+    /// the words mean.
+    fn health_body(&mut self, ui: &mut Ui) {
         let t = self.tokens();
+        if self.health_view.is_none() {
+            self.read_health();
+        }
         let Some(v) = &self.health_view else { return };
         let mut go: Option<&'static str> = None;
         let card = |t: &Tokens| Frame::new().fill(t.panel).stroke(Stroke::new(1.0, t.line)).corner_radius(CornerRadius::same(t.radius + 4)).inner_margin(Margin::same(18));
-        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ScrollArea::vertical().id_salt("health-page").auto_shrink([false, false]).show(ui, |ui| {
             Frame::new().inner_margin(Margin::same(20)).show(ui, |ui| {
-                // Title and buttons on one line; the description below, full width.
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Drive health").font(theme::semibold(24.0)));
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("Back to the map  (Esc)").clicked() {
-                            go = Some("map");
-                        }
-                        if ui.button("Who's writing…").on_hover_text("Which programs write to your drives, also while the PC is idle").clicked() {
-                            go = Some("writers");
-                        }
-                        if ui.button("Check again").clicked() {
-                            go = Some("refresh");
-                        }
-                    });
+                    plain_note(ui, RichText::new("What your drives report about themselves. DiskRoot only reads these reports: it changes nothing and needs no admin.").color(t.muted));
                 });
-                plain_note(ui, RichText::new("What your drives report about themselves. DiskRoot only reads these reports: it changes nothing and needs no admin.").color(t.muted));
                 let ago = v.checked.elapsed().as_secs();
                 let when = if ago < 5 { "just now".to_owned() } else if ago < 90 { format!("{ago} s ago") } else { format!("{} min ago", ago / 60) };
-                ui.label(RichText::new(format!("Checked {when}")).color(t.faint).size(11.5));
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("Checked {when}")).color(t.faint).size(11.5));
+                    if ui.small_button("Check again").clicked() {
+                        go = Some("refresh");
+                    }
+                });
                 ui.ctx().request_repaint_after(Duration::from_secs(if ago < 90 { 5 } else { 30 }));
                 ui.add_space(14.0);
                 if v.drives.is_empty() {
@@ -6124,7 +5811,7 @@ impl DiskRootApp {
                 // The drives answer in about a millisecond, so say what the
                 // new reading shows instead of seeming to do nothing.
                 let before: Vec<(u32, Vec<String>)> = self.health_view.as_ref().map(|v| v.drives.iter().map(|(d, _)| (d.number, d.facts())).collect()).unwrap_or_default();
-                self.open_health();
+                self.read_health();
                 let mut changed = Vec::new();
                 if let Some(v) = &self.health_view {
                     for (d, _) in &v.drives {
@@ -6135,7 +5822,6 @@ impl DiskRootApp {
                 }
                 self.say(if changed.is_empty() { "Checked the drives again: nothing has changed.".to_owned() } else { format!("Checked the drives again: {}", changed.join(" · ")) });
             }
-            Some("writers") => self.dialog = Some(Dialog::Writers(Box::new(WritersView::open()))),
             _ => {}
         }
     }
@@ -6173,6 +5859,9 @@ impl DiskRootApp {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.button("Back to the map  (Esc)").clicked() {
                             go = Some("map");
+                        }
+                        if ui.button("Activity…").on_hover_text("What you deleted and compressed with DiskRoot, and when").clicked() {
+                            go = Some("activity");
                         }
                         if ui.checkbox(&mut self.settings.home_at_start, "Show when DiskRoot starts").changed() {
                             self.settings.save();
@@ -6387,6 +6076,7 @@ impl DiskRootApp {
             Some("savings") => self.open_savings(),
             Some("history") => self.open_growth(),
             Some("health") => self.open_health(),
+            Some("activity") => self.open_activity(),
             Some("space") => self.open_space(),
             Some("changes") => self.dialog = self.changes.clone().map(|c| Dialog::Changes(Box::new(c))),
             _ => {}
@@ -6703,6 +6393,7 @@ impl DiskRootApp {
         self.poll_remember(&ctx);
         self.poll_savings(&ctx);
         self.poll_home(&ctx);
+        self.poll_dupes(&ctx);
         if let Some(rx) = &self.owners_rx
             && let Ok(o) = rx.try_recv()
         {
@@ -6733,10 +6424,14 @@ impl DiskRootApp {
         // (Ctrl+B, Ctrl+J); Focus (F) shows only the map.
         let scanning = self.job.as_ref().is_some_and(|j| matches!(j.kind, JobKind::Scan(_) | JobKind::Fast(_) | JobKind::Reopen(_)));
         let home = self.page == Page::Home && self.scanned.is_some() && (self.home.is_some() || self.home_rx.is_some()) && !scanning;
-        let health = self.page == Page::Health && self.health_view.is_some() && !scanning;
+        let other = !scanning && match self.page {
+            Page::Status | Page::Activity => true,
+            Page::Dupes | Page::Review => self.scanned.is_some(),
+            Page::Map | Page::Home => false,
+        };
         let empty = self.scanned.is_none();
         let focus = self.focus && !empty;
-        if scanning || home || health {
+        if scanning || home || other {
             let fade = self.page_fade(&ctx);
             egui::CentralPanel::default().frame(Frame::new().fill(t.win).inner_margin(Margin::same(6))).show(ui, |ui| {
                 ui.multiply_opacity(fade);
@@ -6744,8 +6439,13 @@ impl DiskRootApp {
                     ui.set_min_size(ui.available_size());
                     if scanning {
                         self.scan_view(ui)
-                    } else if health {
-                        self.health_page(ui)
+                    } else if other {
+                        match self.page {
+                            Page::Status => self.status_page(ui),
+                            Page::Dupes => self.dupes_page(ui),
+                            Page::Review => self.review_page(ui),
+                            _ => self.activity_page(ui),
+                        }
                     } else {
                         self.home_page(ui)
                     }
@@ -6777,7 +6477,8 @@ impl DiskRootApp {
                 // The list and the Inspector slide when minimized or shown
                 // (Ctrl+B / Ctrl+J); their sizes are remembered by egui.
                 let list_frame = Frame::new().fill(t.win).inner_margin(Margin { left: 6, right: 0, top: 6, bottom: 6 });
-                let mut list_open = !self.settings.hide_list;
+                let list_was = !self.settings.hide_list;
+                let mut list_open = list_was;
                 egui::Panel::show_switched(
                     ui,
                     &mut list_open,
@@ -6797,12 +6498,15 @@ impl DiskRootApp {
                         }
                     },
                 );
-                if list_open == self.settings.hide_list {
+                // Only what the panel itself changed (its own button already
+                // flipped the setting this frame; writing back would undo it).
+                if list_open != list_was {
                     self.settings.hide_list = !list_open;
                     self.settings.save();
                 }
                 let frame = Frame::new().fill(t.win).inner_margin(Margin { left: 6, right: 6, top: 0, bottom: 6 });
-                let mut insp_open = !self.settings.hide_inspector;
+                let insp_was = !self.settings.hide_inspector;
+                let mut insp_open = insp_was;
                 egui::Panel::show_switched(
                     ui,
                     &mut insp_open,
@@ -6829,7 +6533,7 @@ impl DiskRootApp {
                         }
                     },
                 );
-                if insp_open == self.settings.hide_inspector {
+                if insp_open != insp_was {
                     self.settings.hide_inspector = !insp_open;
                     self.settings.save();
                 }

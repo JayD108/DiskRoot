@@ -386,7 +386,13 @@ pub fn utc_now() -> String {
     format_utc(secs)
 }
 
-fn format_utc(secs: u64) -> String {
+pub fn format_utc(secs: u64) -> String {
+    let (y, m, d, hh, mm, ss) = format_utc_parts(secs);
+    format!("{y:04}-{m:02}-{d:02} {hh:02}:{mm:02}:{ss:02}")
+}
+
+/// Unix seconds -> (year, month, day, hour, minute, second) in UTC.
+pub fn format_utc_parts(secs: u64) -> (u16, u16, u16, u16, u16, u16) {
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
     // Civil-from-days (Howard Hinnant), valid for the proleptic Gregorian calendar.
@@ -399,7 +405,7 @@ fn format_utc(secs: u64) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
-    format!("{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}", rem / 3600, rem % 3600 / 60, rem % 60)
+    (y as u16, m as u16, d as u16, (rem / 3600) as u16, (rem % 3600 / 60) as u16, (rem % 60) as u16)
 }
 
 #[cfg(test)]

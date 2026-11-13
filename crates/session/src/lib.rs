@@ -6,6 +6,7 @@
 //! folder", "is this safe to delete") is a method here, so the UI never
 //! holds the full tree.
 
+pub mod activity;
 pub mod cachefile;
 pub mod compress;
 pub mod dupes;
