@@ -1,0 +1,33 @@
+name: Idea or feature request
+description: Something DiskRoot could do, or do better
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        DiskRoot stays offline, scans read-only, and changes files only after you confirm. Ideas that keep those promises are the easiest to take in. See docs/ROADMAP.md for what's planned.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you were trying to do, and what got in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: How you imagine it working. Sketches or screenshots of other tools are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do today instead
+      description: Other tools, scripts or workarounds.
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Helping
+      options:
+        - label: I'd like to work on this myself (see CONTRIBUTING.md)

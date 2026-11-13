@@ -2,6 +2,8 @@
 
 Thanks for helping. DiskRoot is a small, careful tool: it reads your drive fast, explains what's on it, and changes files only when you confirm. Every contribution keeps it that way.
 
+Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md). Questions: see [SUPPORT.md](SUPPORT.md). Pull requests get a short checklist (from these rules) to fill in.
+
 ## The rules every change keeps
 
 1. **Offline.** No network code, no telemetry, no accounts, no update checks. CI fails if an HTTP/TLS crate appears in `Cargo.lock`.

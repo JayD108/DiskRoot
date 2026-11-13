@@ -1,0 +1,65 @@
+name: Bug report
+description: Something in DiskRoot doesn't work as it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Security problems: please don't post them here**; use the private form under Security → Report a vulnerability.
+        Screenshots help a lot, but please don't include personal folder or file names (scanning `C:\Windows` or a test folder shows most problems too).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+      placeholder: |
+        1. Scanned C:\ with Scan (F5)
+        2. Opened Home
+        3. Expected … but saw …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: DiskRoot version
+      description: Help → About, or `droot --version`
+      placeholder: "0.7.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you run it
+      options:
+        - Installer (diskroot-setup.exe)
+        - Portable zip
+        - Built from source
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      description: Settings → System → About (e.g. Windows 11 24H2)
+    validations:
+      required: true
+  - type: dropdown
+    id: scan
+    attributes:
+      label: Which scan
+      options:
+        - Scan (F5, no admin)
+        - Fast scan (Ctrl+F5, admin)
+        - A remembered scan / reopen
+        - Scheduled scan
+        - Not about scanning
+  - type: textarea
+    id: drive
+    attributes:
+      label: Drive and graphics (if it looks related)
+      description: Drive type (NVMe SSD, SATA SSD, HDD, USB, network), file system (NTFS, ReFS, exFAT), about how many files; and whether you're on a virtual machine or Remote Desktop (DiskRoot then draws on the CPU).
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, the exact message shown, whether it happens every time.

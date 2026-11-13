@@ -1,5 +1,8 @@
 blank_issues_enabled: true
 contact_links:
-  - name: Report a security problem privately
+  - name: Security problem (private)
     url: https://github.com/JayD108/DiskRoot/security/advisories/new
-    about: Please don't report security problems in public issues.
+    about: Please report vulnerabilities privately, not in a public issue.
+  - name: How DiskRoot works / what it does to your disk
+    url: https://github.com/JayD108/DiskRoot/blob/main/docs/SECURITY-AND-PRIVACY.md
+    about: What DiskRoot reads, what it never does, admin rights, your data on disk.
