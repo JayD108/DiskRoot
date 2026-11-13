@@ -286,21 +286,26 @@ pub struct PaintCtx<'a> {
     pub today: Option<u16>,
     /// Map modes (growth, reclaimable): a colour per node; empty = by category.
     pub over: &'a [Color32],
+    /// Transition progress, 0..1 (1 = done): the sunburst sweeps round,
+    /// treemap tiles grow from the middle. Labels appear at the end.
+    pub grow: f32,
 }
 
 pub fn paint(p: &Painter, layout: &Layout, cx: &PaintCtx) {
     let t = cx.t;
     match layout {
         Layout::Sun { center, r0, arcs } => {
+            let g = cx.grow.clamp(0.0, 1.0);
             for s in arcs {
-                if s.a1 - s.a0 < 0.002 {
+                let (a0, a1) = (s.a0 * g, s.a1 * g);
+                if a1 - a0 < 0.002 {
                     continue;
                 }
-                if let Some(m) = ring_mesh(*center, s.ri, s.ro, s.a0, s.a1, color_of(&cx.nodes[s.i], s.depth, t, cx.today, cx.over.get(s.i).copied())) {
+                if let Some(m) = ring_mesh(*center, s.ri, s.ro, a0, a1, color_of(&cx.nodes[s.i], s.depth, t, cx.today, cx.over.get(s.i).copied())) {
                     p.add(Shape::mesh(m));
                 }
             }
-            for s in arcs {
+            for s in arcs.iter().filter(|_| g >= 1.0) {
                 if Some(s.i) == cx.hover || Some(s.i) == cx.selected {
                     let pts = ring_outline(*center, s.ri + 0.75, s.ro - 0.75, s.a0, s.a1);
                     p.add(Shape::closed_line(pts, Stroke::new(2.0, t.text)));
@@ -309,7 +314,7 @@ pub fn paint(p: &Painter, layout: &Layout, cx: &PaintCtx) {
             // Labels follow the ring: each letter is placed on the arc and
             // turned along it (upright on both halves of the circle), so
             // long names bend with the segment instead of sticking out.
-            for s in arcs {
+            for s in arcs.iter().filter(|_| g >= 1.0) {
                 let rm = (s.ri + s.ro) / 2.0;
                 let len = (s.a1 - s.a0) * rm;
                 if len < 60.0 || s.ro - s.ri < 15.0 {
@@ -333,6 +338,16 @@ pub fn paint(p: &Painter, layout: &Layout, cx: &PaintCtx) {
             }
         }
         Layout::Tree { tiles } => {
+            let g = cx.grow.clamp(0.0, 1.0);
+            if g < 1.0 {
+                let all = tiles.iter().fold(Rect::NOTHING, |r, x| r.union(x.rect));
+                let c = all.center();
+                for tile in tiles {
+                    let r = Rect::from_center_size(c + (tile.rect.center() - c) * g, tile.rect.size() * g);
+                    p.rect_filled(r, CornerRadius::ZERO, color_of(&cx.nodes[tile.i], tile.depth, t, cx.today, cx.over.get(tile.i).copied()));
+                }
+                return;
+            }
             for tile in tiles {
                 let n = &cx.nodes[tile.i];
                 p.rect_filled(tile.rect, CornerRadius::ZERO, color_of(n, tile.depth, t, cx.today, cx.over.get(tile.i).copied()));

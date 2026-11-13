@@ -132,6 +132,7 @@ enum Cmd {
     ModeSize,
     ModeGrowth,
     ModeReclaim,
+    Animations,
     ByLocation,
     ByCategory,
     ColorCategory,
@@ -471,6 +472,8 @@ struct MapState {
     crumbs: Vec<(Key_, String)>,
     /// Map mode these colours were made for (settings.map_mode).
     mode: u8,
+    /// When this map replaced another root (for the short transition).
+    born: Option<Instant>,
     /// Growth / reclaimable: colour, legend code (200+ / 210+) and tooltip
     /// line per node. Empty in size mode.
     over: Vec<Color32>,
@@ -553,6 +556,8 @@ pub struct DiskRootApp {
     /// Map "Reclaimable" mode: safe / check-first bytes per folder (~10 ms
     /// for a whole drive; made when first needed, dropped when the scan changes).
     reclaim: Option<Arc<std::collections::HashMap<u32, [u64; 2]>>>,
+    /// The root of the last map built, to tell a new place from a recolour.
+    last_map_root: Option<MapRoot>,
     /// The user's own rules: loaded or not, and why.
     rules_status: RulesStatus,
     /// Live updates: the running watch on the scan root.
@@ -659,6 +664,7 @@ impl DiskRootApp {
             badge_rx: None,
             badge_dirty: false,
             reclaim: None,
+            last_map_root: None,
             owners_rx: {
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
@@ -1475,7 +1481,10 @@ impl DiskRootApp {
             _ => None,
         };
         let (over, codes, notes) = self.mode_colors(&nodes);
-        self.map = Some(MapState { root, nodes, kids, cached: None, up, ages, crumbs, mode: self.settings.map_mode, over, codes, notes });
+        // A new place (not just new colours): a short transition.
+        let born = (self.settings.animations && self.last_map_root.as_ref().is_some_and(|r| *r != root)).then(Instant::now);
+        self.last_map_root = Some(root.clone());
+        self.map = Some(MapState { root, nodes, kids, cached: None, up, ages, crumbs, mode: self.settings.map_mode, born, over, codes, notes });
     }
 
     /// Index of a view node matching a tree key.
@@ -1625,6 +1634,11 @@ impl DiskRootApp {
                 let mut insp = !self.settings.hide_inspector;
                 if ui.add(egui::Checkbox::new(&mut insp, "Inspector")).on_hover_text("Show or minimize the details at the bottom (Ctrl+J)").changed() {
                     self.run_cmd(ui.ctx(), Cmd::ToggleInspector);
+                }
+                let mut anim = self.settings.animations;
+                if ui.checkbox(&mut anim, "Smooth transitions").on_hover_text("A short movement when the map opens a folder or goes up").changed() {
+                    self.settings.animations = anim;
+                    self.settings.save();
                 }
                 let mut focus = self.focus;
                 if ui.add_enabled(self.scanned.is_some(), egui::Checkbox::new(&mut focus, "Focus on the map")).on_hover_text("Only the map (F; Esc to leave)").changed() {
@@ -3041,6 +3055,15 @@ impl DiskRootApp {
                 can_go_up: m.up.is_some(),
                 today: self.settings.color_by_age.then(diskroot_session::today_days),
                 over: &m.over,
+                grow: match m.born {
+                    // Ease out over 220 ms; repaint only while it runs.
+                    Some(b) if b.elapsed() < Duration::from_millis(220) => {
+                        ui.ctx().request_repaint();
+                        let x = b.elapsed().as_secs_f32() / 0.22;
+                        1.0 - (1.0 - x).powi(3)
+                    }
+                    _ => 1.0,
+                },
             };
             map::paint(&ui.painter_at(map_rect), layout, &pc);
             let mode_hint = match m.mode {
@@ -5478,6 +5501,7 @@ impl DiskRootApp {
             ("Map colours: size (category)", "", Cmd::ModeSize, self.settings.map_mode != 0),
             ("Map colours: growth since the previous scan", "", Cmd::ModeGrowth, self.settings.map_mode != 1),
             ("Map colours: reclaimable (safe to clear / check first)", "", Cmd::ModeReclaim, self.settings.map_mode != 2),
+            (if self.settings.animations { "Turn off smooth transitions" } else { "Turn on smooth transitions" }, "", Cmd::Animations, true),
             ("Switch to Sunburst", "", Cmd::Sunburst, self.settings.treemap),
             ("Switch to Treemap", "", Cmd::Treemap, !self.settings.treemap),
             ("Group by location", "", Cmd::ByLocation, self.settings.by_category),
@@ -5543,6 +5567,10 @@ impl DiskRootApp {
                 };
                 self.settings.save();
                 self.map = None;
+            }
+            Cmd::Animations => {
+                self.settings.animations = !self.settings.animations;
+                self.settings.save();
             }
             Cmd::ByLocation | Cmd::ByCategory => {
                 self.settings.by_category = c == Cmd::ByCategory;
