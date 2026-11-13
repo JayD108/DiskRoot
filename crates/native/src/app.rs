@@ -135,6 +135,7 @@ enum Cmd {
     Animations,
     Tilt,
     Look,
+    Tour,
     ByLocation,
     ByCategory,
     ColorCategory,
@@ -560,6 +561,10 @@ pub struct DiskRootApp {
     home: Option<HomeView>,
     /// The drives' own reports, read when the Drive health page opens.
     health_view: Option<Box<HealthView>>,
+    /// Guided tour: the step shown, if running.
+    tour: Option<usize>,
+    /// Where parts of the window were drawn this frame (for the tour).
+    anchors: std::collections::HashMap<&'static str, Rect>,
     /// The command palette (Ctrl+K), when open.
     palette: Option<Palette>,
     /// Save space badge: the biggest single way to get space back (bytes, what).
@@ -680,6 +685,8 @@ impl DiskRootApp {
             page: Page::Map,
             home: None,
             health_view: None,
+            tour: None,
+            anchors: std::collections::HashMap::new(),
             toasts: Vec::new(),
             test_palette: std::env::var("DISKROOT_TEST_PALETTE").ok(),
             palette: None,
@@ -1768,6 +1775,12 @@ impl DiskRootApp {
                     ));
                     ui.close();
                 }
+                if ui.add_enabled(self.scanned.is_some(), egui::Button::new("Take the tour")).on_hover_text("A short walk through the window (six steps)").clicked() {
+                    self.page = Page::Map;
+                    self.focus = false;
+                    self.tour = Some(0);
+                    ui.close();
+                }
                 if ui.button("About DiskRoot").clicked() {
                     self.dialog = Some(Dialog::About);
                     ui.close();
@@ -1779,11 +1792,11 @@ impl DiskRootApp {
                 if shield_button(ui, &t).on_hover_text("Security & privacy: what DiskRoot does with your disk").clicked() {
                     self.open_security();
                 }
-                if ui
+                let cr = ui
                     .add(egui::Button::new(RichText::new("Commands").size(11.5)).shortcut_text(RichText::new("Ctrl+K").size(11.0)).small())
-                    .on_hover_text("Every command and every folder, one search (Ctrl+K)")
-                    .clicked()
-                {
+                    .on_hover_text("Every command and every folder, one search (Ctrl+K)");
+                self.anchors.insert("commands", cr.rect);
+                if cr.clicked() {
                     self.palette = Some(Palette::default());
                 }
                 if ui
@@ -1886,7 +1899,9 @@ impl DiskRootApp {
             ui.separator();
             let home_key = ui.input(|i| i.modifiers.ctrl && i.key_pressed(Key::H));
             let on_home = self.page == Page::Home;
-            if (ui.add_enabled(self.scanned.is_some(), egui::Button::new("Home").selected(on_home)).on_hover_text("The drive at a glance, as a page (Ctrl+H; again or Esc: back to the map)").clicked() || home_key) && self.scanned.is_some() {
+            let hr = ui.add_enabled(self.scanned.is_some(), egui::Button::new("Home").selected(on_home)).on_hover_text("The drive at a glance, as a page (Ctrl+H; again or Esc: back to the map)");
+            self.anchors.insert("home", hr.rect);
+            if (hr.clicked() || home_key) && self.scanned.is_some() {
                 self.toggle_home();
             }
             let mut job = egui::text::LayoutJob::default();
@@ -3067,6 +3082,7 @@ impl DiskRootApp {
             if mode != self.settings.map_mode {
                 mode_go = Some(mode);
             }
+            self.anchors.insert("modes", strip.min_rect());
             strip.separator();
             if strip.selectable_label(self.settings.map_25d, RichText::new("2.5D").size(11.5)).on_hover_text("Tilted map: boxes and rings stand up by size (2D is the default)").clicked() {
                 tilt_go = true;
@@ -3107,6 +3123,7 @@ impl DiskRootApp {
             let m = self.map.as_ref().expect("map exists");
             let layout = &m.cached.as_ref().expect("layout").2;
             let tilt = self.settings.map_25d.then(|| map::Tilt::new(layout, &m.nodes, map_rect));
+            self.anchors.insert("map", map_rect);
             let hit = resp.hover_pos().and_then(|q| match &tilt {
                 Some(tl) => map::hit_25d(layout, tl, &m.nodes, q),
                 None => map::hit(layout, q),
@@ -5307,7 +5324,7 @@ impl DiskRootApp {
     }
 
     fn keyboard(&mut self, ctx: &egui::Context) {
-        if self.dialog.is_some() || self.job.is_some() || self.palette.is_some() {
+        if self.dialog.is_some() || self.job.is_some() || self.palette.is_some() || self.tour.is_some() {
             return;
         }
         let (pal, list, insp) = ctx.input_mut(|i| {
@@ -5441,6 +5458,7 @@ impl DiskRootApp {
             ("Deletion history", "", Cmd::DeletionHistory, true),
             ("Memory and CPU", "", Cmd::Memory, true),
             ("Free memory", "", Cmd::FreeMemory, scan),
+            ("Take the tour of the window", "", Cmd::Tour, scan),
             ("Keyboard shortcuts", "", Cmd::Shortcuts, true),
             ("Security & privacy", "", Cmd::Security, true),
             ("About DiskRoot", "", Cmd::About, true),
@@ -5489,6 +5507,11 @@ impl DiskRootApp {
                 };
                 self.settings.save();
                 self.map = None;
+            }
+            Cmd::Tour => {
+                self.page = Page::Map;
+                self.focus = false;
+                self.tour = Some(0);
             }
             Cmd::Look => {
                 self.settings.classic = !self.settings.classic;
@@ -5581,10 +5604,38 @@ impl DiskRootApp {
             pal.hits_for = q.clone();
         }
         let words: Vec<&str> = q.split_whitespace().collect();
-        let cmds: Vec<_> = self.commands().into_iter().filter(|(l, _, _)| {
-            let l = l.to_lowercase();
-            words.iter().all(|w| l.contains(w))
-        }).collect();
+        // Empty: suggestions in groups, the most useful first. Typing: every
+        // command whose name has all the words.
+        let all = self.commands();
+        let cmds: Vec<(&'static str, &'static str, &'static str, Cmd)> = if words.is_empty() {
+            const GROUPS: [(&str, &[Cmd]); 3] = [
+                ("Start here", &[Cmd::Home, Cmd::SaveSpace, Cmd::Health, Cmd::Tour]),
+                ("See it", &[Cmd::Treemap, Cmd::Sunburst, Cmd::ModeGrowth, Cmd::ModeReclaim, Cmd::ModeSize, Cmd::Tilt, Cmd::ByCategory, Cmd::ByLocation]),
+                ("Find", &[Cmd::Files, Cmd::Dupes, Cmd::Changes, Cmd::Growth, Cmd::Space, Cmd::Writers, Cmd::Leftovers, Cmd::Similar]),
+            ];
+            let mut out = Vec::new();
+            for (g, list) in GROUPS {
+                for c in list {
+                    if let Some((l, k, c)) = all.iter().find(|x| x.2 == *c) {
+                        out.push((g, *l, *k, *c));
+                    }
+                }
+            }
+            for (l, k, c) in &all {
+                if !out.iter().any(|x| x.3 == *c) {
+                    out.push(("More", *l, *k, *c));
+                }
+            }
+            out
+        } else {
+            all.into_iter()
+                .filter(|(l, _, _)| {
+                    let l = l.to_lowercase();
+                    words.iter().all(|w| l.contains(w))
+                })
+                .map(|(l, k, c)| ("Command", l, k, c))
+                .collect()
+        };
         let total = cmds.len() + pal.hits.len();
         let (down, up, enter) = ctx.input_mut(|i| {
             (
@@ -5602,11 +5653,11 @@ impl DiskRootApp {
         pal.sel = pal.sel.min(total.saturating_sub(1));
         let mut pick: Option<Pick> = None;
         if enter && total > 0 {
-            pick = Some(if pal.sel < cmds.len() { Pick::Cmd(cmds[pal.sel].2) } else { Pick::Node(pal.hits[pal.sel - cmds.len()].0.id) });
+            pick = Some(if pal.sel < cmds.len() { Pick::Cmd(cmds[pal.sel].3) } else { Pick::Node(pal.hits[pal.sel - cmds.len()].0.id) });
         }
         let resp = Modal::new(egui::Id::unique("diskroot-palette")).show(ctx, |ui| {
             ui.set_width(560.0);
-            let r = ui.add(TextEdit::singleline(&mut pal.query).desired_width(f32::INFINITY).hint_text("Type a command or a folder name…"));
+            let r = ui.add(TextEdit::singleline(&mut pal.query).desired_width(f32::INFINITY).hint_text("Type a command or a folder name… (or pick one below)"));
             if !pal.focused {
                 r.request_focus();
                 pal.focused = true;
@@ -5626,12 +5677,18 @@ impl DiskRootApp {
                     }
                     p.text(pos2(rect.min.x + 8.0, rect.center().y), Align2::LEFT_CENTER, group, theme::regular(10.5), t.faint);
                     let name = map::fit(p, left, 13.0, rect.width() - 190.0).unwrap_or_default();
-                    p.text(pos2(rect.min.x + 62.0, rect.center().y), Align2::LEFT_CENTER, name, theme::regular(13.0), t.text);
+                    let nx = if group.is_empty() { 12.0 } else { 62.0 };
+                    p.text(pos2(rect.min.x + nx, rect.center().y), Align2::LEFT_CENTER, name, theme::regular(13.0), t.text);
                     p.text(pos2(rect.max.x - 8.0, rect.center().y), Align2::RIGHT_CENTER, right, theme::regular(11.5), t.muted);
                     (resp, rect)
                 };
-                for (i, (label, key, c)) in cmds.iter().enumerate() {
-                    let (r, rect) = row(ui, i == pal.sel, label, (*key).to_owned(), "Command");
+                for (i, (group, label, key, c)) in cmds.iter().enumerate() {
+                    // A small heading where a group starts (empty search).
+                    if words.is_empty() && (i == 0 || cmds[i - 1].0 != *group) {
+                        ui.add_space(if i == 0 { 0.0 } else { 6.0 });
+                        ui.label(RichText::new(group.to_uppercase()).color(t.faint).size(10.5));
+                    }
+                    let (r, rect) = row(ui, i == pal.sel, label, (*key).to_owned(), if words.is_empty() { "" } else { group });
                     if i == pal.sel {
                         sel_rect = Some(rect);
                     }
@@ -6252,6 +6309,137 @@ impl DiskRootApp {
         }
     }
 
+    /// The guided tour: six short steps, each pointing at the real part of
+    /// the window. Shown once after the first scan (and from Help / Ctrl+K).
+    /// Enter or → next, ← back, Esc skips. Steps whose part is hidden
+    /// (e.g. a minimized list) are left out.
+    fn tour_ui(&mut self, ctx: &egui::Context, anchors: &std::collections::HashMap<&'static str, Rect>) {
+        const STEPS: [(&str, &str, &str); 6] = [
+            ("map", "Your drive as a map", "Each piece is a folder or file: the bigger, the more space it takes. Click a piece to open it; click the middle to go back up."),
+            ("modes", "Colour it by what you need", "Size shows categories. Growth shows what grew or shrank since the last scan. Reclaimable shows what's safe to clear. 2.5D tilts the map."),
+            ("list", "The same, as a list", "Biggest first. ▸ opens a folder. Right-click anything for actions, like Compress or Move to Recycle Bin. Ctrl+B hides the list."),
+            ("inspector", "Is it safe to delete?", "The Inspector says what the selected item is, whose it is, whether it's safe to delete and how its size changed. Ctrl+J minimizes it."),
+            ("home", "The big questions", "Home answers where the space goes, what you can delete, when the drive fills up and whether it's healthy."),
+            ("commands", "Can't find something?", "Press Ctrl+K and type a few letters: every command, and every folder or file by name."),
+        ];
+        // Start once, after the first scan, when nothing else is open.
+        if self.tour.is_none()
+            && !self.settings.seen_tour
+            && self.scanned.is_some()
+            && self.page == Page::Map
+            && self.dialog.is_none()
+            && self.job.is_none()
+            && self.palette.is_none()
+            && anchors.contains_key("map")
+        {
+            self.tour = Some(0);
+        }
+        let Some(mut step) = self.tour else { return };
+        let shown: Vec<usize> = (0..STEPS.len()).filter(|&k| anchors.contains_key(STEPS[k].0)).collect();
+        if shown.is_empty() || self.page != Page::Map || self.dialog.is_some() {
+            return; // wait (e.g. a dialog is open)
+        }
+        if !shown.contains(&step) {
+            step = shown.iter().copied().find(|&k| k > step).unwrap_or(*shown.last().unwrap_or(&0));
+        }
+        let pos = shown.iter().position(|&k| k == step).unwrap_or(0);
+        let (key, title, text) = STEPS[step];
+        let Some(&target) = anchors.get(key) else { return };
+        let t = self.tokens();
+        let (next, back, skip) = ctx.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::NONE, Key::Enter) || i.consume_key(egui::Modifiers::NONE, Key::ArrowRight),
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowLeft),
+                i.consume_key(egui::Modifiers::NONE, Key::Escape),
+            )
+        });
+        let screen = ctx.content_rect();
+        // Dim everything but the part being shown, and ring it.
+        let hole = target.expand(4.0);
+        let shade = Color32::from_black_alpha(if t.dark { 150 } else { 90 });
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("diskroot-tour-shade"));
+        let p = ctx.layer_painter(layer);
+        for r in [
+            Rect::from_min_max(screen.min, pos2(screen.max.x, hole.min.y)),
+            Rect::from_min_max(pos2(screen.min.x, hole.max.y), screen.max),
+            Rect::from_min_max(pos2(screen.min.x, hole.min.y), pos2(hole.min.x, hole.max.y)),
+            Rect::from_min_max(pos2(hole.max.x, hole.min.y), pos2(screen.max.x, hole.max.y)),
+        ] {
+            p.rect_filled(r, CornerRadius::ZERO, shade);
+        }
+        p.rect_stroke(hole, CornerRadius::same(t.radius), Stroke::new(2.0, t.accent), egui::StrokeKind::Outside);
+        // The card: below the part if there's room, else above, else inside.
+        let card_w = 360.0f32;
+        let card_h = 150.0f32;
+        // Below, above, right of or left of the part; inside only if nothing else fits.
+        let cx = (hole.center().x - card_w / 2.0).clamp(screen.min.x + 12.0, screen.max.x - card_w - 12.0);
+        let cy = (hole.center().y - card_h / 2.0).clamp(screen.min.y + 12.0, screen.max.y - card_h - 12.0);
+        let (x, y) = if hole.max.y + card_h + 16.0 < screen.max.y {
+            (cx, hole.max.y + 12.0)
+        } else if hole.min.y - card_h - 16.0 > screen.min.y {
+            (cx, hole.min.y - card_h - 12.0)
+        } else if hole.max.x + card_w + 16.0 < screen.max.x {
+            (hole.max.x + 12.0, cy)
+        } else if hole.min.x - card_w - 16.0 > screen.min.x {
+            (hole.min.x - card_w - 12.0, cy)
+        } else {
+            (cx, cy)
+        };
+        let mut go: i32 = if next { 1 } else if back { -1 } else { 0 };
+        let mut end = skip;
+        egui::Area::new(egui::Id::unique("diskroot-tour-card"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(pos2(x, y))
+            .show(ctx, |ui| {
+                Frame::new()
+                    .fill(t.panel)
+                    .stroke(Stroke::new(1.0, t.line_strong))
+                    .corner_radius(CornerRadius::same(t.radius + 2))
+                    .inner_margin(Margin::same(16))
+                    .shadow(egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(60) })
+                    .show(ui, |ui| {
+                        ui.set_width(card_w - 32.0);
+                        ui.label(RichText::new(format!("{} of {}", pos + 1, shown.len())).color(t.faint).size(11.0));
+                        ui.label(RichText::new(title).font(theme::semibold(15.0)));
+                        ui.add_space(2.0);
+                        plain_note(ui, RichText::new(text).color(t.text));
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            if ui.add(egui::Button::new(RichText::new("Skip tour").color(t.muted)).frame(false)).clicked() {
+                                end = true;
+                            }
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                let last = pos + 1 == shown.len();
+                                let nb = egui::Button::new(RichText::new(if last { "Done" } else { "Next" }).color(t.accent_ink)).fill(t.accent);
+                                if ui.add(nb).clicked() {
+                                    go = 1;
+                                }
+                                if pos > 0 && ui.button("Back").clicked() {
+                                    go = -1;
+                                }
+                            });
+                        });
+                    });
+            });
+        let finish = |app: &mut Self| {
+            app.tour = None;
+            app.settings.seen_tour = true;
+            app.settings.save();
+        };
+        if end {
+            finish(self);
+        } else if go > 0 {
+            match shown.get(pos + 1) {
+                Some(&n) => self.tour = Some(n),
+                None => finish(self),
+            }
+        } else if go < 0 && pos > 0 {
+            self.tour = Some(shown[pos - 1]);
+        } else {
+            self.tour = Some(step);
+        }
+    }
+
     /// The minimized folder list: a thin strip that brings it back.
     fn list_strip(&mut self, ui: &mut Ui) {
         ui.vertical_centered(|ui| {
@@ -6387,6 +6575,8 @@ impl DiskRootApp {
     pub fn show(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let _bench = bench_frame(&ctx, self.scanned.is_some());
+        // Last frame's places, for the tour (this frame refills them).
+        let anchors = std::mem::take(&mut self.anchors);
         if let Some(ms) = self.test_slow {
             std::thread::sleep(Duration::from_millis(ms));
         }
@@ -6477,7 +6667,10 @@ impl DiskRootApp {
                         .size_range(300.0..=(area.width() * 0.6).max(320.0))
                         .resizable(true)
                         .show_separator_line(false)
-                        .show(ui, |ui| self.tree_pane(ui));
+                        .show(ui, |ui| {
+                            self.tree_pane(ui);
+                            self.anchors.insert("list", ui.min_rect());
+                        });
                 }
                 let frame = Frame::new().fill(t.win).inner_margin(Margin { left: 6, right: 6, top: 0, bottom: 6 });
                 if self.settings.hide_inspector {
@@ -6492,10 +6685,11 @@ impl DiskRootApp {
                         .resizable(true)
                         .show_separator_line(false)
                         .show(ui, |ui| {
-                            Self::pane_frame(&t).inner_margin(Margin { left: 10, right: 10, top: 2, bottom: 0 }).show(ui, |ui| {
+                            let bar = Self::pane_frame(&t).inner_margin(Margin { left: 10, right: 10, top: 2, bottom: 0 }).show(ui, |ui| {
                                 ui.set_min_width(ui.available_width());
                                 self.inspector_bar(ui);
                             });
+                            self.anchors.insert("inspector", bar.response.rect);
                             ui.add_space(4.0);
                             // Each selection starts at the top of its details.
                             ScrollArea::vertical().id_salt(("details", self.selected.clone())).auto_shrink([false, false]).show(ui, |ui| self.details_pane(ui));
@@ -6513,6 +6707,7 @@ impl DiskRootApp {
         self.palette_ui(&ctx);
         self.dialogs(&ctx);
         self.toasts_ui(&ctx);
+        self.tour_ui(&ctx, &anchors);
         self.update_title(&ctx);
     }
 }

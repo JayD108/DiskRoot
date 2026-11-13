@@ -10,7 +10,9 @@ A new window, designed as "DiskRoot Studio", and a map that answers more questio
 - **Map colours: Size, Growth, Reclaimable.** Growth shows what grew or shrank since the previous scan; Reclaimable shows what DiskRoot's rules label safe to clear (green) and caches or Windows leftovers to check first (amber). Personal folders aren't counted as reclaimable.
 - **Optional 2.5D map** (2D stays the default): a tilted treemap "city" or a stepped sunburst, boxes standing up by size.
 - **Home is a page** of its own: the drive at a glance with four answers you can click, what changed, ways to get space back and the biggest items.
-- **While it scans:** a radar sweep with the items found so far (and how far along, when the place was scanned before).
+- **While it scans:** growth rings, one per order of magnitude of items found, with the count, speed and (when the place was scanned before) how far along.
+- **Drive health is a page** too, a card per drive.
+- **A short guided tour** after the first scan (and Help → Take the tour), and grouped suggestions in an empty Ctrl+K.
 - **Breadcrumbs** on the map, short **transitions** when you open a folder, **notices** for what just happened, and a **Save space badge** with the biggest single way to get space back.
 - **Studio look** (dark and Daylight) is the new default; the **Classic look** is under View.
 - **Runs without a graphics driver:** if OpenGL can't start (virtual machines, some Remote Desktop sessions, the Basic Display Adapter), DiskRoot draws on the CPU instead, automatically. It redraws only what changed.
