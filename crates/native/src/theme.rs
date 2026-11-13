@@ -261,7 +261,69 @@ pub fn install_fonts(ctx: &egui::Context) {
     fonts.families.insert(FontFamily::Proportional, chain(&regular));
     fonts.families.insert(FontFamily::Monospace, chain(&mono));
     fonts.families.insert(FontFamily::Name("semibold".into()), chain(&semibold));
-    ctx.set_fonts(fonts);
+    ctx.set_fonts(fonts.clone());
+    if let Ok(mut f) = FONTS.lock() {
+        *f = Some((fonts, 0));
+    }
+}
+
+/// The fonts in use and which extra scripts are loaded (bit per `SCRIPTS`
+/// entry), so a script's font can be added when a name needs it.
+static FONTS: std::sync::Mutex<Option<(FontDefinitions, u32)>> = std::sync::Mutex::new(None);
+
+/// Scripts Segoe UI doesn't cover, and Windows' own font for each. These
+/// fonts are big (5-19 MB), so each is loaded only when a file or folder
+/// name on screen needs it.
+const SCRIPTS: [(&str, &[&str], fn(u32) -> bool); 5] = [
+    ("cjk", &["msyh.ttc", "YuGothR.ttc", "simsun.ttc", "msgothic.ttc"], |c| {
+        (0x2E80..=0x9FFF).contains(&c) || (0xF900..=0xFAFF).contains(&c) || (0xFF00..=0xFFEF).contains(&c) || (0x2_0000..=0x2_FFFF).contains(&c)
+    }),
+    ("hangul", &["malgun.ttf"], |c| (0x1100..=0x11FF).contains(&c) || (0x3130..=0x318F).contains(&c) || (0xAC00..=0xD7AF).contains(&c)),
+    ("indic", &["Nirmala.ttc", "Nirmala.ttf"], |c| (0x0900..=0x0DFF).contains(&c)),
+    ("thai", &["LeelawUI.ttf"], |c| (0x0E00..=0x0EFF).contains(&c)),
+    ("emoji", &["seguiemj.ttf"], |c| (0x1_F000..=0x1_FAFF).contains(&c)),
+];
+
+/// Makes sure every script in `names` can be drawn: loads Windows' font for
+/// a script the first time a name uses it (Chinese, Japanese, Korean, Hindi
+/// and other Indian scripts, Thai, emoji). Cheap when nothing new is needed.
+pub fn cover<'a>(ctx: &egui::Context, names: impl IntoIterator<Item = &'a str>) {
+    let mut need = 0u32;
+    for n in names {
+        if n.is_ascii() {
+            continue;
+        }
+        for ch in n.chars() {
+            let c = ch as u32;
+            if c < 0x0900 {
+                continue;
+            }
+            for (k, (_, _, test)) in SCRIPTS.iter().enumerate() {
+                if test(c) {
+                    need |= 1 << k;
+                }
+            }
+        }
+    }
+    let Ok(mut guard) = FONTS.lock() else { return };
+    let Some((fonts, loaded)) = guard.as_mut() else { return };
+    let new = need & !*loaded;
+    if new == 0 {
+        return;
+    }
+    let dir = std::env::var_os("WINDIR").map_or_else(|| "C:\\Windows".into(), std::path::PathBuf::from).join("Fonts");
+    for (k, (name, files, _)) in SCRIPTS.iter().enumerate() {
+        if new & (1 << k) == 0 {
+            continue;
+        }
+        *loaded |= 1 << k; // tried once, found or not
+        let Some(bytes) = files.iter().find_map(|f| std::fs::read(dir.join(f)).ok()) else { continue };
+        fonts.font_data.insert((*name).to_owned(), Arc::new(FontData::from_owned(bytes)));
+        for fam in fonts.families.values_mut() {
+            fam.push((*name).to_owned());
+        }
+    }
+    ctx.set_fonts(fonts.clone());
 }
 
 pub fn semibold(size: f32) -> FontId {

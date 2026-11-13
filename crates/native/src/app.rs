@@ -1532,6 +1532,7 @@ impl DiskRootApp {
             },
         };
         let kids = map::children(&nodes);
+        theme::cover(&self.egui_ctx, nodes.iter().map(|n| n.name.as_str()));
         let ages = match (&root, self.settings.color_by_age) {
             (MapRoot::Node(n), true) => Some(s.age_breakdown(*n, diskroot_session::today_days())),
             _ => None,
@@ -2185,6 +2186,10 @@ impl DiskRootApp {
         let t = self.tokens();
         if self.rows.is_none() {
             self.rows = Some(self.build_rows());
+            // Load a script's font if a name needs it (Chinese, Hindi, …).
+            if let Some(rows) = &self.rows {
+                theme::cover(&self.egui_ctx, rows.iter().map(|r| r.name.as_str()));
+            }
         }
         Self::pane_frame(&t).show(ui, |ui| {
             ui.set_min_size(ui.available_size());
@@ -3183,6 +3188,10 @@ impl DiskRootApp {
             match &tilt {
                 Some(tl) => map::paint_25d(&ui.painter_at(map_rect), layout, tl, &pc),
                 None => map::paint(&ui.painter_at(map_rect), layout, &pc),
+            }
+            // Nothing to draw: say so instead of an empty area.
+            if m.nodes.len() <= 1 || m.nodes[0].size == 0 {
+                ui.painter_at(map_rect).text(map_rect.center(), Align2::CENTER_CENTER, if m.nodes[0].size == 0 { "Empty: nothing here takes space" } else { "Nothing inside to show" }, theme::regular(13.0), t.muted);
             }
             let mode_hint = match m.mode {
                 1 if self.prev_sizes.is_none() => Some("Growth needs a previous scan of this place: it shows from the next scan on (File → Remember scans)"),
@@ -5629,7 +5638,11 @@ impl DiskRootApp {
         let q = pal.query.trim().to_lowercase();
         if q != pal.hits_for {
             pal.hits = match &self.scanned {
-                Some(s) if q.chars().count() >= 2 => s.find_names(&q, 40),
+                Some(s) if q.chars().count() >= 2 => {
+                    let hits = s.find_names(&q, 40);
+                    theme::cover(ctx, hits.iter().map(|h| h.0.name.as_str()));
+                    hits
+                }
                 _ => Vec::new(),
             };
             pal.hits_for = q.clone();
@@ -6154,8 +6167,9 @@ impl DiskRootApp {
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             Frame::new().inner_margin(Margin::same(20)).show(ui, |ui| {
                 // Header
+                // Buttons first (right), so a long title is shortened instead of
+                // running under them.
                 ui.horizontal(|ui| {
-                    ui.add(egui::Label::new(RichText::new(format!("{} at a glance", visible(&h.root))).font(theme::semibold(24.0))).truncate());
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.button("Back to the map  (Esc)").clicked() {
                             go = Some("map");
@@ -6163,6 +6177,10 @@ impl DiskRootApp {
                         if ui.checkbox(&mut self.settings.home_at_start, "Show when DiskRoot starts").changed() {
                             self.settings.save();
                         }
+                        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                            ui.add(egui::Label::new(RichText::new(format!("{} at a glance", visible(&h.root))).font(theme::semibold(24.0))).truncate())
+                                .on_hover_text(visible(&h.root));
+                        });
                     });
                 });
                 plain_note(ui, RichText::new(if h.root.len() <= 3 { "Your drive, explained in four answers. Click one to go deeper." } else { "This folder and its drive, in four answers. Click one to go deeper." }).color(t.muted));
