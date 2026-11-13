@@ -44,6 +44,9 @@ This page explains every feature of DiskRoot 0.2: **what it does, how to use it,
   4. The window (never admin) checks everything it receives before using it.
 - **Limits:** NTFS only. For safety, release builds only do this from an installed copy (Program Files), not from a portable copy in Downloads.
 
+### While it scans
+- The window shows a radar: a sweep (emerald for Fast scan, amber for a normal scan) over growth rings, points lighting up as items are found, the number found so far, and, when the same place was scanned before, about how far along it is. Fast scan can be cancelled.
+
 ### Cancel and progress
 - A running walk shows how many items it found so far. Fast scan has a **Cancel** button and a 10-minute limit.
 
@@ -95,6 +98,7 @@ This page explains every feature of DiskRoot 0.2: **what it does, how to use it,
 - Click the strip's text (whole drives) for **Where every GB is**. An SSD with less than 10% free gets a "nearly full" warning.
 
 ### Home (toolbar Home, Ctrl+H)
+- **A page of its own** (not a dialog): Home again, Esc or "Back to the map" returns. A disc of the drive (this scan by category, the rest of the used space, free), four answers you can click (*Where is the space going? What can I safely delete? When does it fill up? Is the drive itself OK?*), then what changed, the top ways to get space back and the biggest items.
 - **What it does:** the drive at a glance: used / free with a bar, the "full in ~N days" forecast, drive health, the top 3 changes since the previous scan, the top ways to get space back (and what compressing old data could save), and the 5 biggest items. Each opens its detail with one click (the tree, What changed, Save space, Size history, Drive health, Where every GB is). It opens when DiskRoot starts with a remembered scan ("Show this when DiskRoot starts" turns that off).
 - **Underneath:** built on a worker thread from a cheap copy of the scan (its big parts are shared, not copied), like Save space now: about 0.2 s on a whole 1.7M-file drive that no longer freezes the window.
 

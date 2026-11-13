@@ -155,6 +155,15 @@ enum Cmd {
     About,
 }
 
+/// What fills the window under the toolbar.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Page {
+    /// The folder list, the map and the Inspector.
+    Map,
+    /// Home: the drive at a glance, as its own page.
+    Home,
+}
+
 /// What was picked in the palette.
 enum Pick {
     Cmd(Cmd),
@@ -197,8 +206,6 @@ enum Dialog {
     Health(Box<HealthView>),
     /// View > Who's writing.
     Writers(Box<WritersView>),
-    /// Home: everything important on one screen.
-    Home(Box<HomeView>),
     /// View > Where every GB is.
     Space(Box<diskroot_session::SpaceReport>),
     /// Folders the scan couldn't read: (scan root, paths).
@@ -364,11 +371,10 @@ impl HomeView {
         let is_drive = root.len() == 3 && root.ends_with(":\\");
         let nearly_full = space.and_then(|(t, f)| health::nearly_full(&root, t, f, health::is_ssd(&root) == Some(true)));
         let forecast = if is_drive { history::load(&root).map(|h| history::forecast(&h.points).text(root.trim_end_matches('\\'))) } else { None };
-        let health = if is_drive {
+        // Health is the drive's, also when a folder on it was scanned.
+        let health = {
             let n = health::disk_of(&root);
             health::drives().into_iter().find(|d| Some(d.number) == n).map(|d| d.verdict()).filter(|v| v.0 != health::Level::Unknown)
-        } else {
-            None
         };
         let mut tips: Vec<(String, Option<u64>)> = s.space_tips().into_iter().map(|t| (t.title, t.bytes)).collect();
         tips.sort_by_key(|t| std::cmp::Reverse(t.1.unwrap_or(0)));
@@ -548,6 +554,10 @@ pub struct DiskRootApp {
     scroll_to_selected: bool,
     /// Focus mode (F): only the map; the list, Inspector and drive strip hide.
     focus: bool,
+    /// Map or Home page.
+    page: Page,
+    /// Home's numbers, worked out on a worker thread when it opens.
+    home: Option<HomeView>,
     /// The command palette (Ctrl+K), when open.
     palette: Option<Palette>,
     /// Save space badge: the biggest single way to get space back (bytes, what).
@@ -665,6 +675,8 @@ impl DiskRootApp {
             savings_rx: None,
             home_rx: None,
             focus: false,
+            page: Page::Map,
+            home: None,
             toasts: Vec::new(),
             test_palette: std::env::var("DISKROOT_TEST_PALETTE").ok(),
             palette: None,
@@ -830,6 +842,8 @@ impl DiskRootApp {
         self.badge = None;
         self.badge_rx = None;
         self.focus = false;
+        self.page = Page::Map;
+        self.home = None;
         self.freed = self.settings.remember_scans.then(|| root.clone());
         self.footprint.at = None; // show the new number right away
         self.say(if self.settings.remember_scans { format!("Memory freed. Your scan of {root} is saved: open it from the start screen.") } else { "Memory freed.".to_owned() });
@@ -1052,6 +1066,8 @@ impl DiskRootApp {
         self.start_watch();
         self.check_alerts();
         self.badge_dirty = true;
+        self.home = None;
+        self.page = Page::Map;
     }
 
     /// Live updates: (re)starts watching the scan root.
@@ -1848,6 +1864,7 @@ impl DiskRootApp {
             ui.selectable_value(&mut tm, false, if compact { "Sunburst" } else { "◎ Sunburst" });
             ui.selectable_value(&mut tm, true, if compact { "Treemap" } else { "▦ Treemap" });
             if tm != self.settings.treemap {
+                self.page = Page::Map;
                 self.settings.treemap = tm;
                 self.settings.save();
                 if let Some(m) = &mut self.map {
@@ -1859,13 +1876,15 @@ impl DiskRootApp {
             ui.selectable_value(&mut bc, false, "Location");
             ui.selectable_value(&mut bc, true, "Category");
             if bc != self.settings.by_category {
+                self.page = Page::Map;
                 self.settings.by_category = bc;
                 self.regroup();
             }
             ui.separator();
             let home_key = ui.input(|i| i.modifiers.ctrl && i.key_pressed(Key::H));
-            if (ui.add_enabled(self.scanned.is_some(), egui::Button::new("Home")).on_hover_text("Everything important on one screen (Ctrl+H)").clicked() || home_key) && self.scanned.is_some() {
-                self.open_home();
+            let on_home = self.page == Page::Home;
+            if (ui.add_enabled(self.scanned.is_some(), egui::Button::new("Home").selected(on_home)).on_hover_text("The drive at a glance, as a page (Ctrl+H; again or Esc: back to the map)").clicked() || home_key) && self.scanned.is_some() {
+                self.toggle_home();
             }
             let mut job = egui::text::LayoutJob::default();
             let body = ui.style().text_styles.get(&egui::TextStyle::Button).cloned().unwrap_or_else(|| theme::regular(13.0));
@@ -2505,9 +2524,8 @@ impl DiskRootApp {
         match rx.try_recv() {
             Ok(v) => {
                 self.home_rx = None;
-                if self.dialog.is_none() {
-                    self.dialog = Some(Dialog::Home(Box::new(v)));
-                }
+                self.home = Some(v);
+                self.page = Page::Home;
             }
             Err(TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(50)),
             Err(TryRecvError::Disconnected) => self.home_rx = None,
@@ -3673,7 +3691,13 @@ impl DiskRootApp {
 
     fn dialogs(&mut self, ctx: &egui::Context) {
         let t = self.tokens();
-        // Progress while a job runs.
+        // Progress while a job runs (scans have their own view instead).
+        if let Some(job) = &self.job
+            && matches!(job.kind, JobKind::Scan(_) | JobKind::Fast(_) | JobKind::Reopen(_))
+        {
+            let _ = job;
+            return;
+        }
         if let Some(job) = &self.job {
             let secs = job.started.elapsed().as_secs_f32();
             let (title, text) = match &job.kind {
@@ -3771,7 +3795,7 @@ impl DiskRootApp {
         let mut confirm: Option<u32> = None;
         let mut action: Option<&'static str> = None;
         let mut jump: Option<String> = None;
-        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_) | Dialog::Savings(_) | Dialog::Schedule(_) | Dialog::Growth(_) | Dialog::Health(_) | Dialog::Writers(_) | Dialog::Space(_) | Dialog::Unreadable(_) | Dialog::Home(_));
+        let wide = matches!(d, Dialog::History(_) | Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Dupes(_) | Dialog::Leftovers(_) | Dialog::Similar(_) | Dialog::Savings(_) | Dialog::Schedule(_) | Dialog::Growth(_) | Dialog::Health(_) | Dialog::Writers(_) | Dialog::Space(_) | Dialog::Unreadable(_));
         let mut leftover_marks: Option<Vec<u32>> = None;
         let mut tool_start: Option<(Action, bool)> = None;
         let mut dupes_start = false;
@@ -3895,80 +3919,6 @@ impl DiskRootApp {
                             }
                         });
                     }
-                }
-                Dialog::Home(h) => {
-                    ui.label(RichText::new(format!("{} at a glance", visible(&h.root))).font(theme::semibold(17.0)));
-                    ui.add_space(4.0);
-                    if let Some((total, free)) = h.space {
-                        let used = total.saturating_sub(free);
-                        ui.label(RichText::new(format!("{} used of {} · {} free", fmt_bytes(used), fmt_bytes(total), fmt_bytes(free))).font(theme::semibold(13.5)));
-                        let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 14.0), Sense::hover());
-                        let p = ui.painter_at(bar);
-                        p.rect_filled(bar, CornerRadius::same(5), t.head);
-                        let frac = (used as f64 / total.max(1) as f64) as f32;
-                        p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac, bar.height())), CornerRadius::same(5), if h.nearly_full.is_some() { theme::WARN } else { t.accent });
-                    }
-                    for line in [h.nearly_full.as_ref(), h.forecast.as_ref()].into_iter().flatten() {
-                        ui.add(egui::Label::new(RichText::new(line.as_str()).color(t.muted)).wrap());
-                    }
-                    if let Some((level, text)) = &h.health {
-                        let col = match level {
-                            Health::Good => t.accent,
-                            Health::Watch => theme::WARN,
-                            _ => theme::cat_color(5),
-                        };
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("Drive health:").color(t.muted));
-                            if ui.add(egui::Label::new(RichText::new(text.as_str()).color(col)).sense(Sense::click())).on_hover_text("Open Drive health").clicked() {
-                                action = Some("health-refresh");
-                            }
-                        });
-                    }
-                    ui.add_space(10.0);
-                    ui.columns(3, |cols| {
-                        cols[0].label(RichText::new("What changed").font(theme::semibold(13.5)));
-                        match &self.changes {
-                            Some(ch) if !ch.items.is_empty() => {
-                                for c in ch.items.iter().take(3) {
-                                    let name = if c.path.is_empty() { visible(&h.root) } else { visible(&c.path) };
-                                    let r = cols[0].add(egui::Label::new(format!("{} {}", fmt_delta(c.delta()), name)).truncate().sense(Sense::click()));
-                                    if r.on_hover_text("Show it in the tree").clicked() {
-                                        jump = Some(c.path.clone());
-                                    }
-                                }
-                                if ch.hardlink_switch() {
-                                    plain_note(&mut cols[0], RichText::new("Partly because hardlinked files now count once.").color(theme::WARN).size(12.0));
-                                }
-                                if cols[0].small_button("All changes…").clicked() {
-                                    action = Some("home-changes");
-                                }
-                            }
-                            Some(_) => {
-                                plain_note(&mut cols[0], RichText::new("Nothing changed by more than 1 MB since the previous scan.").color(t.faint));
-                            }
-                            None => {
-                                plain_note(&mut cols[0], RichText::new("No earlier scan to compare with yet. Scan again later, or turn on scheduled scans.").color(t.faint));
-                            }
-                        }
-                        cols[1].label(RichText::new("Get space back").font(theme::semibold(13.5)));
-                        if let Some(b) = h.compress {
-                            cols[1].label(format!("Compress old data: about {}", fmt_bytes(b)));
-                        }
-                        for (title, bytes) in &h.tips {
-                            let b = bytes.map(|b| format!(" · {}", fmt_bytes(b))).unwrap_or_default();
-                            cols[1].add(egui::Label::new(format!("{title}{b}")).truncate());
-                        }
-                        if cols[1].small_button("Save space…").clicked() {
-                            action = Some("home-savings");
-                        }
-                        cols[2].label(RichText::new("Biggest here").font(theme::semibold(13.5)));
-                        for (id, name, bytes) in &h.biggest {
-                            let r = cols[2].add(egui::Label::new(format!("{} {}", fmt_bytes(*bytes), name)).truncate().sense(Sense::click()));
-                            if r.on_hover_text("Show it in the tree").clicked() {
-                                jump_node = Some(*id);
-                            }
-                        }
-                    });
                 }
                 Dialog::Space(r) => {
                     let drive = r.root.trim_end_matches('\\').to_owned();
@@ -5063,22 +5013,6 @@ impl DiskRootApp {
                         }
                         return;
                     }
-                    Dialog::Home(_) => {
-                        let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
-                        if ui.add(ok).clicked() {
-                            close = true;
-                        }
-                        if ui.button("Where every GB is…").clicked() {
-                            action = Some("home-space");
-                        }
-                        if ui.button("Size history…").clicked() {
-                            action = Some("home-history");
-                        }
-                        if ui.checkbox(&mut self.settings.home_at_start, "Show this when DiskRoot starts").changed() {
-                            self.settings.save();
-                        }
-                        return;
-                    }
                     Dialog::Space(r) => {
                         let ok = egui::Button::new(RichText::new("Close").color(t.accent_ink)).fill(t.accent).min_size(vec2(80.0, 26.0));
                         if ui.add(ok).clicked() {
@@ -5472,8 +5406,10 @@ impl DiskRootApp {
         let typing = ctx.egui_wants_keyboard_input();
         if !typing && self.scanned.is_some() {
             let (f, esc) = ctx.input(|i| (i.key_pressed(Key::F) && i.modifiers.is_none(), i.key_pressed(Key::Escape)));
-            if f {
+            if f && self.page == Page::Map {
                 self.focus = !self.focus;
+            } else if esc && self.page == Page::Home {
+                self.page = Page::Map;
             } else if esc && self.focus {
                 self.focus = false;
             }
@@ -5598,7 +5534,7 @@ impl DiskRootApp {
                     self.go_to(k);
                 }
             }
-            Cmd::Home => self.open_home(),
+            Cmd::Home => self.toggle_home(),
             Cmd::SaveSpace => self.open_savings(),
             Cmd::Changes => {
                 if let Some(ch) = &self.changes {
@@ -5901,6 +5837,367 @@ impl DiskRootApp {
         }
     }
 
+    fn toggle_home(&mut self) {
+        if self.page == Page::Home {
+            self.page = Page::Map;
+        } else if self.home.is_some() {
+            self.page = Page::Home;
+        } else {
+            self.open_home();
+        }
+    }
+
+    /// While a scan runs: a radar sweep over growth rings, the items found
+    /// so far, and (when this place was scanned before) how far along it is.
+    fn scan_view(&mut self, ui: &mut Ui) {
+        let t = self.tokens();
+        let Some(job) = &self.job else { return };
+        let secs = job.started.elapsed().as_secs_f32();
+        let (title, sub, fast, path) = match &job.kind {
+            JobKind::Fast(p) => (format!("Fast scan of {}", visible(p)), "Reads the drive's file table, read-only, in a locked-down helper.", true, p.clone()),
+            JobKind::Reopen(p) => (format!("Opening the remembered scan of {}", visible(p)), "Loading the last scan from this PC.", false, p.clone()),
+            JobKind::Scan(p) => (format!("Scanning {}", visible(p)), "Walking the folders, read-only, no admin needed.", false, p.clone()),
+            _ => return,
+        };
+        let found = if matches!(job.kind, JobKind::Reopen(_)) { 0 } else { diskroot_session::scan_progress() };
+        // How far along: only when this same place was scanned before.
+        let expected = self.summary.as_ref().filter(|s| s.root.eq_ignore_ascii_case(path.trim())).map(|s| s.files + s.dirs);
+        let area = ui.available_rect_before_wrap();
+        let r = (area.width().min(area.height()) * 0.28).clamp(60.0, 260.0);
+        let c = pos2(area.center().x, area.min.y + area.height() * 0.42);
+        let p = ui.painter();
+        let beam = if fast { t.accent } else { theme::cat_color(6) };
+        // Growth rings and cross hairs.
+        for k in 1..=4 {
+            p.circle_stroke(c, r * k as f32 / 4.0, Stroke::new(1.0, t.line_strong));
+        }
+        p.line_segment([c - vec2(r, 0.0), c + vec2(r, 0.0)], Stroke::new(1.0, t.line));
+        p.line_segment([c - vec2(0.0, r), c + vec2(0.0, r)], Stroke::new(1.0, t.line));
+        // The sweep: a bright edge with a fading trail behind it.
+        let a = (secs / 1.6).fract() * std::f32::consts::TAU;
+        let trail = 1.1f32;
+        let steps = 40;
+        let mut mesh = egui::epaint::Mesh::default();
+        mesh.colored_vertex(c, Color32::TRANSPARENT);
+        for k in 0..=steps {
+            let f = k as f32 / steps as f32;
+            let ang = a - trail * (1.0 - f) - std::f32::consts::FRAC_PI_2;
+            let alpha = (f * f * 150.0) as u8;
+            mesh.colored_vertex(c + vec2(ang.cos(), ang.sin()) * r, Color32::from_rgba_unmultiplied(beam.r(), beam.g(), beam.b(), alpha));
+            if k > 0 {
+                mesh.add_triangle(0, k, k + 1);
+            }
+        }
+        p.add(egui::Shape::mesh(mesh));
+        let edge = a - std::f32::consts::FRAC_PI_2;
+        p.line_segment([c, c + vec2(edge.cos(), edge.sin()) * r], Stroke::new(2.0, beam));
+        // Pings: one for every ~1,500 items found, placed the same way every
+        // time, brightest just after the beam passes them.
+        let n = ((found / 1500) as usize).min(160);
+        for k in 0..n {
+            let h = (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xD1B5_4A32_D192_ED03;
+            let ang = (h & 0xFFFF) as f32 / 65_535.0 * std::f32::consts::TAU;
+            let rad = r * (0.18 + 0.78 * (((h >> 16) & 0xFFFF) as f32 / 65_535.0));
+            let behind = (a - ang).rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU;
+            let glow = (1.0 - behind).powi(3);
+            let col = Color32::from_rgba_unmultiplied(beam.r(), beam.g(), beam.b(), (60.0 + 195.0 * glow) as u8);
+            let pa = ang - std::f32::consts::FRAC_PI_2;
+            p.circle_filled(c + vec2(pa.cos(), pa.sin()) * rad, 1.5 + 2.0 * glow, col);
+        }
+        // Centre: what's found so far.
+        p.circle_filled(c, r * 0.38, t.panel);
+        p.circle_stroke(c, r * 0.38, Stroke::new(1.0, t.line_strong));
+        let count = if found > 1 { fmt_count(found) } else if fast { "…".to_owned() } else { "0".to_owned() };
+        p.text(c - vec2(0.0, 8.0), Align2::CENTER_CENTER, count, theme::num(22.0), t.text);
+        p.text(c + vec2(0.0, 16.0), Align2::CENTER_CENTER, "items found", theme::regular(11.5), t.muted);
+        // Text and progress under the radar.
+        let mut y = c.y + r + 28.0;
+        p.text(pos2(c.x, y), Align2::CENTER_TOP, &title, theme::semibold(17.0), t.text);
+        y += 26.0;
+        let sub = if fast && found <= 1 { "Approve the Windows prompt. DiskRoot then reads the drive's file table, read-only." } else { sub };
+        p.text(pos2(c.x, y), Align2::CENTER_TOP, sub, theme::regular(13.0), t.muted);
+        y += 28.0;
+        let bar = Rect::from_center_size(pos2(c.x, y + 4.0), vec2((r * 2.4).min(area.width() - 40.0), 6.0));
+        p.rect_filled(bar, CornerRadius::same(3), t.head);
+        match expected.filter(|&e| e > 0 && found > 1) {
+            Some(e) => {
+                let frac = (found as f32 / e as f32).min(0.99);
+                p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac, bar.height())), CornerRadius::same(3), beam);
+                p.text(pos2(c.x, y + 16.0), Align2::CENTER_TOP, format!("about {:.0}% · {:.0} s (compared with the last scan of this place)", frac * 100.0, secs), theme::regular(11.5), t.faint);
+            }
+            None => {
+                let w = bar.width() * 0.25;
+                let k = (1.0 - (secs * 2.2).cos()) / 2.0;
+                p.rect_filled(Rect::from_min_size(pos2(bar.min.x + k * (bar.width() - w), bar.min.y), vec2(w, bar.height())), CornerRadius::same(3), beam);
+                p.text(pos2(c.x, y + 16.0), Align2::CENTER_TOP, format!("{secs:.0} s"), theme::regular(11.5), t.faint);
+            }
+        }
+        // Fast scan can be cancelled (it waits for the admin helper).
+        if fast {
+            let stopping = job.cancel.load(Ordering::Relaxed);
+            let b = Rect::from_center_size(pos2(c.x, y + 56.0), vec2(120.0, 28.0));
+            if ui.put(b, egui::Button::new(if stopping { "Cancelling…" } else { "Cancel" })).clicked() && !stopping {
+                job.cancel.store(true, Ordering::Relaxed);
+            }
+        }
+        ui.allocate_rect(area, Sense::hover());
+    }
+
+    /// Home as a page: the drive at a glance, four answers, then what
+    /// changed, ways to get space back and the biggest items.
+    fn home_page(&mut self, ui: &mut Ui) {
+        let t = self.tokens();
+        let (Some(h), Some(s)) = (&self.home, &self.scanned) else { return };
+        let mut go: Option<&'static str> = None;
+        let mut jump_rel: Option<String> = None;
+        let mut jump_node: Option<u32> = None;
+        let card = |t: &Tokens| Frame::new().fill(t.panel).stroke(Stroke::new(1.0, t.line)).corner_radius(CornerRadius::same(t.radius + 4)).inner_margin(Margin::same(16));
+        let breakdown = s.breakdown(0);
+        let cats = diskroot_session::categories();
+        let reclaim = {
+            if self.reclaim.is_none() {
+                self.reclaim = Some(Arc::new(s.reclaimable()));
+            }
+            self.reclaim.as_ref().and_then(|r| r.get(&0).copied()).unwrap_or_default()
+        };
+        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            Frame::new().inner_margin(Margin::same(20)).show(ui, |ui| {
+                // Header
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(format!("{} at a glance", visible(&h.root))).font(theme::semibold(24.0)));
+                        ui.label(RichText::new("Your drive, explained in four answers. Click one to go deeper.").color(t.muted));
+                    });
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button("Back to the map  (Esc)").clicked() {
+                            go = Some("map");
+                        }
+                        if ui.checkbox(&mut self.settings.home_at_start, "Show when DiskRoot starts").changed() {
+                            self.settings.save();
+                        }
+                    });
+                });
+                ui.add_space(14.0);
+                // Hero: the drive disc and four answers.
+                card(&t).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        let d = 210.0f32;
+                        // Room under the disc for its three-line legend.
+                        let (outer, _) = ui.allocate_exact_size(vec2(d + 90.0, d + 60.0), Sense::hover());
+                        let rect = Rect::from_min_size(outer.min, vec2(d + 20.0, d));
+                        let p = ui.painter();
+                        let c = rect.center();
+                        let (ro, ri) = (d / 2.0 - 4.0, d / 2.0 - 30.0);
+                        let (total, free) = h.space.unwrap_or((s.summary().on_disk.max(1), 0));
+                        let tau = std::f32::consts::TAU;
+                        let mut a0 = 0.0f32;
+                        for (cat, bytes) in &breakdown {
+                            let a1 = a0 + tau * (*bytes as f64 / total.max(1) as f64) as f32;
+                            if let Some(m) = map::ring_mesh(c, ri, ro, a0, a1.min(tau), theme::cat_color(*cat)) {
+                                p.add(egui::Shape::mesh(m));
+                            }
+                            a0 = a1;
+                        }
+                        // Used but not in this scan (other folders, system), then free.
+                        let used_end = tau * (1.0 - free as f64 / total.max(1) as f64) as f32;
+                        if used_end > a0
+                            && let Some(m) = map::ring_mesh(c, ri, ro, a0, used_end, t.faint)
+                        {
+                            p.add(egui::Shape::mesh(m));
+                        }
+                        if let Some(m) = map::ring_mesh(c, ri, ro, used_end.max(a0), tau, t.head) {
+                            p.add(egui::Shape::mesh(m));
+                        }
+                        let used = total.saturating_sub(free);
+                        p.text(c - vec2(0.0, 10.0), Align2::CENTER_CENTER, fmt_bytes(used), theme::num(20.0), t.text);
+                        p.text(c + vec2(0.0, 14.0), Align2::CENTER_CENTER, format!("used of {}", fmt_bytes(total)), theme::regular(11.5), t.muted);
+                        p.text(c + vec2(0.0, 30.0), Align2::CENTER_CENTER, format!("{} free", fmt_bytes(free)), theme::regular(11.5), if h.nearly_full.is_some() { theme::WARN } else { t.faint });
+                        // What the disc's parts are.
+                        let scanned = s.summary().on_disk;
+                        let mut ly = rect.max.y + 10.0;
+                        let is_drive = h.root.len() <= 3;
+                        let rows: [(Color32, String); 3] = [
+                            (breakdown.first().map_or(t.accent, |x| theme::cat_color(x.0)), format!("{} (by category) · {}", if is_drive { "This drive's files" } else { "This scan" }, fmt_bytes(scanned))),
+                            (t.faint, format!("Rest of the used space · {}", fmt_bytes(used.saturating_sub(scanned)))),
+                            (t.head, format!("Free · {}", fmt_bytes(free))),
+                        ];
+                        for (col, text) in rows {
+                            p.rect_filled(Rect::from_min_size(pos2(rect.min.x + 4.0, ly + 3.0), vec2(10.0, 10.0)), CornerRadius::same(2), col);
+                            p.rect_stroke(Rect::from_min_size(pos2(rect.min.x + 4.0, ly + 3.0), vec2(10.0, 10.0)), CornerRadius::same(2), Stroke::new(1.0, t.line_strong), egui::StrokeKind::Inside);
+                            p.text(pos2(rect.min.x + 20.0, ly), Align2::LEFT_TOP, text, theme::regular(11.5), t.muted);
+                            ly += 18.0;
+                        }
+                        ui.add_space(16.0);
+                        ui.vertical(|ui| {
+                            let answer = |ui: &mut Ui, color: Color32, q: &str, a: String, tip: &str| -> bool {
+                                let w = ui.available_width();
+                                let resp = Frame::new()
+                                    .fill(t.field)
+                                    .stroke(Stroke::new(1.0, t.line))
+                                    .corner_radius(CornerRadius::same(t.radius))
+                                    .inner_margin(Margin::symmetric(14, 10))
+                                    .show(ui, |ui| {
+                                        ui.set_width(w - 30.0);
+                                        ui.horizontal(|ui| {
+                                            let (bar, _) = ui.allocate_exact_size(vec2(4.0, 34.0), Sense::hover());
+                                            ui.painter().rect_filled(bar, CornerRadius::same(2), color);
+                                            ui.add_space(6.0);
+                                            ui.vertical(|ui| {
+                                                ui.label(RichText::new(q).color(t.muted).size(12.0));
+                                                ui.add(egui::Label::new(RichText::new(a).font(theme::semibold(14.0))).truncate());
+                                            });
+                                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                                ui.label(RichText::new("›").color(t.faint).size(18.0));
+                                            });
+                                        });
+                                    })
+                                    .response
+                                    .interact(Sense::click())
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                    .on_hover_text(tip);
+                                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, q));
+                                ui.add_space(6.0);
+                                resp.clicked()
+                            };
+                            let top = breakdown.first().map(|(c, b)| (cats[*c as usize].name, *b, *c));
+                            let space = match top {
+                                Some((name, b, _)) => format!("{} {name}{}", fmt_pct(b, s.summary().on_disk), h.biggest.first().map(|x| format!(" · biggest: {}", x.1)).unwrap_or_default()),
+                                None => "Nothing counted yet".into(),
+                            };
+                            if answer(ui, top.map_or(t.faint, |x| theme::cat_color(x.2)), "Where is the space going?", space, "Open the map") {
+                                go = Some("map");
+                            }
+                            let del = if reclaim[0] + reclaim[1] > 0 {
+                                format!("{} safe to clear{}", fmt_bytes(reclaim[0]), if reclaim[1] > 0 { format!(" · {} caches to check", fmt_bytes(reclaim[1])) } else { String::new() })
+                            } else {
+                                "Nothing labelled safe to clear here".into()
+                            };
+                            if answer(ui, t.accent, "What can I safely delete?", del, "Open Save space") {
+                                go = Some("savings");
+                            }
+                            let fill = h.forecast.clone().unwrap_or_else(|| "Not enough history yet: it builds up with every scan".into());
+                            if answer(ui, theme::WARN, "When does it fill up?", fill, "Open Size history") {
+                                go = Some("history");
+                            }
+                            let (hc, ht) = match &h.health {
+                                Some((Health::Good, x)) => (t.accent, x.clone()),
+                                Some((Health::Watch, x)) => (theme::WARN, x.clone()),
+                                Some((_, x)) => (theme::cat_color(5), x.clone()),
+                                None => (t.faint, "No health report for this drive".into()),
+                            };
+                            if answer(ui, hc, "Is the drive itself OK?", ht, "Open Drive health") {
+                                go = Some("health");
+                            }
+                        });
+                    });
+                });
+                ui.add_space(12.0);
+                // What changed · Ways to get space back
+                ui.columns(2, |cols| {
+                    card(&t).show(&mut cols[0], |ui| {
+                        ui.set_min_height(170.0);
+                        ui.set_width(ui.available_width());
+                        ui.label(RichText::new("What changed").font(theme::semibold(15.0)));
+                        ui.add_space(6.0);
+                        match &self.changes {
+                            Some(ch) if !ch.items.is_empty() => {
+                                for c in ch.items.iter().take(6) {
+                                    let name = if c.path.is_empty() { visible(&h.root) } else { visible(&c.path) };
+                                    ui.horizontal(|ui| {
+                                        let d = c.delta();
+                                        ui.label(RichText::new(fmt_delta(d)).font(theme::num(12.5)).color(if d > 0 { theme::WARN } else { t.accent }));
+                                        if ui.add(egui::Label::new(name).truncate().sense(Sense::click())).on_hover_text("Show it on the map").clicked() {
+                                            jump_rel = Some(c.path.clone());
+                                        }
+                                    });
+                                }
+                                ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
+                                    if ui.small_button("All changes…").clicked() {
+                                        go = Some("changes");
+                                    }
+                                });
+                            }
+                            Some(_) => plain_note(ui, RichText::new("Nothing changed by more than 1 MB since the previous scan.").color(t.faint)),
+                            None => plain_note(ui, RichText::new("No earlier scan to compare with yet. Scan again later, or turn on scheduled scans.").color(t.faint)),
+                        }
+                    });
+                    card(&t).show(&mut cols[1], |ui| {
+                        ui.set_min_height(170.0);
+                        ui.set_width(ui.available_width());
+                        ui.label(RichText::new("Top ways to get space back").font(theme::semibold(15.0)));
+                        ui.add_space(6.0);
+                        if let Some(b) = h.compress {
+                            ui.horizontal(|ui| {
+                                ui.label("Compress old data");
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(RichText::new(format!("about {}", fmt_bytes(b))).font(theme::num(12.5)).color(t.accent)));
+                            });
+                        }
+                        for (title, bytes) in &h.tips {
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Label::new(title.as_str()).truncate());
+                                if let Some(b) = bytes {
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(RichText::new(fmt_bytes(*b)).font(theme::num(12.5)).color(t.accent)));
+                                }
+                            });
+                        }
+                        ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
+                            if ui.small_button("Open Save space…").clicked() {
+                                go = Some("savings");
+                            }
+                        });
+                    });
+                });
+                ui.add_space(12.0);
+                card(&t).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Biggest here").font(theme::semibold(15.0)));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.small_button("Where every GB is…").clicked() {
+                                go = Some("space");
+                            }
+                        });
+                    });
+                    ui.add_space(6.0);
+                    let top = h.biggest.first().map_or(1, |x| x.2.max(1));
+                    for (id, name, bytes) in &h.biggest {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(fmt_bytes(*bytes)).font(theme::num(12.5)));
+                            let (bar, _) = ui.allocate_exact_size(vec2(160.0, 8.0), Sense::hover());
+                            ui.painter().rect_filled(bar, CornerRadius::same(3), t.head);
+                            ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * (*bytes as f32 / top as f32), bar.height())), CornerRadius::same(3), t.accent);
+                            if ui.add(egui::Label::new(name.as_str()).truncate().sense(Sense::click())).on_hover_text("Show it on the map").clicked() {
+                                jump_node = Some(*id);
+                            }
+                        });
+                    }
+                });
+            });
+        });
+        match go {
+            Some("map") => self.page = Page::Map,
+            Some("savings") => self.open_savings(),
+            Some("history") => self.open_growth(),
+            Some("health") => self.open_health(),
+            Some("space") => self.open_space(),
+            Some("changes") => self.dialog = self.changes.clone().map(|c| Dialog::Changes(Box::new(c))),
+            _ => {}
+        }
+        if let Some(n) = jump_node {
+            self.page = Page::Map;
+            if self.settings.by_category {
+                self.settings.by_category = false;
+                self.regroup();
+            }
+            self.reveal_node(n, None);
+        }
+        if let Some(rel) = jump_rel {
+            self.page = Page::Map;
+            self.show_rel(&rel);
+        }
+    }
+
     /// The minimized folder list: a thin strip that brings it back.
     fn list_strip(&mut self, ui: &mut Ui) {
         ui.vertical_centered(|ui| {
@@ -6072,8 +6369,23 @@ impl DiskRootApp {
         // Studio layout: the map in the middle, the folder list on the left,
         // the Inspector under the map. Both docks resize and minimize
         // (Ctrl+B, Ctrl+J); Focus (F) shows only the map.
+        let scanning = self.job.as_ref().is_some_and(|j| matches!(j.kind, JobKind::Scan(_) | JobKind::Fast(_) | JobKind::Reopen(_)));
+        let home = self.page == Page::Home && self.scanned.is_some() && self.home.is_some() && !scanning;
         let empty = self.scanned.is_none();
         let focus = self.focus && !empty;
+        if scanning || home {
+            egui::CentralPanel::default().frame(Frame::new().fill(t.win).inner_margin(Margin::same(6))).show(ui, |ui| {
+                Self::pane_frame(&t).show(ui, |ui| {
+                    ui.set_min_size(ui.available_size());
+                    if scanning { self.scan_view(ui) } else { self.home_page(ui) }
+                });
+            });
+            self.palette_ui(&ctx);
+            self.dialogs(&ctx);
+            self.toasts_ui(&ctx);
+            self.update_title(&ctx);
+            return;
+        }
         if self.drive_bar.is_some() && !focus {
             egui::Panel::bottom("drivebar")
                 .frame(Frame::new().fill(t.win).inner_margin(Margin { left: 10, right: 10, top: 4, bottom: 4 }))

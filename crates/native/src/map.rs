@@ -200,7 +200,7 @@ fn color_of(n: &Node, depth: u8, t: &Tokens, today: Option<u16>, over: Option<Co
 }
 
 /// Ring segment as a triangle strip; `gap` px of negative space each side.
-fn ring_mesh(c: Pos2, ri: f32, ro: f32, a0: f32, a1: f32, color: Color32) -> Option<Mesh> {
+pub fn ring_mesh(c: Pos2, ri: f32, ro: f32, a0: f32, a1: f32, color: Color32) -> Option<Mesh> {
     // Negative space between neighbours; a full ring has no neighbours.
     let gap_o = if a1 - a0 > TAU - 1e-3 { 0.0 } else { 0.75 / ro };
     let (a0, a1) = (a0 + gap_o, a1 - gap_o);
