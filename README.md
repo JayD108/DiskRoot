@@ -16,18 +16,18 @@ A free, open-source disk analyzer for Windows 10 and 11. Offline. Read-only scan
 
 <br>
 
-[![CI](https://github.com/JayD108/DiskRoot/actions/workflows/ci.yml/badge.svg)](https://github.com/JayD108/DiskRoot/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/JayD108/DiskRoot?label=release&color=2f6b3a)](https://github.com/JayD108/DiskRoot/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/JayD108/DiskRoot/total?color=2f6b3a)](https://github.com/JayD108/DiskRoot/releases)
 ![Network: none](https://img.shields.io/badge/network-none-2f6b3a)
-![Made with Rust](https://img.shields.io/badge/made%20with-Rust-b7410e)
 [![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue)](#license)
 
-**[Why](#why-diskroot)** · **[Features](#what-it-does)** · **[Is it safe?](#is-it-safe)** · **[Install](#get-started)** · **[Command line](#for-the-terminal)** · **[Docs](#learn-more)**
+**[Why](#why-diskroot)** · **[See it](#see-it-in-action)** · **[Features](#what-it-does)** · **[Trust](#measured-and-safe)** · **[Install](#get-started)** · **[FAQ](#faq)** · **[Docs](#learn-more)**
 
 <br>
 
-<img src="docs/screenshots/diskroot-demo.gif" alt="DiskRoot scanning C:\Windows in about a second, opening Home, then a treemap by category" width="900">
+<img src="docs/screenshots/diskroot-demo.gif" alt="DiskRoot scanning C:\Windows in about a second and a half, opening Home, then back to the map" width="900">
+
+<sub>Real speed: a normal scan of C:\Windows (196,000 files), no admin.</sub>
 
 </div>
 
@@ -47,71 +47,41 @@ What that means on a real PC (the developer's laptop: a 1.5 TB drive with 1.7 mi
 | "The drive is fine" | The SSD has used **1%** of its rated life, and here is who writes to it, also while the PC is idle |
 | "Delete something" | **78 GB** of caches and temporary files, each with its safety label and exactly how to clear it |
 
-## What it does
+## See it in action
 
 <table>
 <tr>
 <td width="50%" valign="top">
-
-### 🏠 See it all at once
-**Home** opens with how full the drive is, when it would be full, the drive's health, what changed and the top ways to get space back, one click from each. A tree with a sunburst or treemap, by location or by category, coloured by age if you like.
-
+<img src="docs/screenshots/diskroot-map.gif" alt="The map of C:\Windows coloured by size, then by what's reclaimable, tilted into 2.5D, then as a treemap">
+<b>A map that answers questions.</b> Colour by size, growth or what's reclaimable; tilt it into 2.5D. (C:\Windows has almost nothing safe to clear, so Reclaimable is grey here, as it should be.)
 </td>
 <td width="50%" valign="top">
-
-### 🔎 Know what everything is
-Every file gets a category (*Apps & Games, Dev stuff, AI & data, Media, System, Temp & caches…*), known folders a plain-English note and a label: **safe to clear**, **check first** or **don't delete by hand**. It recognises code projects, AI models and datasets, and says which program or Steam/Epic game a folder belongs to.
-
+<img src="docs/screenshots/diskroot-find.gif" alt="Ctrl+K: typing winsxs finds the folder; the Inspector says Don't delete by hand and offers Clean up with Windows">
+<b>Ctrl+K finds anything.</b> Every command and every folder by name. Here: <i>winsxs</i> → the Inspector says <b>Don't delete by hand</b> and offers the safe way.
 </td>
 </tr>
 <tr>
 <td valign="top">
-
-### 🧹 Get space back, safely
-**Save space** lists what to compress (big, unchanged for months, measured estimates) and every other way: caches, old build folders, model stores, Recycle Bin, hibernation file, previous Windows, WSL/Docker disks, duplicates. Deleting goes to the Recycle Bin only, after you confirm, re-checked on disk; Windows and system folders are locked.
-
+<img src="docs/screenshots/diskroot-home.png" alt="Home: the drive at a glance in four answers">
+<b>Home:</b> the drive at a glance, in four answers you can click.
 </td>
 <td valign="top">
-
-### 💚 Drive health and who's writing
-Each SSD's own report in plain words: rated life used, data written, temperature, errors, TRIM. Writes per day, an honest life estimate, and **which programs write to your drive**, also while the PC is idle, with known offenders flagged (like AMD's `atieclxx.exe` bug).
-
-</td>
-</tr>
-<tr>
-<td valign="top">
-
-### 🕰️ Keep watch, without running all the time
-Optional **scheduled scans** (every 30 min or more, no admin, no window: each run scans and exits), **what changed while you were away**, a size chart for every folder and *"C: would be full in about 40–70 days"*. Quiet warnings, at most once a day.
-
-</td>
-<td valign="top">
-
-### 🗜️ Built-in compression
-Right-click → **Compress…**: Windows' own file compression, on many files at once (about 5–9× faster than `compact.exe` in our test). Same files, less space, undoable, and it tells you the SSD writes it costs.
-
-</td>
-</tr>
-<tr>
-<td valign="top">
-
-### 🗺️ A map that answers questions
-Colour it by **Size**, by **Growth** since the last scan, or by what's **Reclaimable** (safe to clear in green, caches to check in amber). Tilt it into **2.5D** if you like. **Ctrl+K** finds any command or folder by name.
-
-</td>
-<td valign="top">
-
-### 🖥️ Runs on any PC
-One small exe. No graphics driver? DiskRoot draws on the CPU by itself (virtual machines, Remote Desktop). Slow PC? It turns its animations off by itself. Idle, it draws nothing.
-
+<img src="docs/screenshots/diskroot-dark.png" alt="Sunburst coloured by how long ago files changed">
+<b>Coloured by age:</b> what hasn't been touched in years stands out.
 </td>
 </tr>
 </table>
 
-<p align="center">
-<img src="docs/screenshots/diskroot-home.png" alt="Home: the drive at a glance" width="49%">
-<img src="docs/screenshots/diskroot-dark.png" alt="Dark theme, sunburst coloured by how long ago files changed" width="49%">
-</p>
+## What it does
+
+| | |
+|---|---|
+| 🔎 **Know what everything is** | Every file gets a category (*Apps & Games, Dev stuff, AI & data, Media, System, Temp & caches…*) and a label: **safe to clear**, **check first** or **don't delete by hand**. It recognises code projects, AI models, datasets, and which program or Steam/Epic game a folder belongs to. |
+| 🧹 **Get space back, safely** | **Save space** lists caches, old build folders, model stores, Recycle Bin, hibernation file, previous Windows, WSL/Docker disks, duplicates, and what to compress. Deleting goes to the Recycle Bin, after you confirm; Windows and system folders are locked. |
+| 💚 **Drive health** | The SSD's own report in plain words: rated life used, data written, temperature, errors. Writes per day, an honest life estimate, and **which programs write to your drive**, also while idle. |
+| 🕰️ **Keep watch** | Optional **scheduled scans** (no admin, no window: scan and exit), **what changed while you were away**, and *"C: would be full in about 40–70 days"*. |
+| 🗜️ **Built-in compression** | Windows' own file compression on many files at once (about 5–9× faster than `compact.exe` in our test). Same files, less space, undoable. |
+| 🖥️ **Runs on any PC** | One small exe. No graphics driver (VMs, Remote Desktop)? It draws on the CPU by itself. Slow PC? Animations turn off by themselves. Idle, it draws nothing. |
 
 <details>
 <summary><b>Everything else</b></summary>
@@ -121,36 +91,52 @@ One small exe. No graphics driver? DiskRoot draws on the CPU by itself (virtual 
 - **Instant reopen:** your last scan opens in under a second; **What changed** points at the exact folders that grew or shrank.
 - Largest files and types, duplicate finder, similar folders (`project`, `project_v2`, `project - Copy`), leftovers of uninstalled programs, live updates while open, size alerts.
 - **Teach DiskRoot:** right-click a folder → *This is…* (my project, a dataset, a game…), or write your own rules.
-- **Studio window:** the map in the middle, a folder list and an Inspector you can resize or minimize (Ctrl+B, Ctrl+J), Focus mode (F), breadcrumbs, notices. Studio look (dark or Daylight) or the Classic look.
-- Its own RAM and CPU at the top, free its memory with one click, gentle scanning, keyboard shortcuts, screen-reader names for the map and the palette.
+- **Studio window:** the map in the middle, a folder list and an Inspector you can resize or minimize, Focus mode, breadcrumbs, notices. Studio look (dark or Daylight) or the Classic look.
+- Its own RAM and CPU at the top, free its memory with one click, gentle scanning, screen-reader names for the map and the palette, a six-step guided tour.
 
 Every feature, with what happens underneath: [FEATURES-AND-DEVELOPMENT.md](docs/FEATURES-AND-DEVELOPMENT.md).
 </details>
 
-## Measured, not promised
+### Keyboard
 
-On the developer's laptop (2 TB NVMe, 1.5 TB in 1.7 million files):
+| <kbd>Ctrl</kbd>+<kbd>K</kbd> | <kbd>F5</kbd> | <kbd>Ctrl</kbd>+<kbd>F5</kbd> | <kbd>Ctrl</kbd>+<kbd>H</kbd> | <kbd>F</kbd> | <kbd>Ctrl</kbd>+<kbd>B</kbd> / <kbd>J</kbd> | <kbd>Ctrl</kbd>+<kbd>F</kbd> |
+|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| find anything | scan | fast scan | Home | focus the map | hide list / Inspector | filter by name |
+
+## Measured and safe
+
+<table>
+<tr>
+<td width="45%" valign="top">
+
+**Measured** on the developer's laptop (2 TB NVMe, 1.5 TB in 1.7 million files):
 
 | | |
 |---|---|
-| ⚡ Fast scan of the whole drive (admin) | about 1–2 s |
-| 🚶 Normal scan (no admin) | about 4.3 s |
-| 🔁 Reopen the last scan | about 0.4 s |
-| 💾 What saving a scan writes to the SSD | about 44 MB (compressed) |
-| 🪶 Idle CPU with the window open · network connections | under 0.2% of one core · 0 |
+| ⚡ Fast scan, whole drive (admin) | 1–2 s |
+| 🚶 Normal scan (no admin) | 4.3 s |
+| 🔁 Reopen the last scan | 0.4 s |
+| 💾 Saving a scan writes | 44 MB |
+| 🪶 Idle CPU, window open | < 0.2% of a core |
 
-Method and more numbers: [BENCHMARKS.md](docs/BENCHMARKS.md).
+Method: [BENCHMARKS.md](docs/BENCHMARKS.md)
 
-## Is it safe?
+</td>
+<td valign="top">
+
+**Safe by design**
 
 | | |
 |---|---|
 | 🌐 **Offline** | No network code at all. Measured: zero connections during a full scan. No accounts, no telemetry. |
-| 👀 **Read-only scanning** | Folders are opened for listing only, drives read-only. A scan never changes your files; DiskRoot saves its own scans (compressed) in `%LOCALAPPDATA%\DiskRoot`. |
-| ✋ **Nothing without your OK** | Delete goes to the Recycle Bin after you confirm, Compress is undoable, Save space only suggests. Windows and Program Files are locked, even under other spellings of the path. |
-| 🔐 **Least privilege** | The window doesn't need admin (started as admin, it warns). Only a short-lived, locked-down helper reads the raw drive, after the Windows prompt. Scheduled scans never ask for admin. |
-| 🧪 **Tested every release** | 150 tests, 2 million fuzz rounds per file parser, checks for network sockets, read-only scanning and planted DLLs, and a real install / upgrade / uninstall on a clean Windows machine. |
-| ⚠️ **"Windows protected your PC"** | Releases aren't code-signed yet, so SmartScreen may warn: click **More info → Run anyway**. Every file is built by GitHub Actions from this repository; check it against `SHA256SUMS.txt` on the release page. |
+| 👀 **Read-only scanning** | A scan never changes your files. DiskRoot only saves its own scans in `%LOCALAPPDATA%\DiskRoot`. |
+| ✋ **Nothing without your OK** | Delete → Recycle Bin after you confirm, re-checked on disk. Compress is undoable. Windows and Program Files are locked. |
+| 🔐 **Least privilege** | The window doesn't need admin. Only a short-lived, locked-down helper reads the raw drive, after the Windows prompt. |
+| 🧪 **Tested every release** | 150 tests, 2 million fuzz rounds per file parser, and a real install / upgrade / uninstall on a clean Windows machine. |
+
+</td>
+</tr>
+</table>
 
 Details: [SECURITY-AND-PRIVACY.md](docs/SECURITY-AND-PRIVACY.md) · report a problem privately: [SECURITY.md](SECURITY.md).
 
@@ -158,7 +144,7 @@ Details: [SECURITY-AND-PRIVACY.md](docs/SECURITY-AND-PRIVACY.md) · report a pro
 
 1. **[Download `diskroot-setup.exe`](https://github.com/JayD108/DiskRoot/releases/latest/download/diskroot-setup.exe)** and run it.
 2. Open **DiskRoot**, pick a drive, press **Scan** (F5), or **Fast scan** (Ctrl+F5) for a whole drive.
-3. Click anything: it's explained at the bottom. Press **Save space** for ways to get space back.
+3. Click anything: the Inspector explains it. Press **Save space** for ways to get space back.
 4. Want it to keep watch? **View → Scheduled scans.**
 
 <details>
@@ -176,7 +162,7 @@ Details: [SECURITY-AND-PRIVACY.md](docs/SECURITY-AND-PRIVACY.md) · report a pro
 - **Upgrading:** just run the new installer; settings and saved scans stay.
 </details>
 
-## For the terminal
+### For the terminal
 
 ```text
 > droot scan C:\ --top 5        what's biggest
@@ -186,6 +172,44 @@ Details: [SECURITY-AND-PRIVACY.md](docs/SECURITY-AND-PRIVACY.md) · report a pro
 ```
 
 Every command has `--json` for scripts. Guide: [docs/CLI.md](docs/CLI.md).
+
+## FAQ
+
+<details>
+<summary><b>Windows says "Windows protected your PC". Is it safe?</b></summary>
+
+Releases aren't code-signed yet (a certificate costs money every year), so SmartScreen warns about any new download. Click **More info → Run anyway**. Every file is built by GitHub Actions from this repository, and you can check your download against `SHA256SUMS.txt` on the release page.
+</details>
+
+<details>
+<summary><b>Does it send anything anywhere?</b></summary>
+
+No. DiskRoot has no network code: no accounts, no telemetry, no update checks. We measure zero connections during a full scan. Your scans stay in `%LOCALAPPDATA%\DiskRoot`.
+</details>
+
+<details>
+<summary><b>Can it delete something important by accident?</b></summary>
+
+Scanning only reads. Deleting is always your choice: it goes to the Recycle Bin after a confirmation, each item is re-checked on disk first, and Windows and Program Files are locked, even under other spellings of the path.
+</details>
+
+<details>
+<summary><b>Which drives does it work on?</b></summary>
+
+Normal scan: any drive Windows can open: NTFS, FAT32, exFAT, USB sticks, network shares. It's tested most on NTFS SSDs, so reports from HDDs and other file systems are welcome. Fast scan reads the NTFS file table, so it needs a whole NTFS drive and the installed version. Drive health reads NVMe drives today (no admin needed); SATA and USB drives say so, and support for them is planned.
+</details>
+
+<details>
+<summary><b>How is it different from WinDirStat or WizTree?</b></summary>
+
+They're good at showing sizes. DiskRoot also tells you *what* each thing is, whether it's safe to delete and how, what changed since last time, and how the drive itself is doing, all offline. A speed comparison (an early DiskRoot 0.1 against WizTree 4.33, WinDirStat 2.9 and eDirStat 2.0, with the method) is in [BENCHMARKS.md](docs/BENCHMARKS.md).
+</details>
+
+<details>
+<summary><b>Does it need admin?</b></summary>
+
+No. Only Fast scan asks for it, through the Windows prompt, and then only a small helper runs as admin for a few seconds. Started as admin, the window itself warns you.
+</details>
 
 ## Learn more
 
@@ -200,7 +224,11 @@ Every command has `--json` for scripts. Guide: [docs/CLI.md](docs/CLI.md).
 
 ## Help build it
 
-DiskRoot is open for contributions, especially **compression**: text and programs save 50–70%, but float arrays only ~15% and model weights 6–8%. If you know compression, read the [call for compression research](CONTRIBUTING.md#call-for-compression-research-). Other open problems (drive health on more SSD brands, known offenders with sources, accessibility, testing): [HELP-WANTED.md](docs/HELP-WANTED.md). Start with [CONTRIBUTING.md](CONTRIBUTING.md); everyone follows the [Code of Conduct](CODE_OF_CONDUCT.md), and [SUPPORT.md](SUPPORT.md) says where to ask. If DiskRoot saved you some space, a ⭐ helps others find it.
+DiskRoot is open for contributions, especially **compression**: text and programs save 50–70%, but float arrays only ~15% and model weights 6–8%. If you know compression, read the [call for compression research](CONTRIBUTING.md#call-for-compression-research-). Other open problems (drive health on more SSD brands, known offenders with sources, accessibility, testing): [HELP-WANTED.md](docs/HELP-WANTED.md).
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md). Questions and ideas: [Discussions](https://github.com/JayD108/DiskRoot/discussions) · where to ask: [SUPPORT.md](SUPPORT.md) · everyone follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+If DiskRoot saved you some space, a ⭐ helps others find it.
 
 ## Acknowledgements
 
