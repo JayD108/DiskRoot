@@ -12,7 +12,7 @@ A free, open-source disk analyzer for Windows 10 and 11. Offline. Read-only scan
 
 <a href="https://github.com/JayD108/DiskRoot/releases/latest/download/diskroot-setup.exe"><img src="https://img.shields.io/badge/⬇%20%20Download%20DiskRoot-for%20Windows-2f6b3a?style=for-the-badge" alt="Download DiskRoot for Windows" height="44"></a>
 
-<sub>[Portable zip](https://github.com/JayD108/DiskRoot/releases/latest/download/diskroot-portable.zip) · [What's new](https://github.com/JayD108/DiskRoot/releases/latest) · about 3 MB · Windows 10 / 11, 64-bit</sub>
+<sub>[Portable zip](https://github.com/JayD108/DiskRoot/releases/latest/download/diskroot-portable.zip) · [What's new](https://github.com/JayD108/DiskRoot/releases/latest) · about 4 MB · Windows 10 / 11, 64-bit</sub>
 
 <br>
 
