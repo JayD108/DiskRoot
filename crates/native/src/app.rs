@@ -941,6 +941,11 @@ impl DiskRootApp {
     // Jobs
     // ------------------------------------------------------------------
 
+    /// Used space of the drive holding `root` (for "grew by 1% of it").
+    fn drive_used(&self, root: &str) -> Option<u64> {
+        diskroot_session::disk_space(root).map(|(t, f)| t.saturating_sub(f))
+    }
+
     /// Transitions on: the user's setting, and Windows' own "Show animations"
     /// (Settings > Accessibility > Visual effects) when that is off.
     fn motion(&self) -> bool {
@@ -1026,9 +1031,9 @@ impl DiskRootApp {
                 self.rows = None;
                 match r {
                     Ok(Some(ch)) => {
-                        let msg = changes_summary(&ch);
+                        let msg = growth_alarm(&ch, self.drive_used(&ch.root)).unwrap_or_else(|| format!("{} · View → What changed", changes_summary(&ch)));
                         self.changes = Some(ch);
-                        self.say(format!("{msg} · View → What changed"));
+                        self.say(msg);
                     }
                     Ok(None) => {}
                     // Not fatal: the scan itself is fine, it just won't reopen instantly.
@@ -6147,6 +6152,30 @@ impl DiskRootApp {
                         });
                     });
                 });
+                // Growth alarm: the drive grew a lot since the previous scan.
+                if let Some(ch) = &self.changes
+                    && let Some(alarm) = growth_alarm(ch, h.space.map(|(t, f)| t.saturating_sub(f)))
+                {
+                    Frame::new().fill(lerp(t.panel, theme::warn(), 0.12)).stroke(Stroke::new(1.0, theme::warn())).corner_radius(CornerRadius::same(t.radius)).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        // The sentence wraps in a fixed column; the button sits on the right.
+                        let w = ui.available_width();
+                        ui.horizontal_top(|ui| {
+                            ui.label(RichText::new("▲").color(theme::warn()));
+                            let tw = (w - 120.0).max(160.0);
+                            ui.allocate_ui_with_layout(vec2(tw, 0.0), Layout::top_down(Align::Min), |ui| {
+                                ui.set_max_width(tw);
+                                ui.add(egui::Label::new(RichText::new(&alarm).color(t.text)).wrap());
+                            });
+                            if let Some(top) = biggest_growth(ch)
+                                && ui.small_button("Show it").on_hover_text("Open that folder on the map").clicked()
+                            {
+                                jump_rel = Some(top.path.clone());
+                            }
+                        });
+                    });
+                    ui.add_space(8.0);
+                }
                 // The answer first, in one sentence; the four answers below explain it.
                 let names: Vec<(String, u64)> = breakdown.iter().map(|(c, b)| (cats[*c as usize].name.to_owned(), *b)).collect();
                 // The same "safe to clear" number as the card below (and the start screen).
@@ -7025,6 +7054,36 @@ fn fmt_delta(d: i128) -> String {
     format!("{sign}{}", fmt_bytes(d.unsigned_abs().min(u128::from(u64::MAX)) as u64))
 }
 
+/// The folder that grew the most (not the root itself).
+fn biggest_growth(ch: &Changes) -> Option<&diskroot_session::remember::Change> {
+    ch.items.iter().filter(|c| !c.path.is_empty() && c.delta() > 0).max_by_key(|c| c.delta())
+}
+
+/// "C: grew 12.0 GB since the previous scan (3 days ago), mostly in
+/// Users\me\Downloads (+9.10 GB)." when it grew by at least 1 GB and 1% of
+/// the used space (a folder: 10% of its size); `None` otherwise, or when the two scans were made
+/// differently (a walk and a Fast scan don't count quite the same).
+fn growth_alarm(ch: &Changes, used: Option<u64>) -> Option<String> {
+    let d = i128::from(ch.after_total) - i128::from(ch.before_total);
+    let grew = u64::try_from(d).ok()?;
+    // A drive: 1% of its used space. A folder: 10% of what it was.
+    let drive = ch.root.len() <= 3 && ch.root.as_bytes().get(1) == Some(&b':');
+    let small = if drive { used.is_some_and(|u| grew.saturating_mul(100) < u) } else { grew.saturating_mul(10) < ch.before_total };
+    if ch.mixed_methods() || grew < 1 << 30 || small {
+        return None;
+    }
+    // The page title already says which folder; a drive is named.
+    let who = if drive { visible(ch.root.trim_end_matches('\\')) } else { "This folder".to_owned() };
+    let mut s = format!("{who} grew {} since the previous scan ({})", fmt_bytes(grew), remember::age_text(ch.before_time));
+    if let Some(c) = biggest_growth(ch) {
+        let share = u64::try_from(c.delta()).unwrap_or(0);
+        let word = if share.saturating_mul(2) >= grew { "mostly" } else { "most of all" };
+        s += &format!(", {word} in {} (+{})", visible(&c.path), fmt_bytes(share));
+    }
+    s.push('.');
+    Some(s)
+}
+
 /// One line for the status bar: "Since the previous scan (2 days ago): +1.2 GB".
 fn changes_summary(ch: &Changes) -> String {
     let d = i128::from(ch.after_total) - i128::from(ch.before_total);
@@ -7112,7 +7171,41 @@ fn plain_note(ui: &mut Ui, text: RichText) {
 
 #[cfg(test)]
 mod tests {
-    use super::{plain_error, why_full};
+    use super::{growth_alarm, plain_error, why_full};
+    use diskroot_session::remember::{Change, Changes};
+
+    fn changes(before: u64, after: u64, items: Vec<(&str, u64, u64)>, modes: (&str, &str)) -> Changes {
+        Changes {
+            root: "C:\\".into(),
+            before_time: 0,
+            after_time: 0,
+            before_total: before,
+            after_total: after,
+            items: items.into_iter().map(|(p, b, a)| Change { path: p.into(), before: b, after: a }).collect(),
+            before_mode: modes.0.into(),
+            after_mode: modes.1.into(),
+        }
+    }
+
+    #[test]
+    fn growth_alarm_only_when_it_matters() {
+        let gb = 1u64 << 30;
+        let walk = ("folder walk", "folder walk");
+        let ch = changes(100 * gb, 112 * gb, vec![("Downloads", gb, 10 * gb), ("", 100 * gb, 112 * gb)], walk);
+        let a = growth_alarm(&ch, Some(500 * gb)).expect("12 GB on 500 GB used is an alarm");
+        assert!(a.starts_with("C: grew 12.0 GB since the previous scan"), "{a}");
+        assert!(a.contains("mostly in Downloads (+9.00 GB)"), "{a}");
+        // Under 1 GB, or under 1% of the used space: quiet.
+        assert!(growth_alarm(&changes(100 * gb, 100 * gb + (500 << 20), vec![], walk), Some(500 * gb)).is_none());
+        assert!(growth_alarm(&ch, Some(2000 * gb)).is_none());
+        // A folder: 10% of its own size counts.
+        let mut f = changes(5 * gb, 7 * gb, vec![], walk);
+        f.root = r"D:\Projects".into();
+        assert!(growth_alarm(&f, Some(2000 * gb)).is_some());
+        // Shrinking: quiet. A walk against a Fast scan: quiet (they count differently).
+        assert!(growth_alarm(&changes(112 * gb, 100 * gb, vec![], walk), None).is_none());
+        assert!(growth_alarm(&changes(100 * gb, 112 * gb, vec![], ("MFT (Fast scan)", "folder walk")), None).is_none());
+    }
 
     #[test]
     fn why_full_sentence() {
