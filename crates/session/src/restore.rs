@@ -41,7 +41,7 @@ fn parse_info(b: &[u8]) -> Option<(String, u64, u64)> {
         }
         _ => return None,
     };
-    let wide: Vec<u16> = name.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&c| c != 0).collect();
+    let wide: Vec<u16> = name.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|&c| c != 0).collect();
     let original = String::from_utf16(&wide).ok()?;
     if original.is_empty() {
         return None;
