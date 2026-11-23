@@ -194,6 +194,14 @@ struct Listing {
 /// Updated once per folder, so it costs nothing measurable.
 pub static PROGRESS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Bytes on disk found so far by the running folder walk (allocated size of
+/// the files listed), for a progress bar against the drive's used space.
+pub static BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Set to stop the running folder walk: it finishes the folders being read
+/// right now, reads no more, and returns an `Interrupted` error.
+pub static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Gentle scanning: worker threads run in Windows' background mode (low CPU,
 /// disk I/O and memory priority), so other programs stay fast; the scan may
 /// take longer while the PC is busy. Used by scheduled scans; a setting in
@@ -204,6 +212,7 @@ const THREAD_MODE_BACKGROUND_BEGIN: i32 = 0x0001_0000;
 pub fn scan(root: &Path, opts: &ScanOptions) -> io::Result<Scan> {
     let start = Instant::now();
     PROGRESS.store(0, std::sync::atomic::Ordering::Relaxed);
+    BYTES.store(0, std::sync::atomic::Ordering::Relaxed);
     let (display, nt_path) = prepare_root(root)?;
     let mut index = Index::new(&display);
     let mut stats = ScanStats::default();
@@ -215,6 +224,7 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> io::Result<Scan> {
 
     let stack = Stack::new();
     let (res_tx, res_rx) = mpsc::channel::<Listing>();
+    let mut cancelled = false;
 
     thread::scope(|s| {
         for _ in 0..threads {
@@ -245,7 +255,14 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> io::Result<Scan> {
 
         stack.push_all([Task { node: 0, parent: None, name: nt_path }]);
         let mut pending = 1usize;
+        let mut bytes = 0u64;
         while pending > 0 {
+            if CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
+                // No new folders: the workers finish what they hold and stop.
+                stack.lock().tasks.clear();
+                cancelled = true;
+                break;
+            }
             let listing = res_rx.recv().expect("workers never exit while tasks are pending");
             pending -= 1;
             if listing.unreadable {
@@ -267,9 +284,11 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> io::Result<Scan> {
                     stats.dirs += 1;
                 } else {
                     stats.files += 1;
+                    bytes += m.alloc;
                 }
             }
             PROGRESS.store(index.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            BYTES.store(bytes, std::sync::atomic::Ordering::Relaxed);
             pending += listing.subdirs.len();
             let parent = listing.handle;
             stack.push_all(
@@ -281,6 +300,10 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> io::Result<Scan> {
         }
         stack.close(); // lets the workers' loops end
     });
+    if std::mem::take(&mut cancelled) {
+        CANCEL.store(false, std::sync::atomic::Ordering::Relaxed);
+        return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
+    }
 
     if ids_ok.load(std::sync::atomic::Ordering::Relaxed) {
         count_hardlinks_once(&mut index, file_ids);

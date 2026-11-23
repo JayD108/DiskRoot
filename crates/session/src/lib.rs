@@ -221,6 +221,19 @@ pub fn scan_progress() -> u64 {
     diskroot_scan_walk::PROGRESS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Bytes on disk the running folder walk has found so far.
+pub fn scan_bytes() -> u64 {
+    diskroot_scan_walk::BYTES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Stop the running folder walk (`scan` then returns `SCAN_CANCELLED`).
+pub fn cancel_scan() {
+    diskroot_scan_walk::CANCEL.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The error text of a folder walk stopped by `cancel_scan`.
+pub const SCAN_CANCELLED: &str = "Scan cancelled";
+
 /// (total, free) bytes of the volume holding `path` (free = free for this user).
 pub fn disk_space(path: &str) -> Option<(u64, u64)> {
     #[link(name = "kernel32", kind = "raw-dylib")]
@@ -278,7 +291,10 @@ pub fn scan(path: &str) -> Result<Scanned, String> {
     let threads = diskroot_scan_walk::default_threads();
     // Always a folder walk in this process, even if it was started as admin:
     // reading the raw drive (MFT) happens only in the locked-down helper.
-    let (s, used) = scan_auto(Path::new(&path), Mode::Walk, threads).map_err(|e| format!("Scan failed: {e}"))?;
+    diskroot_scan_walk::CANCEL.store(false, std::sync::atomic::Ordering::Relaxed);
+    let (s, used) = scan_auto(Path::new(&path), Mode::Walk, threads).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::Interrupted { SCAN_CANCELLED.to_owned() } else { format!("Scan failed: {e}") }
+    })?;
     Ok(Scanned::new(s.index, s.stats, mode_text(&used)))
 }
 

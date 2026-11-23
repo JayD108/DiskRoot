@@ -16,4 +16,4 @@ pub mod sys;
 mod walker;
 
 pub use diskroot_core::{Scan, ScanStats};
-pub use walker::{GENTLE, PROGRESS, ScanOptions, default_threads, scan};
+pub use walker::{BYTES, CANCEL, GENTLE, PROGRESS, ScanOptions, default_threads, scan};

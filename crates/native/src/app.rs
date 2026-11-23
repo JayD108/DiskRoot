@@ -576,6 +576,8 @@ pub struct DiskRootApp {
     /// worker thread (a few device queries per disk).
     start_health: Option<std::collections::HashMap<String, (Health, String)>>,
     start_health_rx: Option<Receiver<std::collections::HashMap<String, (Health, String)>>>,
+    /// Windows' "Show animations" is off: no transitions, whatever the setting.
+    os_reduce_motion: bool,
     /// The scan changed (new scan, delete, compress): work the badge out again.
     badge_dirty: bool,
     /// Map "Reclaimable" mode: safe / check-first bytes per folder (~10 ms
@@ -728,6 +730,7 @@ impl DiskRootApp {
             badge_rx: None,
             start_health: None,
             start_health_rx: None,
+            os_reduce_motion: !windows_animations_on(),
             badge_dirty: false,
             reclaim: None,
             last_map_root: None,
@@ -834,7 +837,7 @@ impl DiskRootApp {
         }
         let t = self.tokens();
         let mut dismiss = None;
-        let anim = self.settings.animations;
+        let anim = self.motion();
         egui::Area::new(egui::Id::unique("diskroot-toasts"))
             .order(egui::Order::Foreground)
             .anchor(Align2::RIGHT_BOTTOM, vec2(-16.0, -72.0))
@@ -934,6 +937,12 @@ impl DiskRootApp {
     // ------------------------------------------------------------------
     // Jobs
     // ------------------------------------------------------------------
+
+    /// Transitions on: the user's setting, and Windows' own "Show animations"
+    /// (Settings > Accessibility > Visual effects) when that is off.
+    fn motion(&self) -> bool {
+        self.settings.animations && !self.os_reduce_motion
+    }
 
     fn start_scan(&mut self, fast: bool) {
         if self.job.is_some() {
@@ -1109,6 +1118,9 @@ impl DiskRootApp {
                 self.prev_sizes = None;
                 self.set_hist(None);
                 self.start_remember();
+            }
+            Err(e) if e == diskroot_session::SCAN_CANCELLED || e.to_ascii_lowercase().contains("cancel") => {
+                self.say("Scan cancelled. Nothing on your drive changed.");
             }
             Err(e) => self.dialog = Some(Dialog::Message("Scan didn't finish".into(), plain_error(&e))),
         }
@@ -1589,7 +1601,7 @@ impl DiskRootApp {
         };
         let (over, codes, notes) = self.mode_colors(&nodes);
         // A new place (not just new colours): a short transition.
-        let born = (self.settings.animations && self.last_map_root.as_ref().is_some_and(|r| *r != root)).then(Instant::now);
+        let born = (self.motion() && self.last_map_root.as_ref().is_some_and(|r| *r != root)).then(Instant::now);
         self.last_map_root = Some(root.clone());
         self.map = Some(MapState { root, nodes, kids, cached: None, up, ages, crumbs, mode: self.settings.map_mode, born, over, codes, notes });
     }
@@ -5457,9 +5469,10 @@ impl DiskRootApp {
             Cmd::Tilt => {
                 self.settings.map_25d = !self.settings.map_25d;
                 self.settings.save();
+                let rise = self.motion() && self.settings.map_25d;
                 if let Some(m) = &mut self.map {
                     // Rise up from the ground when switching on.
-                    m.born = (self.settings.animations && self.settings.map_25d).then(Instant::now);
+                    m.born = rise.then(Instant::now);
                 }
             }
             Cmd::Animations => {
@@ -5774,7 +5787,7 @@ impl DiskRootApp {
         if self.page != self.page_since.0 {
             self.page_since = (self.page, Instant::now());
         }
-        if !self.settings.animations {
+        if !self.motion() {
             return 1.0;
         }
         let x = self.page_since.1.elapsed().as_secs_f32() / 0.16;
@@ -5804,8 +5817,13 @@ impl DiskRootApp {
         let found = if matches!(job.kind, JobKind::Reopen(_)) { 0 } else { diskroot_session::scan_progress() };
         let expected = self.summary.as_ref().filter(|s| s.root.eq_ignore_ascii_case(path.trim())).map(|s| s.files + s.dirs);
         let area = ui.available_rect_before_wrap();
-        let big_r = (area.width().min(area.height()) * 0.22).clamp(70.0, 200.0);
-        let c = pos2(area.center().x, area.min.y + area.height() * 0.40);
+        // Rings, numbers, bar and Cancel (~300 px below the rings) all fit.
+        // Short window: no ring legend and no sub-line, so Cancel always shows.
+        let compact = area.height() < 430.0;
+        let below: f32 = if compact { 190.0 } else { 250.0 }; // numbers, title, bar and Cancel
+        let big_r = ((area.height() - below - 40.0) / 2.0).min(area.width() * 0.22).clamp(34.0, 170.0);
+        let spare = (area.height() - below - 2.0 * big_r - 20.0).max(0.0);
+        let c = pos2(area.center().x, area.min.y + 10.0 + spare * 0.45 + big_r);
         let p = ui.painter();
         // Ring k covers 10^(k+1) .. 10^(k+2) items: 100, 1,000, 10,000 …
         let lf = (found.max(1) as f64).log10() as f32;
@@ -5843,13 +5861,13 @@ impl DiskRootApp {
         let lx = c.x + big_r + 28.0;
         let row_h = 20.0;
         let top = c.y - row_h * rings as f32 / 2.0;
-        for k in 0..rings {
+        for k in (0..rings).filter(|_| !compact) {
             let y = top + row_h * k as f32;
             let goal = 10u64.pow(k as u32 + 3);
             let (mark, col) = if found >= goal {
                 ("✓".to_owned(), t.accent)
             } else if k == current {
-                (format!("{:.0}%", ring_frac(k) * 100.0), t.text)
+                ("…".to_owned(), t.muted)
             } else {
                 (String::new(), t.faint)
             };
@@ -5862,7 +5880,7 @@ impl DiskRootApp {
         egui::Image::new(&self.logo).paint_at(ui, logo);
         // Numbers.
         let p = ui.painter();
-        let mut y = c.y + big_r + 26.0;
+        let mut y = c.y + big_r + 18.0;
         let count = if found > 1 { fmt_count(found) } else { "…".to_owned() };
         p.text(pos2(c.x, y), Align2::CENTER_TOP, count, theme::num(30.0), t.text);
         y += 40.0;
@@ -5872,9 +5890,30 @@ impl DiskRootApp {
         p.text(pos2(c.x, y), Align2::CENTER_TOP, &title, theme::semibold(16.0), t.text);
         y += 24.0;
         let sub = if fast && found <= 1 { "Approve the Windows prompt. DiskRoot then reads the drive's file table, read-only." } else { sub };
-        p.text(pos2(c.x, y), Align2::CENTER_TOP, sub, theme::regular(12.5), t.muted);
-        y += 30.0;
-        if let Some(e) = expected.filter(|&e| e > 0 && found > 1) {
+        if !compact || (fast && found <= 1) {
+            p.text(pos2(c.x, y), Align2::CENTER_TOP, sub, theme::regular(12.5), t.muted);
+            y += 30.0;
+        } else {
+            y += 6.0;
+        }
+        // A folder walk of a whole drive: bytes found against what Windows
+        // says is in use (the walk can't see a few system files, so it stops
+        // short of 100%).
+        let by_bytes = (!fast && !matches!(job.kind, JobKind::Reopen(_)))
+            .then(|| path.trim())
+            .filter(|p| p.len() <= 3 && p.as_bytes().get(1) == Some(&b':'))
+            .and_then(diskroot_session::disk_space)
+            .map(|(total, free)| total.saturating_sub(free))
+            .filter(|&used| used > 0);
+        if let Some(used) = by_bytes {
+            let got = diskroot_session::scan_bytes();
+            let bar = Rect::from_center_size(pos2(c.x, y + 3.0), vec2((big_r * 2.2).min(area.width() - 40.0), 6.0));
+            let frac = (got as f32 / used as f32).min(0.99);
+            p.rect_filled(bar, CornerRadius::same(3), t.head);
+            p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac, bar.height())), CornerRadius::same(3), t.accent);
+            p.text(pos2(c.x, y + 14.0), Align2::CENTER_TOP, format!("{} of about {} in use · {:.0}%", fmt_bytes(got), fmt_bytes(used), frac * 100.0), theme::regular(11.5), t.faint);
+            y += 40.0;
+        } else if let Some(e) = expected.filter(|&e| e > 0 && found > 1) {
             let bar = Rect::from_center_size(pos2(c.x, y + 3.0), vec2((big_r * 2.2).min(area.width() - 40.0), 6.0));
             let frac = (found as f32 / e as f32).min(0.99);
             p.rect_filled(bar, CornerRadius::same(3), t.head);
@@ -5882,11 +5921,17 @@ impl DiskRootApp {
             p.text(pos2(c.x, y + 14.0), Align2::CENTER_TOP, format!("about {:.0}% (the last scan of this place found {})", frac * 100.0, fmt_count(e)), theme::regular(11.5), t.faint);
             y += 40.0;
         }
-        if fast {
+        // Every scan can be stopped: the button or Esc.
+        if !matches!(job.kind, JobKind::Reopen(_)) {
             let stopping = job.cancel.load(Ordering::Relaxed);
-            let b = Rect::from_center_size(pos2(c.x, y + 16.0), vec2(120.0, 28.0));
-            if ui.put(b, egui::Button::new(if stopping { "Cancelling…" } else { "Cancel" })).clicked() && !stopping {
+            let b = Rect::from_center_size(pos2(c.x, y + 16.0), vec2(140.0, 28.0));
+            let esc = ui.input(|i| i.key_pressed(Key::Escape));
+            let r = ui.put(b, egui::Button::new(if stopping { "Cancelling…" } else { "Cancel  (Esc)" })).on_hover_text("Stop the scan. Nothing on your drive changes either way.");
+            if (r.clicked() || esc) && !stopping {
                 job.cancel.store(true, Ordering::Relaxed);
+                if !fast {
+                    diskroot_session::cancel_scan();
+                }
             }
         }
         ui.allocate_rect(area, Sense::hover());
@@ -5933,7 +5978,7 @@ impl DiskRootApp {
                         Health::Unknown => t.muted,
                     };
                     // Just checked: the card's edge glows for a moment.
-                    let glow = if self.settings.animations { (1.0 - v.checked.elapsed().as_secs_f32() / 0.9).max(0.0) } else { 0.0 };
+                    let glow = if self.motion() { (1.0 - v.checked.elapsed().as_secs_f32() / 0.9).max(0.0) } else { 0.0 };
                     if glow > 0.0 {
                         ui.ctx().request_repaint();
                     }
@@ -6935,6 +6980,21 @@ fn changes_summary(ch: &Changes) -> String {
     let d = i128::from(ch.after_total) - i128::from(ch.before_total);
     let note = if ch.mixed_methods() { " (different scan method, see What changed)" } else { "" };
     format!("Since the previous scan ({}): {}{note}", remember::age_text(ch.before_time), fmt_delta(d))
+}
+
+#[link(name = "user32", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn SystemParametersInfoW(action: u32, param: u32, out: *mut std::ffi::c_void, ini: u32) -> i32;
+}
+
+/// Windows' "Show animations in Windows" (SPI_GETCLIENTAREAANIMATION).
+/// Unknown counts as on.
+fn windows_animations_on() -> bool {
+    const SPI_GETCLIENTAREAANIMATION: u32 = 0x1042;
+    let mut on: i32 = 1;
+    // SAFETY: the action writes one BOOL into `on`.
+    let ok = unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&raw mut on).cast(), 0) };
+    ok == 0 || on != 0
 }
 
 /// A Windows error as a sentence someone can act on, with the original
