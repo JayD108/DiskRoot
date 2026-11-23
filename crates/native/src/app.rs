@@ -770,6 +770,14 @@ impl DiskRootApp {
         if migrated.moved {
             app.say("Welcome to DiskRoot: your settings and saved scans from the previous version came along.");
         }
+        if let Some(report) = crate::crash::take_unseen()
+            && app.dialog.is_none()
+        {
+            app.dialog = Some(Dialog::Message(
+                "DiskRoot closed unexpectedly last time".into(),
+                format!("Sorry about that: it hit a bug. A short report was saved on this PC (DiskRoot never sends it anywhere):\n{}\n\nAttaching it to an issue on GitHub helps fix it. Check it first: the message can contain a file or folder name.", report.display()),
+            ));
+        }
         if migrated.schedule_to_restore && app.dialog.is_none() {
             app.dialog = Some(Dialog::Message(
                 "Scheduled scans".into(),
@@ -1038,8 +1046,17 @@ impl DiskRootApp {
                 ctx.request_repaint();
             }
             Err(TryRecvError::Disconnected) => {
+                let what = match &job.kind {
+                    JobKind::Scan(p) | JobKind::Fast(p) => format!("The scan of {} stopped because of a bug in DiskRoot. Scanning only reads, so nothing on your drive changed. Try Scan again; if it happens again, a folder walk (Scan) instead of Fast scan, or the other way round, may get past it.", visible(p)),
+                    JobKind::Reopen(p) => format!("Opening the saved scan of {} failed because of a bug in DiskRoot. Nothing on your drive changed. Scan it again instead.", visible(p)),
+                    JobKind::Delete(_) | JobKind::DeleteMany(_) => "Moving to the Recycle Bin stopped because of a bug in DiskRoot. Some items may already be in the Recycle Bin: File > Activity and the Recycle Bin show what moved. Scan again for exact sizes.".to_owned(),
+                    JobKind::Compress(..) => "Compressing stopped because of a bug in DiskRoot. Files it already compressed stay compressed and work normally; the rest are unchanged.".to_owned(),
+                    JobKind::Export(_) => "Saving the report stopped because of a bug in DiskRoot. Nothing on your drive changed.".to_owned(),
+                    JobKind::Tool(n) => format!("Waiting for {n} stopped because of a bug in DiskRoot. The Windows tool itself may still be running."),
+                };
+                let report = crate::crash::last().map_or_else(String::new, |f| format!("\n\nA short report was saved on this PC: {}", f.display()));
                 self.job = None;
-                self.dialog = Some(Dialog::Message("Something went wrong".into(), "The background task stopped unexpectedly.".into()));
+                self.dialog = Some(Dialog::Message("That stopped unexpectedly".into(), format!("{what}{report}")));
             }
             Ok(Done::Scanned(r)) => self.finish_scan(*r),
             Ok(Done::Deleted(node, r)) => self.finish_delete(node, r),
@@ -1093,7 +1110,7 @@ impl DiskRootApp {
                 self.set_hist(None);
                 self.start_remember();
             }
-            Err(e) => self.dialog = Some(Dialog::Message("Scan didn't finish".into(), e)),
+            Err(e) => self.dialog = Some(Dialog::Message("Scan didn't finish".into(), plain_error(&e))),
         }
     }
 
@@ -2731,7 +2748,10 @@ impl DiskRootApp {
                 self.page = Page::Home;
             }
             Err(TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(50)),
-            Err(TryRecvError::Disconnected) => self.home_rx = None,
+            Err(TryRecvError::Disconnected) => {
+                self.home_rx = None;
+                self.say("Home couldn't be worked out (a bug in DiskRoot). The map and the list still work.");
+            }
         }
     }
 
@@ -2746,7 +2766,10 @@ impl DiskRootApp {
                     self.say_quiet("Ready.");
                 }
                 Err(TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(50)),
-                Err(TryRecvError::Disconnected) => self.savings_rx = None,
+                Err(TryRecvError::Disconnected) => {
+                    self.savings_rx = None;
+                    self.say("Save space couldn't be worked out (a bug in DiskRoot). Nothing was changed.");
+                }
             }
         }
         if let Some(Dialog::Savings(v)) = &mut self.dialog
@@ -3863,12 +3886,25 @@ impl DiskRootApp {
                             }
                             let can = info.protected.is_none() && self.job.is_none() && info.parent.is_some();
                             let btn = ui.add_enabled(can, egui::Button::new("Move to Recycle Bin…").min_size(vec2(170.0, 28.0)));
-                            let btn = match &info.protected {
+                            let why_not = match &info.protected {
+                                Some(why) => Some(why.to_string()),
+                                None if info.parent.is_none() => Some("This is the folder you scanned. Open it and delete what's inside instead.".to_owned()),
+                                None if self.job.is_some() => Some("Wait for the current task to finish.".to_owned()),
+                                None => None,
+                            };
+                            let btn = match &why_not {
                                 Some(why) => btn.on_disabled_hover_text(why),
                                 None => btn,
                             };
                             if btn.clicked() {
                                 action = Some(("delete", *n));
+                            }
+                            // Greyed with no reason looks broken: say why, right under it.
+                            if let Some(why) = &why_not {
+                                ui.allocate_ui(vec2(170.0, 0.0), |ui| {
+                                    ui.set_max_width(170.0);
+                                    ui.add(egui::Label::new(RichText::new(why).color(t.muted).size(11.5)).wrap());
+                                });
                             }
                             if let Some(a) = tool {
                                 let (text, hint) = match a {
@@ -6528,6 +6564,12 @@ impl Columns {
 
 impl eframe::App for DiskRootApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        // Test hook: a bug on the window's thread 2 s after start (crash.rs).
+        if std::env::var_os("DISKROOT_TEST_PANIC").is_some() {
+            ui.ctx().request_repaint_after(Duration::from_millis(200));
+            static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+            assert!(START.get_or_init(Instant::now).elapsed() < Duration::from_secs(2), "test panic (DISKROOT_TEST_PANIC)");
+        }
         self.show(ui);
     }
 }
@@ -6895,6 +6937,22 @@ fn changes_summary(ch: &Changes) -> String {
     format!("Since the previous scan ({}): {}{note}", remember::age_text(ch.before_time), fmt_delta(d))
 }
 
+/// A Windows error as a sentence someone can act on, with the original
+/// kept at the end for a bug report.
+fn plain_error(e: &str) -> String {
+    let code = e.rsplit_once("(os error ").and_then(|(_, r)| r.trim_end_matches(')').parse::<u32>().ok());
+    let say = match code {
+        Some(2 | 3) => "It isn't there: the drive may have been removed, or the folder moved or renamed. Pick a drive on the start screen, or check the path.",
+        Some(5) => "Windows doesn't let this account read it. Fast scan (admin) can read the whole drive.",
+        Some(21) => "The drive isn't ready: it may have been removed, or it's a card reader with no card in it.",
+        Some(15 | 1167) => "The drive isn't connected any more. Plug it in again and press Scan.",
+        Some(53 | 64 | 67 | 1231) => "The network location can't be reached right now. Check the connection and press Scan again.",
+        Some(1392) => "Windows reports the drive's file system as damaged. Back up what you can, then run Windows' own check (chkdsk) on it.",
+        _ => return e.to_owned(),
+    };
+    format!("{say}\n\n(Windows said: {e})")
+}
+
 /// Mix two colours: `k` = 0 gives `a`, 1 gives `b`.
 fn lerp(a: Color32, b: Color32, k: f32) -> Color32 {
     let m = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * k.clamp(0.0, 1.0)).round() as u8;
@@ -6907,4 +6965,19 @@ fn plain_note(ui: &mut Ui, text: RichText) {
     ui.with_layout(Layout::top_down(Align::Min), |ui| {
         ui.add(egui::Label::new(text).wrap());
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plain_error;
+
+    #[test]
+    fn plain_errors() {
+        let e = r#"Can't open "Q:\gone": The system cannot find the path specified. (os error 3)"#;
+        let p = plain_error(e);
+        assert!(p.starts_with("It isn't there"), "{p}");
+        assert!(p.contains("os error 3"), "the original stays for bug reports");
+        assert_eq!(plain_error("Something else"), "Something else");
+        assert!(plain_error("x (os error 21)").contains("isn't ready"));
+    }
 }

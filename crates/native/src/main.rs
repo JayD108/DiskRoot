@@ -15,6 +15,7 @@
 
 mod app;
 mod clip;
+mod crash;
 mod map;
 mod settings;
 mod soft;
@@ -92,6 +93,9 @@ fn main() {
     if let Some(code) = diskroot_session::schedule::run_if_scheduled(&args) {
         std::process::exit(code);
     }
+
+    // From here on a bug writes a report and says so (crash.rs).
+    crash::install();
 
     let icon = IconData { rgba: include_bytes!("../assets/icon-64.rgba").to_vec(), width: 64, height: 64 };
     let viewport = ViewportBuilder::default()

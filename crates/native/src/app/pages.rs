@@ -587,7 +587,10 @@ impl DiskRootApp {
                     self.say(format!("Duplicate search done: {n} sets, {} could be freed. Open Duplicates to resolve them.", fmt_bytes(w)));
                 }
             }
-            Err(TryRecvError::Disconnected) => d.running = None,
+            Err(TryRecvError::Disconnected) => {
+                d.running = None;
+                self.say("The duplicate search stopped because of a bug in DiskRoot. Nothing was changed.");
+            }
             Err(TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(150)),
         }
     }
