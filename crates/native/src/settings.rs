@@ -49,6 +49,9 @@ pub struct Settings {
     pub seen_tour: bool,
     /// When DiskRoot was last opened (Unix seconds), for "since your last visit".
     pub last_visit: u64,
+    /// What the last scan of each drive found safe to clear (caches and temp
+    /// files): drive root -> (bytes, Unix seconds). Shown on the start screen.
+    pub freeable: std::collections::BTreeMap<String, (u64, u64)>,
 }
 
 /// A size alert on a folder (checked after scans and live updates while
@@ -65,7 +68,7 @@ pub struct Alert {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { dark: false, treemap: false, by_category: false, last_path: "C:\\".into(), seen_notice: false, remember_scans: true, color_by_age: false, live_updates: true, alerts: Vec::new(), free_when_minimized: false, gentle_scan: false, home_at_start: true, hide_list: false, hide_inspector: false, map_mode: 0, animations: true, map_25d: false, classic: false, slow_pc: false, seen_tour: false, last_visit: 0 }
+        Self { dark: false, treemap: false, by_category: false, last_path: "C:\\".into(), seen_notice: false, remember_scans: true, color_by_age: false, live_updates: true, alerts: Vec::new(), free_when_minimized: false, gentle_scan: false, home_at_start: true, hide_list: false, hide_inspector: false, map_mode: 0, animations: true, map_25d: false, classic: false, slow_pc: false, seen_tour: false, last_visit: 0, freeable: std::collections::BTreeMap::new() }
     }
 }
 

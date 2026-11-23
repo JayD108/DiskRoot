@@ -392,6 +392,9 @@ impl HomeView {
     }
 }
 
+/// Save space badge worker: (best single way, safe-to-clear total, scanned root).
+type BadgeOut = (Option<(u64, String)>, u64, String);
+
 /// Smallest rough saving (Maximum) a compress suggestion must reach.
 const SAVINGS_MIN: u64 = 100 << 20;
 
@@ -567,7 +570,12 @@ pub struct DiskRootApp {
     palette: Option<Palette>,
     /// Save space badge: the biggest single way to get space back (bytes, what).
     badge: Option<(u64, String)>,
-    badge_rx: Option<Receiver<Option<(u64, String)>>>,
+    /// (best single way, safe-to-clear total, scanned root).
+    badge_rx: Option<Receiver<BadgeOut>>,
+    /// Start screen: each drive letter's health verdict, read once on a
+    /// worker thread (a few device queries per disk).
+    start_health: Option<std::collections::HashMap<String, (Health, String)>>,
+    start_health_rx: Option<Receiver<std::collections::HashMap<String, (Health, String)>>>,
     /// The scan changed (new scan, delete, compress): work the badge out again.
     badge_dirty: bool,
     /// Map "Reclaimable" mode: safe / check-first bytes per folder (~10 ms
@@ -718,6 +726,8 @@ impl DiskRootApp {
             palette: None,
             badge: None,
             badge_rx: None,
+            start_health: None,
+            start_health_rx: None,
             badge_dirty: false,
             reclaim: None,
             last_map_root: None,
@@ -2161,55 +2171,163 @@ impl DiskRootApp {
         }
     }
 
-    /// Before the first scan: one card per drive (used / free bar), click
-    /// to scan it.
+    /// Before the first scan: one card per drive with the three things a
+    /// first-time user asks first, in this order: how full is it, is the
+    /// drive itself OK, and how much can go safely.
     fn start_screen(&mut self, ui: &mut Ui, t: &Tokens) {
-        ui.add_space(28.0);
-        let mut pick: Option<String> = None;
+        // Health verdicts: read once, off the UI thread.
+        if self.start_health.is_none() && self.start_health_rx.is_none() {
+            let (tx, rx) = mpsc::channel();
+            let ctx = self.egui_ctx.clone();
+            std::thread::spawn(move || {
+                let mut m = std::collections::HashMap::new();
+                for d in health::drives() {
+                    let v = d.verdict();
+                    for l in &d.letters {
+                        m.insert(l.clone(), v.clone());
+                    }
+                }
+                let _ = tx.send(m);
+                ctx.request_repaint();
+            });
+            self.start_health_rx = Some(rx);
+        }
+        if let Some(rx) = &self.start_health_rx {
+            match rx.try_recv() {
+                Ok(m) => {
+                    self.start_health = Some(m);
+                    self.start_health_rx = None;
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    self.start_health = Some(std::collections::HashMap::new());
+                    self.start_health_rx = None;
+                }
+            }
+        }
+        ui.add_space(24.0);
+        let mut pick: Option<(String, bool)> = None;
         let mut reopen_freed: Option<String> = None;
-        ui.vertical_centered(|ui| {
-            ui.add(egui::Image::new(&self.logo).fit_to_exact_size(vec2(72.0, 72.0)));
-            ui.add_space(8.0);
-            ui.label(RichText::new("See what's filling your drive").font(theme::semibold(16.0)));
-            ui.add_space(4.0);
-            ui.label(RichText::new("Pick a drive to scan. Fast scan (admin) reads a whole NTFS drive in seconds.").color(t.muted));
-            ui.add_space(14.0);
-            if let Some(root) = self.freed.clone() {
-                let b = egui::Button::new(RichText::new(format!("Open your saved scan of {}", visible(&root))).color(t.accent_ink)).fill(t.accent).min_size(vec2(260.0, 30.0));
-                if ui.add(b).on_hover_text("Freed from memory earlier; reopens in about a second").clicked() {
-                    reopen_freed = Some(root);
+        let mut details = false;
+        // Nearly full drives (under 10% free) first; otherwise Windows' order.
+        let mut drives: Vec<(String, Option<(u64, u64)>)> = self.drives.iter().map(|d| (d.clone(), diskroot_session::disk_space(d))).collect();
+        let full = |s: &Option<(u64, u64)>| s.is_some_and(|(t, f)| t > 0 && f.saturating_mul(10) < t);
+        drives.sort_by_key(|(_, s)| !full(s));
+        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add(egui::Image::new(&self.logo).fit_to_exact_size(vec2(56.0, 56.0)));
+                ui.add_space(6.0);
+                ui.label(RichText::new("See what's filling your drive").font(theme::semibold(18.0)));
+                ui.add_space(2.0);
+                ui.label(RichText::new("Pick a drive to scan. DiskRoot only reads names and sizes; nothing changes until you confirm.").color(t.muted));
+                ui.add_space(14.0);
+                if let Some(root) = self.freed.clone() {
+                    let b = egui::Button::new(RichText::new(format!("Open your saved scan of {}", visible(&root))).color(t.accent_ink)).fill(t.accent).min_size(vec2(260.0, 30.0));
+                    if ui.add(b).on_hover_text("Freed from memory earlier; reopens in about a second").clicked() {
+                        reopen_freed = Some(root);
+                    }
+                    ui.add_space(12.0);
                 }
-                ui.add_space(12.0);
-            }
-            for d in &self.drives {
-                let space = diskroot_session::disk_space(d);
-                let (rect, resp) = ui.allocate_exact_size(vec2(420.0, 54.0), Sense::click());
-                let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Scan {d}")));
-                let p = ui.painter();
-                p.rect_filled(rect, CornerRadius::same(6), if resp.hovered() { t.hover } else { t.field });
-                p.rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, t.line), StrokeKind::Inside);
-                p.text(pos2(rect.min.x + 14.0, rect.min.y + 16.0), Align2::LEFT_CENTER, d, theme::semibold(14.0), t.text);
-                if let Some((total, free)) = space {
-                    let used = total.saturating_sub(free);
-                    let txt = format!("{} free of {}", fmt_bytes(free), fmt_bytes(total));
-                    p.text(pos2(rect.max.x - 14.0, rect.min.y + 16.0), Align2::RIGHT_CENTER, txt, theme::regular(12.0), t.muted);
-                    let bar = Rect::from_min_size(pos2(rect.min.x + 14.0, rect.min.y + 32.0), vec2(rect.width() - 28.0, 9.0));
-                    p.rect_filled(bar, CornerRadius::same(4), t.head);
-                    let frac = used as f32 / total as f32;
-                    let col = if frac > 0.9 { theme::cat_color(5) } else if frac > 0.75 { theme::warn() } else { t.accent };
-                    p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac, bar.height())), CornerRadius::same(4), col);
+                let w = (ui.available_width() - 32.0).clamp(320.0, 760.0);
+                for (d, space) in &drives {
+                    let letter = d.trim_end_matches('\\').to_owned();
+                    let nearly = full(space);
+                    let stroke = if nearly { Stroke::new(1.5, theme::cat_color(5)) } else { Stroke::new(1.0, t.line) };
+                    Frame::new().fill(t.field).stroke(stroke).corner_radius(CornerRadius::same(t.radius + 2)).inner_margin(Margin::same(14)).show(ui, |ui| {
+                        ui.set_width(w - 28.0);
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(&letter).font(theme::semibold(16.0)).color(t.text));
+                            if nearly {
+                                ui.label(RichText::new("Nearly full: updates and apps may fail").color(theme::cat_color(5)));
+                            }
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                let scan = egui::Button::new(RichText::new(format!("Scan {letter}")).color(t.accent_ink)).fill(t.accent).min_size(vec2(96.0, 28.0));
+                                if ui.add(scan).on_hover_text("Walk the folders: read-only, no admin").clicked() {
+                                    pick = Some((d.clone(), false));
+                                }
+                                if ui.add(egui::Button::new("⚡ Fast scan").min_size(vec2(0.0, 28.0))).on_hover_text("Reads the drive's file table in seconds (NTFS). Asks for admin through the Windows prompt").clicked() {
+                                    pick = Some((d.clone(), true));
+                                }
+                            });
+                        });
+                        ui.add_space(8.0);
+                        let col_w = ((ui.available_width() - 24.0) / 3.0).max(80.0);
+                        let head = |ui: &mut Ui, s: &str| {
+                            ui.label(RichText::new(s).font(theme::semibold(11.5)).color(t.muted));
+                        };
+                        ui.horizontal_top(|ui| {
+                            // Space
+                            ui.allocate_ui_with_layout(vec2(col_w, 0.0), Layout::top_down(Align::Min), |ui| {
+                                ui.set_width(col_w);
+                                head(ui, "SPACE");
+                                if let Some((total, free)) = *space {
+                                    let used = total.saturating_sub(free);
+                                    let frac = if total > 0 { used as f32 / total as f32 } else { 0.0 };
+                                    let (bar, _) = ui.allocate_exact_size(vec2(col_w - 8.0, 8.0), Sense::hover());
+                                    ui.painter().rect_filled(bar, CornerRadius::same(4), t.head);
+                                    let c = if frac > 0.9 { theme::cat_color(5) } else if frac > 0.75 { theme::warn() } else { t.accent };
+                                    ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac, bar.height())), CornerRadius::same(4), c);
+                                    ui.add_space(2.0);
+                                    ui.label(RichText::new(format!("{} free", fmt_bytes(free))).font(theme::semibold(14.0)).color(t.text));
+                                    ui.label(RichText::new(format!("of {} · {} used", fmt_bytes(total), fmt_pct(used, total))).color(t.muted));
+                                } else {
+                                    ui.label(RichText::new("Size unknown").color(t.muted));
+                                }
+                            });
+                            ui.add_space(12.0);
+                            // Health
+                            ui.allocate_ui_with_layout(vec2(col_w, 0.0), Layout::top_down(Align::Min), |ui| {
+                                ui.set_width(col_w);
+                                head(ui, "HEALTH");
+                                match self.start_health.as_ref().map(|m| m.get(&letter)) {
+                                    None => {
+                                        ui.add(egui::Spinner::new().size(14.0).color(t.accent));
+                                    }
+                                    Some(Some((lvl, text))) if *lvl != Health::Unknown => {
+                                        let c = match lvl {
+                                            Health::Good => t.accent,
+                                            Health::Watch => theme::warn(),
+                                            _ => theme::cat_color(5),
+                                        };
+                                        ui.add(egui::Label::new(RichText::new(text).color(c)).wrap());
+                                        if ui.link("Details").on_hover_text("Open Drive status: wear, temperature, writes").clicked() {
+                                            details = true;
+                                        }
+                                    }
+                                    Some(other) => {
+                                        let why = other.map_or_else(|| "This drive doesn't report its health without admin.".to_owned(), |v| v.1.clone());
+                                        ui.add(egui::Label::new(RichText::new(why).color(t.muted)).wrap());
+                                    }
+                                }
+                            });
+                            ui.add_space(12.0);
+                            // Safe to clear
+                            ui.allocate_ui_with_layout(vec2(col_w, 0.0), Layout::top_down(Align::Min), |ui| {
+                                ui.set_width(col_w);
+                                head(ui, "SAFE TO CLEAR");
+                                match self.settings.freeable.get(d.as_str()) {
+                                    Some(&(bytes, when)) => {
+                                        ui.label(RichText::new(format!("About {}", fmt_bytes(bytes))).font(theme::semibold(14.0)).color(t.text));
+                                        ui.add(egui::Label::new(RichText::new(format!("caches and temp files, from your scan {}", remember::age_text(when))).color(t.muted)).wrap());
+                                    }
+                                    None => {
+                                        ui.add(egui::Label::new(RichText::new("Scan to find out how much can go safely.").color(t.muted)).wrap());
+                                    }
+                                }
+                            });
+                        });
+                    });
+                    ui.add_space(10.0);
                 }
-                if resp.clicked() {
-                    pick = Some(d.clone());
-                }
-                ui.add_space(8.0);
-            }
+            });
         });
-        if let Some(d) = pick {
+        if details {
+            self.open_status(0);
+        }
+        if let Some((d, fast)) = pick {
             self.path = d;
             self.freed = None;
-            self.start_scan(false);
+            self.start_scan(fast);
         }
         if let Some(root) = reopen_freed {
             self.path = root;
@@ -4157,16 +4275,20 @@ impl DiskRootApp {
                 Dialog::Welcome => {
                     ui.label(RichText::new("Welcome to DiskRoot").font(theme::semibold(16.0)));
                     ui.add_space(4.0);
-                    ui.label(RichText::new("Before you start, here is exactly what DiskRoot does on your computer:").color(t.muted));
-                    ui.add_space(8.0);
-                    facts(ui, &t, &[
-                        ("Reads", "File names and sizes. It doesn't read what's inside your files, except when you start View → Find duplicate files."),
-                        ("Stays offline", "No network connections, no accounts, no telemetry."),
-                        ("Asks first", "Admin rights only when you ask for them, always through the Windows prompt: Fast scan (the helper exits after the scan), and the optional DISM cleanup and virtual-disk compaction."),
-                        ("Deletes carefully", "Only when you confirm, always to the Recycle Bin, re-checked on disk first. Windows and system folders are locked."),
-                        ("Keeps a record", "Every delete is written to a log on this PC (File → Deletion history)."),
-                        ("Remembers scans", "Your last scans are saved on this PC (names and sizes only), so they reopen instantly and DiskRoot can show what changed. Turn it off or forget them in the File menu."),
-                    ]);
+                    ui.label(RichText::new("A disk space analyzer that shows what fills your drive, and helps you get space back safely.").color(t.muted));
+                    ui.add_space(10.0);
+                    for (k, v) in [
+                        ("Only looks", "Reads file names and sizes. Nothing on your drive changes unless you confirm."),
+                        ("Stays offline", "No network, no account, no telemetry."),
+                        ("Deletes to the Recycle Bin", "Always after you confirm, and Windows' own folders are locked."),
+                    ] {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new("✔").color(t.accent));
+                            ui.label(RichText::new(k).font(theme::semibold(13.0)));
+                            ui.label(RichText::new(v).color(t.muted));
+                        });
+                        ui.add_space(2.0);
+                    }
                 }
                 Dialog::Security(ig) => {
                     ui.label(RichText::new("Security & privacy").font(theme::semibold(16.0)));
@@ -4785,9 +4907,12 @@ impl DiskRootApp {
                         return;
                     }
                     Dialog::Welcome => {
-                        let b = egui::Button::new(RichText::new("Got it").color(t.accent_ink)).fill(t.accent).min_size(vec2(90.0, 26.0));
+                        let b = egui::Button::new(RichText::new("Start").color(t.accent_ink)).fill(t.accent).min_size(vec2(90.0, 26.0));
                         if ui.add(b).clicked() {
                             action = Some("welcome-done");
+                        }
+                        if ui.button("More about safety…").on_hover_text("Admin rights, the delete log, remembered scans: exactly what DiskRoot does (also in the shield menu)").clicked() {
+                            action = Some("welcome-safety");
                         }
                         return;
                     }
@@ -4856,6 +4981,12 @@ impl DiskRootApp {
             close = true;
         }
         match action {
+            Some("welcome-safety") => {
+                self.settings.seen_notice = true;
+                self.settings.save();
+                self.scan_after_welcome = false;
+                self.open_security();
+            }
             Some("welcome-done") => {
                 self.settings.seen_notice = true;
                 self.settings.save();
@@ -6294,8 +6425,12 @@ impl DiskRootApp {
                 let ctx = self.egui_ctx.clone();
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    let best = s.space_tips().into_iter().filter_map(|t| t.bytes.map(|b| (b, t.title))).max_by_key(|x| x.0).filter(|x| x.0 >= 100 << 20);
-                    let _ = tx.send(best);
+                    let tips = s.space_tips();
+                    // "Caches and temporary files" is the one tip that is safe
+                    // to clear as a whole; the start screen shows it per drive.
+                    let safe = tips.iter().find(|t| t.title.starts_with("Caches")).and_then(|t| t.bytes).unwrap_or(0);
+                    let best = tips.into_iter().filter_map(|t| t.bytes.map(|b| (b, t.title))).max_by_key(|x| x.0).filter(|x| x.0 >= 100 << 20);
+                    let _ = tx.send((best, safe, s.summary().root));
                     ctx.request_repaint();
                 });
                 rx
@@ -6303,9 +6438,14 @@ impl DiskRootApp {
         }
         if let Some(rx) = &self.badge_rx {
             match rx.try_recv() {
-                Ok(b) => {
+                Ok((b, safe, root)) => {
                     self.badge = b;
                     self.badge_rx = None;
+                    if root.len() == 3 && root.ends_with(":\\") {
+                        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+                        self.settings.freeable.insert(root, (safe, now));
+                        self.settings.save();
+                    }
                 }
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => self.badge_rx = None,
