@@ -3576,6 +3576,7 @@ impl DiskRootApp {
             && v != self.settings.map_mode
         {
             self.settings.map_mode = v;
+            self.settings.map_mode_chosen = true;
             self.settings.save();
             self.map = None;
         }
@@ -5477,6 +5478,7 @@ impl DiskRootApp {
                 }
             }
             Cmd::ModeSize | Cmd::ModeGrowth | Cmd::ModeReclaim => {
+                self.settings.map_mode_chosen = true;
                 self.settings.map_mode = match c {
                     Cmd::ModeGrowth => 1,
                     Cmd::ModeReclaim => 2,
@@ -6637,6 +6639,18 @@ impl DiskRootApp {
                 Ok((b, safe, root)) => {
                     self.badge = b;
                     self.badge_rx = None;
+                    // Until the user picks the map's colours: show what can go
+                    // when there's real space to get back, else plain sizes.
+                    if !self.settings.map_mode_chosen {
+                        let want = if safe >= 1 << 30 { 2 } else { 0 };
+                        if want != self.settings.map_mode {
+                            self.settings.map_mode = want;
+                            self.map = None;
+                            if want == 2 {
+                                self.say(format!("The map shows what can go: green is labelled safe to clear (about {}). Size, above the map, colours by kind instead.", fmt_bytes(safe)));
+                            }
+                        }
+                    }
                     if root.len() == 3 && root.ends_with(":\\") {
                         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
                         self.settings.freeable.insert(root, (safe, now));

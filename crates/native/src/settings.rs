@@ -54,6 +54,10 @@ pub struct Settings {
     pub freeable: std::collections::BTreeMap<String, (u64, u64)>,
     /// Show DiskRoot's own RAM / CPU and Free memory at the top (View menu).
     pub show_resources: bool,
+    /// The user picked the map's colours (Size / Growth / Reclaimable) at
+    /// least once. Until then DiskRoot picks: Reclaimable when a scan has
+    /// 1 GB or more labelled safe to clear, Size otherwise.
+    pub map_mode_chosen: bool,
 }
 
 /// A size alert on a folder (checked after scans and live updates while
@@ -70,7 +74,7 @@ pub struct Alert {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { dark: false, treemap: false, by_category: false, last_path: "C:\\".into(), seen_notice: false, remember_scans: true, color_by_age: false, live_updates: true, alerts: Vec::new(), free_when_minimized: false, gentle_scan: false, home_at_start: true, hide_list: false, hide_inspector: false, map_mode: 0, animations: true, map_25d: false, classic: false, slow_pc: false, seen_tour: false, last_visit: 0, freeable: std::collections::BTreeMap::new(), show_resources: false }
+        Self { dark: false, treemap: false, by_category: false, last_path: "C:\\".into(), seen_notice: false, remember_scans: true, color_by_age: false, live_updates: true, alerts: Vec::new(), free_when_minimized: false, gentle_scan: false, home_at_start: true, hide_list: false, hide_inspector: false, map_mode: 0, animations: true, map_25d: false, classic: false, slow_pc: false, seen_tour: false, last_visit: 0, freeable: std::collections::BTreeMap::new(), show_resources: false, map_mode_chosen: false }
     }
 }
 
@@ -83,7 +87,15 @@ impl Settings {
         file()
             .and_then(|f| std::fs::read_to_string(f).ok())
             // Editors like older Notepad save a byte-order mark; accept it.
-            .and_then(|s| serde_json::from_str(s.trim_start_matches('\u{feff}')).ok())
+            .and_then(|s| serde_json::from_str::<Self>(s.trim_start_matches('\u{feff}')).ok())
+            .map(|mut s| {
+                // Settings from before map_mode_chosen: a mode other than
+                // Size was the user's own pick.
+                if s.map_mode != 0 {
+                    s.map_mode_chosen = true;
+                }
+                s
+            })
             .unwrap_or_default()
     }
 
