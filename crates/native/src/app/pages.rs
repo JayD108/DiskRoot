@@ -122,7 +122,7 @@ fn card(t: &Tokens) -> Frame {
 
 /// A small coloured label.
 fn chip(ui: &mut Ui, text: &str, fill: Color32, ink: Color32) {
-    let font = theme::semibold(11.0);
+    let font = theme::semibold(theme::ts::MICRO);
     let g = ui.painter().layout_no_wrap(text.to_owned(), font, ink);
     let (r, _) = ui.allocate_exact_size(g.size() + vec2(12.0, 4.0), Sense::hover());
     ui.painter().rect_filled(r, CornerRadius::same(6), fill);
@@ -137,7 +137,7 @@ fn page_header(ui: &mut Ui, t: &Tokens, title: &str, about: &str) -> bool {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             back = ui.button("Back to the map  (Esc)").clicked();
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                ui.add(egui::Label::new(RichText::new(title).font(theme::semibold(24.0))).truncate());
+                ui.add(egui::Label::new(RichText::new(title).font(theme::semibold(theme::ts::DISPLAY))).truncate());
             });
         });
     });
@@ -151,7 +151,7 @@ fn tabs(ui: &mut Ui, t: &Tokens, current: u8, names: &[String]) -> Option<u8> {
     ui.horizontal(|ui| {
         for (i, n) in names.iter().enumerate() {
             let on = current as usize == i;
-            let text = RichText::new(n).font(if on { theme::semibold(14.0) } else { theme::regular(14.0) }).color(if on { t.text } else { t.muted });
+            let text = RichText::new(n).font(if on { theme::semibold(theme::ts::LEAD) } else { theme::regular(theme::ts::LEAD) }).color(if on { t.text } else { t.muted });
             let r = ui.add(egui::Button::new(text).selected(on).min_size(vec2(0.0, 28.0)));
             if r.clicked() && !on {
                 out = Some(i as u8);
@@ -340,10 +340,10 @@ impl DiskRootApp {
             for (n, letters) in &v.disks {
                 let now = v.sampler.disks.iter().find(|d| d.0 == *n).map_or(0.0, |d| d.1);
                 let total = v.sampler.disk_totals.get(n).copied().unwrap_or(0);
-                ui.label(RichText::new(format!("Drive {letters} · writing {} now · {} since this tab opened", rate(now), fmt_bytes(total))).font(theme::semibold(14.0)));
+                ui.label(RichText::new(format!("Drive {letters} · writing {} now · {} since this tab opened", rate(now), fmt_bytes(total))).font(theme::semibold(theme::ts::LEAD)));
             }
             let secs = v.sampler.seconds;
-            ui.label(RichText::new(format!("Measured for {:.0} s ({:.0} s of it idle: no key or mouse for 5 min)", secs, v.sampler.idle_seconds)).color(t.faint).size(12.0));
+            ui.label(RichText::new(format!("Measured for {:.0} s ({:.0} s of it idle: no key or mouse for 5 min)", secs, v.sampler.idle_seconds)).color(t.faint).size(theme::ts::SMALL));
             ui.add_space(6.0);
             let top = v.sampler.top(8);
             if top.is_empty() {
@@ -351,7 +351,7 @@ impl DiskRootApp {
             } else {
                 egui::Grid::new("writers").num_columns(4).striped(true).spacing([18.0, 5.0]).show(ui, |ui| {
                     for h in ["Program", "Now", "While you used the PC", "While idle"] {
-                        ui.label(RichText::new(h).color(t.muted).size(12.0));
+                        ui.label(RichText::new(h).color(t.muted).size(theme::ts::SMALL));
                     }
                     ui.end_row();
                     for w in &top {
@@ -383,12 +383,12 @@ impl DiskRootApp {
         ui.columns(2, |cols| {
             card(&t).show(&mut cols[0], |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(RichText::new("While you were away (background scans, last 7 days)").font(theme::semibold(14.0)));
+                ui.label(RichText::new("While you were away (background scans, last 7 days)").font(theme::semibold(theme::ts::LEAD)));
                 ui.add_space(4.0);
                 if v.away_runs == 0 {
                     plain_note(ui, RichText::new("No idle samples yet. Each scheduled scan first measures 30 s of writes; turn on Scheduled scans to catch programs that write while nobody is using the PC.").color(t.faint));
                 } else {
-                    ui.label(RichText::new(format!("{} idle samples of 30 s; average while idle:", v.away_runs)).color(t.muted).size(12.0));
+                    ui.label(RichText::new(format!("{} idle samples of 30 s; average while idle:", v.away_runs)).color(t.muted).size(theme::ts::SMALL));
                     for (name, r, c) in &v.away {
                         plain_note(ui, RichText::new(format!("{name}: {} (≈ {} a day) · in {c} of {} samples", rate(*r), fmt_bytes((*r * 86_400.0) as u64), v.away_runs)));
                     }
@@ -396,7 +396,7 @@ impl DiskRootApp {
             });
             card(&t).show(&mut cols[1], |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(RichText::new("Folders changed most often").font(theme::semibold(14.0)));
+                ui.label(RichText::new("Folders changed most often").font(theme::semibold(theme::ts::LEAD)));
                 ui.add_space(4.0);
                 if self.watcher.is_none() {
                     plain_note(ui, RichText::new("Needs live updates on and a scan on screen (it watches the scanned folder while DiskRoot is open).").color(t.faint));
@@ -404,7 +404,7 @@ impl DiskRootApp {
                     let mut hot: Vec<(&String, &u32)> = self.hot.iter().collect();
                     hot.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
                     let root = self.summary.as_ref().map(|s| s.root.trim_end_matches('\\').to_owned()).unwrap_or_default();
-                    plain_note(ui, RichText::new(format!("Changes Windows reported under {} in the last {} (counts, not bytes):", visible(&root), remember::gap_text(self.hot_since.elapsed().as_secs()))).color(t.muted).size(12.0));
+                    plain_note(ui, RichText::new(format!("Changes Windows reported under {} in the last {} (counts, not bytes):", visible(&root), remember::gap_text(self.hot_since.elapsed().as_secs()))).color(t.muted).size(theme::ts::SMALL));
                     if hot.is_empty() {
                         ui.label(RichText::new("None yet.").color(t.faint));
                     }
@@ -418,7 +418,7 @@ impl DiskRootApp {
         ui.add_space(12.0);
         card(&t).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(RichText::new("Settings that write a lot (advice only: DiskRoot changes nothing)").font(theme::semibold(14.0)));
+            ui.label(RichText::new("Settings that write a lot (advice only: DiskRoot changes nothing)").font(theme::semibold(theme::ts::LEAD)));
             ui.add_space(4.0);
             for tip in &v.advice {
                 plain_note(ui, RichText::new(format!("• {tip}")).color(t.muted));
@@ -453,13 +453,13 @@ impl DiskRootApp {
                     ui.set_width(ui.available_width());
                     egui::Grid::new("past-scans-grid").num_columns(6).striped(true).spacing([18.0, 6.0]).show(ui, |ui| {
                         for head in ["When", "How", "Size", "Files", "Change", "Drive"] {
-                            ui.label(RichText::new(head).color(t.muted).size(12.0));
+                            ui.label(RichText::new(head).color(t.muted).size(theme::ts::SMALL));
                         }
                         ui.end_row();
                         let n = h.points.len();
                         for i in (0..n).rev() {
                             let p = &h.points[i];
-                            ui.label(RichText::new(activity::local_text(p.time)).font(theme::num(12.5)));
+                            ui.label(RichText::new(activity::local_text(p.time)).font(theme::num(theme::ts::SMALL)));
                             ui.label(RichText::new(history::method_text(p.method)).color(t.muted));
                             ui.label(fmt_bytes(p.total));
                             ui.label(RichText::new(fmt_count(p.files)).color(t.muted));
@@ -673,7 +673,7 @@ impl DiskRootApp {
                             ui.set_min_height(110.0);
                             ui.horizontal(|ui| {
                                 chip(ui, n, t.accent, t.accent_ink);
-                                ui.label(RichText::new(title).font(theme::semibold(15.0)));
+                                ui.label(RichText::new(title).font(theme::semibold(theme::ts::SECTION)));
                             });
                             ui.add_space(4.0);
                             plain_note(ui, RichText::new(text).color(t.muted));
@@ -683,7 +683,7 @@ impl DiskRootApp {
                 ui.add_space(12.0);
                 card(t).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(RichText::new("Search").font(theme::semibold(15.0)));
+                    ui.label(RichText::new("Search").font(theme::semibold(theme::ts::SECTION)));
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         ui.label("Only files of at least");
@@ -706,16 +706,16 @@ impl DiskRootApp {
                             }
                             None => {
                                 d.only_selected = false;
-                                ui.label(RichText::new("(select a folder in the list to search only there)").color(t.faint).size(12.0));
+                                ui.label(RichText::new("(select a folder in the list to search only there)").color(t.faint).size(theme::ts::SMALL));
                             }
                         }
                     });
                     let cands = s.duplicate_candidates(d.min_mb << 20);
                     let (n, sizes) = (cands.iter().map(|c| c.1.len()).sum::<usize>(), cands.len());
                     ui.add_space(4.0);
-                    plain_note(ui, RichText::new(format!("{} files share a size with another file ({} different sizes) in the whole scan. Those are the only ones that get read.", fmt_count(n as u64), fmt_count(sizes as u64))).color(t.muted).size(12.0));
+                    plain_note(ui, RichText::new(format!("{} files share a size with another file ({} different sizes) in the whole scan. Those are the only ones that get read.", fmt_count(n as u64), fmt_count(sizes as u64))).color(t.muted).size(theme::ts::SMALL));
                     ui.add_space(8.0);
-                    let go = egui::Button::new(RichText::new("Find duplicates").color(t.accent_ink).font(theme::semibold(14.0))).fill(t.accent).min_size(vec2(160.0, 32.0));
+                    let go = egui::Button::new(RichText::new("Find duplicates").color(t.accent_ink).font(theme::semibold(theme::ts::LEAD))).fill(t.accent).min_size(vec2(160.0, 32.0));
                     if ui.add_enabled(n > 1, go).clicked() {
                         *out = Some(DupesGo::Start);
                     }
@@ -725,18 +725,18 @@ impl DiskRootApp {
                     card(t).show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(format!("Last search here: {} · {} sets · {} could be freed", activity::local_text(last.time), last.sets, fmt_bytes(last.wasted))).font(theme::semibold(13.0)));
+                            ui.label(RichText::new(format!("Last search here: {} · {} sets · {} could be freed", activity::local_text(last.time), last.sets, fmt_bytes(last.wasted))).font(theme::semibold(theme::ts::BODY)));
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if ui.button("Open it").clicked() {
                                     *out = Some(DupesGo::Open(last.file.clone()));
                                 }
                             });
                         });
-                        plain_note(ui, RichText::new("A new search reuses what the last one read: files that haven't changed since aren't read again, so it's much faster.").color(t.faint).size(12.0));
+                        plain_note(ui, RichText::new("A new search reuses what the last one read: files that haven't changed since aren't read again, so it's much faster.").color(t.faint).size(theme::ts::SMALL));
                     });
                     ui.add_space(12.0);
                 }
-                plain_note(ui, RichText::new("This is the only part of DiskRoot that reads file contents. Nothing leaves your PC. Online-only cloud files are skipped (reading them would download them), hardlinks (one file with two names) aren't counted as copies, and on an SSD several files are read at once.").color(t.faint).size(12.0));
+                plain_note(ui, RichText::new("This is the only part of DiskRoot that reads file contents. Nothing leaves your PC. Online-only cloud files are skipped (reading them would download them), hardlinks (one file with two names) aren't counted as copies, and on an SSD several files are read at once.").color(t.faint).size(theme::ts::SMALL));
             });
             return;
         }
@@ -744,7 +744,7 @@ impl DiskRootApp {
         // Results: summary line, filters, the sets on the left, one set on the right.
         let wasted = run.wasted();
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("{} sets · {} could be freed by keeping one copy of each", fmt_count(run.groups.len() as u64), fmt_bytes(wasted))).font(theme::semibold(15.0)));
+            ui.label(RichText::new(format!("{} sets · {} could be freed by keeping one copy of each", fmt_count(run.groups.len() as u64), fmt_bytes(wasted))).font(theme::semibold(theme::ts::SECTION)));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui.button("New search…").clicked() {
                     *out = Some(DupesGo::NewSearch);
@@ -756,7 +756,7 @@ impl DiskRootApp {
         });
         let reused = if run.reused > 0 { format!(" · {} files reused from the last search", fmt_count(run.reused)) } else { String::new() };
         let past = if d.from_past { " · saved search: the files may have changed since" } else { "" };
-        ui.label(RichText::new(format!("{} · searched {} · {} files compared, {} read in {:.1} s{reused}{past}", activity::local_text(run.time), visible(&run.root), fmt_count(run.candidates), fmt_bytes(run.read), run.secs)).color(t.faint).size(12.0));
+        ui.label(RichText::new(format!("{} · searched {} · {} files compared, {} read in {:.1} s{reused}{past}", activity::local_text(run.time), visible(&run.root), fmt_count(run.candidates), fmt_bytes(run.read), run.secs)).color(t.faint).size(theme::ts::SMALL));
         if run.groups.is_empty() {
             ui.add_space(20.0);
             ui.label(RichText::new("No identical files found. Try a smaller minimum size.").color(t.muted));
@@ -847,12 +847,12 @@ impl DiskRootApp {
                                 p.rect_filled(r, CornerRadius::same(6), t.field);
                             }
                             let first = g.files.first().map_or("", |f| file_name(&f.1));
-                            let name = p.layout(visible(first), theme::semibold(12.5), t.text, r.width() - 110.0);
+                            let name = p.layout(visible(first), theme::semibold(theme::ts::SMALL), t.text, r.width() - 110.0);
                             p.galley(r.min + vec2(8.0, 3.0), name, t.text);
-                            p.text(r.min + vec2(8.0, 21.0), Align2::LEFT_TOP, format!("{} copies × {}", g.files.len(), fmt_bytes(g.size)), theme::regular(11.5), t.muted);
-                            p.text(pos2(r.max.x - 8.0, r.min.y + 4.0), Align2::RIGHT_TOP, format!("+{}", fmt_bytes(g.wasted())), theme::num(12.0), t.accent);
+                            p.text(r.min + vec2(8.0, 21.0), Align2::LEFT_TOP, format!("{} copies × {}", g.files.len(), fmt_bytes(g.size)), theme::regular(theme::ts::CAPTION), t.muted);
+                            p.text(pos2(r.max.x - 8.0, r.min.y + 4.0), Align2::RIGHT_TOP, format!("+{}", fmt_bytes(g.wasted())), theme::num(theme::ts::SMALL), t.accent);
                             if chosen > 0 {
-                                p.text(pos2(r.max.x - 8.0, r.min.y + 21.0), Align2::RIGHT_TOP, format!("{chosen} chosen"), theme::regular(11.0), theme::warn());
+                                p.text(pos2(r.max.x - 8.0, r.min.y + 21.0), Align2::RIGHT_TOP, format!("{chosen} chosen"), theme::regular(theme::ts::MICRO), theme::warn());
                             }
                             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, first));
                             if resp.clicked() {
@@ -869,7 +869,7 @@ impl DiskRootApp {
                     ui.set_min_size(vec2(rw - 34.0, h - 34.0));
                     let Some(g) = run.groups.get(d.sel) else { return };
                     let gi = d.sel;
-                    ui.label(RichText::new(visible(g.files.first().map_or("", |f| file_name(&f.1)))).font(theme::semibold(16.0)));
+                    ui.label(RichText::new(visible(g.files.first().map_or("", |f| file_name(&f.1)))).font(theme::semibold(theme::ts::TITLE)));
                     ui.label(RichText::new(format!("{} identical copies of {} · keeping one frees {}", g.files.len(), fmt_bytes(g.size), fmt_bytes(g.wasted()))).color(t.muted))
                         .on_hover_text("Identical means byte for byte the same, not just the same name. The kept copy is suggested from its name and folder (not \"copy\" or \"(1)\", not in a backup, old or Downloads folder); pick another if that's the one you use.");
                     ui.add_space(6.0);
@@ -910,8 +910,8 @@ impl DiskRootApp {
                                                 if node.is_none() {
                                                     bits.push("no longer in this scan".into());
                                                 }
-                                                ui.add(egui::Label::new(RichText::new(visible(file_name(path))).font(theme::semibold(12.5))).truncate()).on_hover_text(visible(path));
-                                                ui.add(egui::Label::new(RichText::new(bits.join(" · ")).color(t.muted).size(11.5)).truncate()).on_hover_text(visible(path));
+                                                ui.add(egui::Label::new(RichText::new(visible(file_name(path))).font(theme::semibold(theme::ts::SMALL))).truncate()).on_hover_text(visible(path));
+                                                ui.add(egui::Label::new(RichText::new(bits.join(" · ")).color(t.muted).size(theme::ts::CAPTION)).truncate()).on_hover_text(visible(path));
                                             });
                                         });
                                     });
@@ -932,9 +932,9 @@ impl DiskRootApp {
         }
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new(if n == 0 { "Nothing chosen yet. Tick copies to remove, or use \"Choose the other copies\".".to_owned() } else { format!("{n} copies chosen · {} would be freed", fmt_bytes(bytes)) }).font(theme::semibold(13.0)).color(if n == 0 { t.muted } else { t.text }));
+            ui.label(RichText::new(if n == 0 { "Nothing chosen yet. Tick copies to remove, or use \"Choose the other copies\".".to_owned() } else { format!("{n} copies chosen · {} would be freed", fmt_bytes(bytes)) }).font(theme::semibold(theme::ts::BODY)).color(if n == 0 { t.muted } else { t.text }));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let b = egui::Button::new(RichText::new(format!("Review {n} and remove…")).color(t.accent_ink).font(theme::semibold(13.5))).fill(t.accent).min_size(vec2(170.0, 30.0));
+                let b = egui::Button::new(RichText::new(format!("Review {n} and remove…")).color(t.accent_ink).font(theme::semibold(theme::ts::BODY))).fill(t.accent).min_size(vec2(170.0, 30.0));
                 if ui.add_enabled(n > 0, b).on_hover_text("Opens Review marked: check each one, untick what to keep, then move the rest to the Recycle Bin").clicked() {
                     let mut items = Vec::new();
                     for (gi, g) in run.groups.iter().enumerate() {
@@ -976,7 +976,7 @@ impl DiskRootApp {
                         }
                         ui.add_sized(vec2(72.0, 18.0), egui::Label::new(RichText::new(fmt_bytes(m.bytes)).color(t.muted)));
                         let age = if m.mtime > 0 { diskroot_session::age_text(diskroot_session::today_days(), m.mtime) } else { String::new() };
-                        ui.add_sized(vec2(90.0, 18.0), egui::Label::new(RichText::new(age).color(t.faint).size(11.5)));
+                        ui.add_sized(vec2(90.0, 18.0), egui::Label::new(RichText::new(age).color(t.faint).size(theme::ts::CAPTION)));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui.small_button("Show on map").clicked() {
                                 *out = Some(DupesGo::Map(m.node));
@@ -992,7 +992,7 @@ impl DiskRootApp {
                 }
             };
             let freeable: u64 = f.copies.iter().map(|g| g.reclaim).sum();
-            ui.label(RichText::new(format!("Likely copies ({}) · up to {} could be freed", f.copies.len(), fmt_bytes(freeable))).font(theme::semibold(14.5)));
+            ui.label(RichText::new(format!("Likely copies ({}) · up to {} could be freed", f.copies.len(), fmt_bytes(freeable))).font(theme::semibold(theme::ts::LEAD)));
             if f.copies.is_empty() {
                 ui.label(RichText::new("None found.").color(t.faint));
             }
@@ -1003,7 +1003,7 @@ impl DiskRootApp {
                     .show(ui, |ui| rows(ui, g, picks, out));
             }
             ui.add_space(10.0);
-            ui.label(RichText::new(format!("Similar names ({})", f.names.len())).font(theme::semibold(14.5)));
+            ui.label(RichText::new(format!("Similar names ({})", f.names.len())).font(theme::semibold(theme::ts::LEAD)));
             if f.names.is_empty() {
                 ui.label(RichText::new("None found.").color(t.faint));
             }
@@ -1016,7 +1016,7 @@ impl DiskRootApp {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             let n = d.sim_pick.len();
-            ui.label(RichText::new("Two folders can look alike and still differ inside: check before removing one.").color(t.muted).size(12.0));
+            ui.label(RichText::new("Two folders can look alike and still differ inside: check before removing one.").color(t.muted).size(theme::ts::SMALL));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let b = egui::Button::new(RichText::new(format!("Review {n} folders…")).color(t.accent_ink)).fill(t.accent).min_size(vec2(150.0, 30.0));
                 if ui.add_enabled(n > 0, b).clicked() {
@@ -1115,7 +1115,7 @@ impl DiskRootApp {
             let ticked: Vec<&ReviewRow> = rows.iter().filter(|r| !self.review.untick.contains(&r.node)).collect();
             let bytes: u64 = ticked.iter().map(|r| r.bytes).sum();
             ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("{} marked · {} ticked to delete · {}", rows.len(), ticked.len(), fmt_bytes(bytes))).font(theme::semibold(15.0)));
+                ui.label(RichText::new(format!("{} marked · {} ticked to delete · {}", rows.len(), ticked.len(), fmt_bytes(bytes))).font(theme::semibold(theme::ts::SECTION)));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.add_enabled(!rows.is_empty(), egui::Button::new("Unmark all")).clicked() {
                         go = Some(("clear", 0, String::new()));
@@ -1153,7 +1153,7 @@ impl DiskRootApp {
                         if ui.checkbox(&mut tick, "").on_hover_text("Ticked: move to the Recycle Bin. Unticked: keep it.").changed() {
                             go = Some(("toggle", r.node, String::new()));
                         }
-                        ui.add_sized(vec2(76.0, 20.0), egui::Label::new(RichText::new(fmt_bytes(r.bytes)).font(theme::num(13.0)).color(if on { t.text } else { t.faint })));
+                        ui.add_sized(vec2(76.0, 20.0), egui::Label::new(RichText::new(fmt_bytes(r.bytes)).font(theme::num(theme::ts::BODY)).color(if on { t.text } else { t.faint })));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui.small_button("✕").on_hover_text("Unmark (remove from this list)").clicked() {
                                 go = Some(("unmark", r.node, String::new()));
@@ -1164,13 +1164,13 @@ impl DiskRootApp {
                             if ui.small_button("Explorer").on_hover_text("Show it in Explorer to look inside or open it").clicked() {
                                 go = Some(("explorer", r.node, r.path.clone()));
                             }
-                            ui.add_sized(vec2(80.0, 20.0), egui::Label::new(RichText::new(&r.age).color(t.faint).size(11.5)));
+                            ui.add_sized(vec2(80.0, 20.0), egui::Label::new(RichText::new(&r.age).color(t.faint).size(theme::ts::CAPTION)));
                             chip(ui, r.label, r.color.gamma_multiply(0.22), r.color);
                             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                                 ui.vertical(|ui| {
                                     let icon = if r.dir { "📁 " } else { "" };
-                                    ui.add(egui::Label::new(RichText::new(format!("{icon}{}", visible(&r.name))).font(theme::semibold(12.5)).color(if on { t.text } else { t.faint })).truncate()).on_hover_text(visible(&r.path));
-                                    ui.add(egui::Label::new(RichText::new(format!("{} · {}", r.what, visible(&r.path))).color(t.muted).size(11.0)).truncate());
+                                    ui.add(egui::Label::new(RichText::new(format!("{icon}{}", visible(&r.name))).font(theme::semibold(theme::ts::SMALL)).color(if on { t.text } else { t.faint })).truncate()).on_hover_text(visible(&r.path));
+                                    ui.add(egui::Label::new(RichText::new(format!("{} · {}", r.what, visible(&r.path))).color(t.muted).size(theme::ts::MICRO)).truncate());
                                 });
                             });
                         });
@@ -1179,9 +1179,9 @@ impl DiskRootApp {
             });
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Unticked items are unmarked when you continue. Protected places are refused at the next step, with the reason.").color(t.muted).size(12.0));
+                ui.label(RichText::new("Unticked items are unmarked when you continue. Protected places are refused at the next step, with the reason.").color(t.muted).size(theme::ts::SMALL));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let b = egui::Button::new(RichText::new(format!("Move {} to the Recycle Bin…", ticked.len())).color(Color32::WHITE).font(theme::semibold(13.5))).fill(theme::cat_color(5)).min_size(vec2(200.0, 30.0));
+                    let b = egui::Button::new(RichText::new(format!("Move {} to the Recycle Bin…", ticked.len())).color(Color32::WHITE).font(theme::semibold(theme::ts::BODY))).fill(theme::cat_color(5)).min_size(vec2(200.0, 30.0));
                     if ui.add_enabled(!ticked.is_empty() && self.job.is_none(), b).clicked() {
                         go = Some(("delete", 0, String::new()));
                     }
@@ -1251,7 +1251,7 @@ impl DiskRootApp {
                 card(&t).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     let title = if since > 0 { format!("Since your last visit ({})", activity::local_text(since)) } else { "Since your last visit".to_owned() };
-                    ui.label(RichText::new(title).font(theme::semibold(15.0)));
+                    ui.label(RichText::new(title).font(theme::semibold(theme::ts::SECTION)));
                     ui.add_space(4.0);
                     let count = |k: &str| new.iter().filter(|e| e.kind == k).count();
                     let freed: u64 = new.iter().filter(|e| e.kind == "deleted").map(|e| e.bytes).sum();
@@ -1290,7 +1290,7 @@ impl DiskRootApp {
                 card(&t).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("What you did with DiskRoot").font(theme::semibold(15.0)));
+                        ui.label(RichText::new("What you did with DiskRoot").font(theme::semibold(theme::ts::SECTION)));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui.small_button("Open log folder").clicked() {
                                 go = Some(("logs", String::new()));
@@ -1320,14 +1320,14 @@ impl DiskRootApp {
                     egui::Grid::new("activity-grid").num_columns(5).striped(true).spacing([16.0, 6.0]).show(ui, |ui| {
                         if !shown.is_empty() {
                             for h in ["When", "What", "Size", "Item", ""] {
-                                ui.label(RichText::new(h).color(t.muted).size(12.0));
+                                ui.label(RichText::new(h).color(t.muted).size(theme::ts::SMALL));
                             }
                             ui.end_row();
                         }
                         for e in shown.iter().take(500) {
                             let fresh = since > 0 && e.time > since;
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new(activity::local_text(e.time)).font(theme::num(12.0)));
+                                ui.label(RichText::new(activity::local_text(e.time)).font(theme::num(theme::ts::SMALL)));
                                 if fresh {
                                     chip(ui, "new", t.accent, t.accent_ink);
                                 }
@@ -1373,13 +1373,13 @@ impl DiskRootApp {
                 // What changed on the drive.
                 card(&t).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(RichText::new("What changed on the drive").font(theme::semibold(15.0)));
+                    ui.label(RichText::new("What changed on the drive").font(theme::semibold(theme::ts::SECTION)));
                     ui.add_space(4.0);
                     let Some(ch) = &self.changes else {
                         plain_note(ui, RichText::new("Scan again later (or turn on Scheduled scans) and the folders that grew or shrank show up here.").color(t.faint));
                         return;
                     };
-                    plain_note(ui, RichText::new(format!("Folders that changed between the scan of {} and the scan of {}, biggest change first. \"Last change\" is the newest file date inside, from the latest scan.", activity::local_text(ch.before_time), activity::local_text(ch.after_time))).color(t.muted).size(12.0));
+                    plain_note(ui, RichText::new(format!("Folders that changed between the scan of {} and the scan of {}, biggest change first. \"Last change\" is the newest file date inside, from the latest scan.", activity::local_text(ch.before_time), activity::local_text(ch.after_time))).color(t.muted).size(theme::ts::SMALL));
                     if ch.items.is_empty() {
                         ui.label(RichText::new("No folder changed by more than 1 MB.").color(t.faint));
                         return;
@@ -1387,12 +1387,12 @@ impl DiskRootApp {
                     let s = self.scanned.as_ref();
                     egui::Grid::new("activity-changes").num_columns(4).striped(true).spacing([16.0, 5.0]).show(ui, |ui| {
                         for h in ["Change", "Now", "Last change", "Folder"] {
-                            ui.label(RichText::new(h).color(t.muted).size(12.0));
+                            ui.label(RichText::new(h).color(t.muted).size(theme::ts::SMALL));
                         }
                         ui.end_row();
                         for c in ch.items.iter().take(50) {
                             let d = c.delta();
-                            ui.label(RichText::new(fmt_delta(d)).font(theme::num(12.5)).color(if d > 0 { theme::warn() } else { t.accent }));
+                            ui.label(RichText::new(fmt_delta(d)).font(theme::num(theme::ts::SMALL)).color(if d > 0 { theme::warn() } else { t.accent }));
                             ui.label(RichText::new(fmt_bytes(c.after)).color(t.muted));
                             let when = s.and_then(|s| s.find_rel(&c.path).map(|n| s.mtime(n))).filter(|&m| m > 0).map_or_else(|| if c.after == 0 { "removed".to_owned() } else { String::new() }, diskroot_session::date_text);
                             ui.label(RichText::new(when).color(t.faint));
@@ -1455,7 +1455,7 @@ fn dupes_progress(ui: &mut Ui, t: &Tokens, p: &dupes::Progress, cancel: &AtomicB
     ui.add_space(20.0);
     card(t).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.label(RichText::new("Looking for identical files…").font(theme::semibold(17.0)));
+        ui.label(RichText::new("Looking for identical files…").font(theme::semibold(theme::ts::TITLE)));
         ui.add_space(8.0);
         let steps = ["Checking which files can be read (and hardlinks)", "Quick check: first and last 64 KB", "Full compare of files still matching"];
         for (i, s) in steps.iter().enumerate() {
@@ -1492,7 +1492,7 @@ fn dupes_progress(ui: &mut Ui, t: &Tokens, p: &dupes::Progress, cancel: &AtomicB
         if ui.add_enabled(!stopping, egui::Button::new(if stopping { "Stopping…" } else { "Cancel" })).clicked() {
             cancel.store(true, Ordering::Relaxed);
         }
-        plain_note(ui, RichText::new("You can leave this page: the search keeps going and tells you when it's done.").color(t.faint).size(12.0));
+        plain_note(ui, RichText::new("You can leave this page: the search keeps going and tells you when it's done.").color(t.faint).size(theme::ts::SMALL));
     });
 }
 
@@ -1508,11 +1508,11 @@ fn past_tab(ui: &mut Ui, t: &Tokens, d: &mut DupesPage, out: &mut Option<DupesGo
             ui.set_width(ui.available_width());
             egui::Grid::new("past-dupes-grid").num_columns(6).striped(true).spacing([18.0, 6.0]).show(ui, |ui| {
                 for h in ["When", "Where", "Sets", "Could free", "Took", ""] {
-                    ui.label(RichText::new(h).color(t.muted).size(12.0));
+                    ui.label(RichText::new(h).color(t.muted).size(theme::ts::SMALL));
                 }
                 ui.end_row();
                 for r in &d.past {
-                    ui.label(RichText::new(activity::local_text(r.time)).font(theme::num(12.0)));
+                    ui.label(RichText::new(activity::local_text(r.time)).font(theme::num(theme::ts::SMALL)));
                     ui.add(egui::Label::new(visible(&r.root)).truncate()).on_hover_text(format!("{}\nFiles of at least {}", visible(&r.root), fmt_bytes(r.min_size)));
                     ui.label(fmt_count(r.sets as u64));
                     ui.label(RichText::new(fmt_bytes(r.wasted)).color(t.accent));
@@ -1544,7 +1544,7 @@ fn growth_body(ui: &mut Ui, t: &Tokens, v: &mut GrowthView, jump: &mut Option<St
     ui.add_space(8.0);
     card(t).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.label(RichText::new(if v.drive { "Used space on the drive" } else { "Size of the folder" }).font(theme::semibold(14.0)));
+        ui.label(RichText::new(if v.drive { "Used space on the drive" } else { "Size of the folder" }).font(theme::semibold(theme::ts::LEAD)));
         if v.chart.len() >= 2 {
             size_chart(ui, t, &v.chart, vec2(ui.available_width(), 160.0), true);
         } else {
@@ -1561,7 +1561,7 @@ fn growth_body(ui: &mut Ui, t: &Tokens, v: &mut GrowthView, jump: &mut Option<St
     card(t).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
-            ui.label(RichText::new("What grew").font(theme::semibold(14.0)));
+            ui.label(RichText::new("What grew").font(theme::semibold(theme::ts::LEAD)));
             for (i, name) in ["Last day", "Last week", "Last month"].into_iter().enumerate() {
                 ui.selectable_value(&mut v.tab, i, name);
             }
@@ -1580,7 +1580,7 @@ fn growth_body(ui: &mut Ui, t: &Tokens, v: &mut GrowthView, jump: &mut Option<St
                     fmt_delta(i128::from(ch.after_total) - i128::from(ch.before_total))
                 )).color(t.muted).size(12.0));
                 if ch.mixed_methods() {
-                    ui.add(egui::Label::new(RichText::new("One of these scans was a Fast scan and the other a folder walk: they count some things differently, so part of the change comes from the method.").color(theme::warn()).size(12.0)).wrap());
+                    ui.add(egui::Label::new(RichText::new("One of these scans was a Fast scan and the other a folder walk: they count some things differently, so part of the change comes from the method.").color(theme::warn()).size(theme::ts::SMALL)).wrap());
                 }
                 if ch.items.is_empty() {
                     ui.label(RichText::new("No folder changed by more than 1 MB (or 0.1% of the total).").color(t.faint));
@@ -1607,8 +1607,8 @@ fn growth_body(ui: &mut Ui, t: &Tokens, v: &mut GrowthView, jump: &mut Option<St
         ui.add_space(12.0);
         card(t).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(RichText::new("Log files that keep growing").font(theme::semibold(14.0)));
-            ui.label(RichText::new("They grew in every one of the last scans: space now, and SSD writes all the time. Check what writes them before deleting (a program may need its log).").color(t.muted).size(12.0));
+            ui.label(RichText::new("Log files that keep growing").font(theme::semibold(theme::ts::LEAD)));
+            ui.label(RichText::new("They grew in every one of the last scans: space now, and SSD writes all the time. Check what writes them before deleting (a program may need its log).").color(t.muted).size(theme::ts::SMALL));
             for g in v.logs.iter().take(8) {
                 let r = ui.add(egui::Label::new(format!("{} → {} over {} ({} scans) · {}", fmt_bytes(g.first), fmt_bytes(g.last), remember::gap_text(g.over), g.scans, g.path)).truncate().sense(Sense::click()));
                 if r.on_hover_text("Click to show it in the tree").clicked() {

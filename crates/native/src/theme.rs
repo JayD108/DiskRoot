@@ -328,6 +328,31 @@ pub fn cover<'a>(ctx: &egui::Context, names: impl IntoIterator<Item = &'a str>) 
     ctx.set_fonts(fonts.clone());
 }
 
+/// Text sizes: every label in the app uses one of these (no sizes made up
+/// on the spot), so the same kind of text looks the same everywhere.
+pub mod ts {
+    /// Tags, group headers in lists, keyboard hints.
+    pub const MICRO: f32 = 11.0;
+    /// Status bar, chips, small buttons, notes under a value.
+    pub const CAPTION: f32 = 11.5;
+    /// Secondary text, column heads, numbers in tables.
+    pub const SMALL: f32 = 12.0;
+    /// Body text and buttons.
+    pub const BODY: f32 = 13.0;
+    /// A value that matters (a size, a verdict).
+    pub const LEAD: f32 = 14.0;
+    /// A card's heading.
+    pub const SECTION: f32 = 15.0;
+    /// A dialog's or a screen's title.
+    pub const TITLE: f32 = 16.0;
+    /// Page titles.
+    pub const HEAD: f32 = 18.0;
+    /// Big numbers (the drive's size on Home).
+    pub const DISPLAY: f32 = 24.0;
+    /// The one huge number (items found while scanning).
+    pub const HERO: f32 = 30.0;
+}
+
 pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("semibold".into()))
 }

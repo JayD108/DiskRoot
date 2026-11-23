@@ -1888,14 +1888,14 @@ impl DiskRootApp {
                     self.open_security();
                 }
                 let cr = ui
-                    .add(egui::Button::new(RichText::new("Commands").size(11.5)).shortcut_text(RichText::new("Ctrl+K").size(11.0)).small())
+                    .add(egui::Button::new(RichText::new("Commands").size(theme::ts::CAPTION)).shortcut_text(RichText::new("Ctrl+K").size(theme::ts::MICRO)).small())
                     .on_hover_text("Every command and every folder, one search (Ctrl+K)");
                 self.anchors.insert("commands", cr.rect);
                 if cr.clicked() {
                     self.palette = Some(Palette::default());
                 }
                 if self.settings.show_resources && ui
-                    .add_enabled(self.scanned.is_some(), egui::Button::new(RichText::new("Free memory").size(11.5)).small())
+                    .add_enabled(self.scanned.is_some(), egui::Button::new(RichText::new("Free memory").size(theme::ts::CAPTION)).small())
                     .on_hover_text("Drop the scan from memory. It stays saved on this PC and reopens in about a second.")
                     .clicked()
                 {
@@ -1905,7 +1905,7 @@ impl DiskRootApp {
                     self.footprint.sample();
                     let f = self.footprint;
                     let r = ui
-                        .add(egui::Label::new(RichText::new(format!("●  RAM {} · CPU {:.0}%", fmt_bytes(f.ram), f.cpu_pct)).color(t.muted).size(11.5)).sense(Sense::click()))
+                        .add(egui::Label::new(RichText::new(format!("●  RAM {} · CPU {:.0}%", fmt_bytes(f.ram), f.cpu_pct)).color(t.muted).size(theme::ts::CAPTION)).sense(Sense::click()))
                         .on_hover_text(format!(
                             "DiskRoot's own use of this PC.\nRAM in use: {} (peak {}, private {}).\nCPU: {:.1}% of the whole processor.\nClick to see what uses the memory.",
                             fmt_bytes(f.ram),
@@ -1918,7 +1918,7 @@ impl DiskRootApp {
                         self.dialog = Some(Dialog::Memory);
                     }
                 }
-                if self.scanned.is_some() && ui.selectable_label(self.focus, RichText::new("Focus").size(11.5)).on_hover_text("Only the map (F; Esc to leave)").clicked() {
+                if self.scanned.is_some() && ui.selectable_label(self.focus, RichText::new("Focus").size(theme::ts::CAPTION)).on_hover_text("Only the map (F; Esc to leave)").clicked() {
                     self.focus = !self.focus;
                 }
             });
@@ -2003,11 +2003,11 @@ impl DiskRootApp {
                 }
             }
             let mut job = egui::text::LayoutJob::default();
-            let body = ui.style().text_styles.get(&egui::TextStyle::Button).cloned().unwrap_or_else(|| theme::regular(13.0));
+            let body = ui.style().text_styles.get(&egui::TextStyle::Button).cloned().unwrap_or_else(|| theme::regular(theme::ts::BODY));
             job.append("Save space", 0.0, egui::TextFormat { font_id: body, color: t.text, valign: Align::Center, ..Default::default() });
             let tip = match &self.badge {
                 Some((b, what)) => {
-                    job.append(&format!(" {} ", fmt_bytes(*b)), 7.0, egui::TextFormat { font_id: theme::semibold(11.5), color: t.accent_ink, background: t.accent, valign: Align::Center, ..Default::default() });
+                    job.append(&format!(" {} ", fmt_bytes(*b)), 7.0, egui::TextFormat { font_id: theme::semibold(theme::ts::CAPTION), color: t.accent_ink, background: t.accent, valign: Align::Center, ..Default::default() });
                     format!("Ways to save space. The biggest single one: {what}, {}. Click for all of them.", fmt_bytes(*b))
                 }
                 None => "Ways to save space: what could be compressed, and other ways to get space back".to_owned(),
@@ -2054,20 +2054,20 @@ impl DiskRootApp {
             // Right-hand items first; the message gets the space that's
             // left and is shortened (full text on hover) instead of overlapping.
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let muted = |s: String| RichText::new(s).color(t.muted).size(11.5);
-                ui.label(RichText::new("●  Read-only · no network").color(t.accent).size(11.5))
+                let muted = |s: String| RichText::new(s).color(t.muted).size(theme::ts::CAPTION);
+                ui.label(RichText::new("●  Read-only · no network").color(t.accent).size(theme::ts::CAPTION))
                     .on_hover_text("Scanning only reads. DiskRoot has no network code: it never connects anywhere.");
                 if self.watcher.is_some() {
                     ui.separator();
                     if self.live_overflow {
-                        ui.label(RichText::new("Many changes · press F5").color(theme::warn()).size(11.5))
+                        ui.label(RichText::new("Many changes · press F5").color(theme::warn()).size(theme::ts::CAPTION))
                             .on_hover_text("Windows reported more changes than it could list. Scan again for exact sizes.");
                     } else if !self.live_new.is_empty() {
                         let bytes: u64 = self.live_new.values().sum();
-                        ui.label(RichText::new(format!("{} new since the scan ({}) · F5 to include", fmt_count(self.live_new.len() as u64), fmt_bytes(bytes))).color(theme::warn()).size(11.5))
+                        ui.label(RichText::new(format!("{} new since the scan ({}) · F5 to include", fmt_count(self.live_new.len() as u64), fmt_bytes(bytes))).color(theme::warn()).size(theme::ts::CAPTION))
                             .on_hover_text("New files and folders appeared. Sizes of existing items update live; new ones join the tree at the next scan.");
                     } else {
-                        ui.label(RichText::new("Live").color(t.accent).size(11.5))
+                        ui.label(RichText::new("Live").color(t.accent).size(theme::ts::CAPTION))
                             .on_hover_text("Watching for changes: sizes update as files change or are deleted (no admin needed).");
                     }
                 }
@@ -2084,7 +2084,7 @@ impl DiskRootApp {
                     if s.unreadable > 0 {
                         ui.separator();
                         if ui
-                            .add(egui::Label::new(RichText::new(format!("{} unreadable", fmt_count(s.unreadable))).color(theme::cat_color(6)).size(11.5)).sense(Sense::click()))
+                            .add(egui::Label::new(RichText::new(format!("{} unreadable", fmt_count(s.unreadable))).color(theme::cat_color(6)).size(theme::ts::CAPTION)).sense(Sense::click()))
                             .on_hover_text("Some folders couldn't be read. Click to see which. Fast scan (admin) sees everything.")
                             .clicked()
                         {
@@ -2118,14 +2118,14 @@ impl DiskRootApp {
         let mut open_space = false;
         ui.horizontal_centered(|ui| {
             let full = b.nearly_full.as_ref().filter(|_| is_drive);
-            let l = ui.add(egui::Label::new(RichText::new(text).font(theme::semibold(12.5)).color(if full.is_some() { theme::warn() } else { t.text })).sense(Sense::click()));
+            let l = ui.add(egui::Label::new(RichText::new(text).font(theme::semibold(theme::ts::SMALL)).color(if full.is_some() { theme::warn() } else { t.text })).sense(Sense::click()));
             if is_drive && l.clicked() {
                 open_space = true;
             }
             let l = if is_drive { l.on_hover_text("Click: where every GB is") } else { l };
             if let Some(w) = full {
                 l.on_hover_text(w.as_str());
-                ui.label(RichText::new("⚠ nearly full").color(theme::warn()).size(12.0)).on_hover_text(w.as_str());
+                ui.label(RichText::new("⚠ nearly full").color(theme::warn()).size(theme::ts::SMALL)).on_hover_text(w.as_str());
             }
             ui.add_space(10.0);
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::click());
@@ -2162,7 +2162,7 @@ impl DiskRootApp {
                 p.rect_filled(rect.shrink2(vec2(0.5, 0.0)), CornerRadius::same(3), *color);
                 let pct = *bytes as f64 * 100.0 / capacity as f64;
                 let label = format!("{name} {pct:.0}%");
-                let g = p.layout_no_wrap(label, theme::regular(11.0), Color32::WHITE);
+                let g = p.layout_no_wrap(label, theme::regular(theme::ts::MICRO), Color32::WHITE);
                 if g.size().x + 8.0 < rect.width() {
                     p.galley(rect.center() - g.size() / 2.0, g, Color32::WHITE);
                 }
@@ -2238,7 +2238,7 @@ impl DiskRootApp {
             ui.vertical_centered(|ui| {
                 ui.add(egui::Image::new(&self.logo).fit_to_exact_size(vec2(56.0, 56.0)));
                 ui.add_space(6.0);
-                ui.label(RichText::new("See what's filling your drive").font(theme::semibold(18.0)));
+                ui.label(RichText::new("See what's filling your drive").font(theme::semibold(theme::ts::HEAD)));
                 ui.add_space(2.0);
                 ui.label(RichText::new("Pick a drive to scan. DiskRoot only reads names and sizes; nothing changes until you confirm.").color(t.muted));
                 ui.add_space(14.0);
@@ -2257,7 +2257,7 @@ impl DiskRootApp {
                     Frame::new().fill(t.field).stroke(stroke).corner_radius(CornerRadius::same(t.radius + 2)).inner_margin(Margin::same(14)).show(ui, |ui| {
                         ui.set_width(w - 28.0);
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(&letter).font(theme::semibold(16.0)).color(t.text));
+                            ui.label(RichText::new(&letter).font(theme::semibold(theme::ts::TITLE)).color(t.text));
                             if nearly {
                                 ui.label(RichText::new("Nearly full: updates and apps may fail").color(theme::cat_color(5)));
                             }
@@ -2274,7 +2274,7 @@ impl DiskRootApp {
                         ui.add_space(8.0);
                         let col_w = ((ui.available_width() - 24.0) / 3.0).max(80.0);
                         let head = |ui: &mut Ui, s: &str| {
-                            ui.label(RichText::new(s).font(theme::semibold(11.5)).color(t.muted));
+                            ui.label(RichText::new(s).font(theme::semibold(theme::ts::CAPTION)).color(t.muted));
                         };
                         ui.horizontal_top(|ui| {
                             // Space
@@ -2289,7 +2289,7 @@ impl DiskRootApp {
                                     let c = if frac > 0.9 { theme::cat_color(5) } else if frac > 0.75 { theme::warn() } else { t.accent };
                                     ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac, bar.height())), CornerRadius::same(4), c);
                                     ui.add_space(2.0);
-                                    ui.label(RichText::new(format!("{} free", fmt_bytes(free))).font(theme::semibold(14.0)).color(t.text));
+                                    ui.label(RichText::new(format!("{} free", fmt_bytes(free))).font(theme::semibold(theme::ts::LEAD)).color(t.text));
                                     ui.label(RichText::new(format!("of {} · {} used", fmt_bytes(total), fmt_pct(used, total))).color(t.muted));
                                 } else {
                                     ui.label(RichText::new("Size unknown").color(t.muted));
@@ -2328,7 +2328,7 @@ impl DiskRootApp {
                                 head(ui, "SAFE TO CLEAR");
                                 match self.settings.freeable.get(d.as_str()) {
                                     Some(&(bytes, when)) => {
-                                        ui.label(RichText::new(format!("About {}", fmt_bytes(bytes))).font(theme::semibold(14.0)).color(t.text));
+                                        ui.label(RichText::new(format!("About {}", fmt_bytes(bytes))).font(theme::semibold(theme::ts::LEAD)).color(t.text));
                                         ui.add(egui::Label::new(RichText::new(format!("caches and temp files, from your scan {}", remember::age_text(when))).color(t.muted)).wrap());
                                     }
                                     None => {
@@ -2383,7 +2383,7 @@ impl DiskRootApp {
             let p = ui.painter();
             p.rect_filled(hr, CornerRadius { nw: t.radius, ne: t.radius, sw: 0, se: 0 }, t.head);
             p.line_segment([hr.left_bottom(), hr.right_bottom()], Stroke::new(1.0, t.line));
-            let f = theme::regular(11.5);
+            let f = theme::regular(theme::ts::CAPTION);
             p.text(pos2(hr.min.x + 10.0, hr.center().y), Align2::LEFT_CENTER, "Name", f.clone(), t.muted);
             p.text(pos2(hr.min.x + cols.size_r, hr.center().y), Align2::RIGHT_CENTER, "Size on disk", f.clone(), t.muted);
             p.text(pos2(hr.min.x + cols.bar_x, hr.center().y), Align2::LEFT_CENTER, "% of parent", f.clone(), t.muted);
@@ -2477,12 +2477,12 @@ impl DiskRootApp {
                     let name_w = (rect.min.x + cols.size_r - 70.0 - x).max(30.0);
                     let name_col = if r.more > 0 { t.muted } else { t.text };
                     let shown = map::fit(&p, &r.name, 13.0, name_w).unwrap_or_default();
-                    let nr = p.text(pos2(x, y), Align2::LEFT_CENTER, shown, theme::regular(13.0), name_col);
+                    let nr = p.text(pos2(x, y), Align2::LEFT_CENTER, shown, theme::regular(theme::ts::BODY), name_col);
                     if !r.tag.is_empty() {
-                        p.text(pos2(nr.max.x + 6.0, y), Align2::LEFT_CENTER, r.tag, theme::regular(10.5), t.faint);
+                        p.text(pos2(nr.max.x + 6.0, y), Align2::LEFT_CENTER, r.tag, theme::regular(theme::ts::MICRO), t.faint);
                     }
                     if r.more == 0 {
-                        p.text(pos2(rect.min.x + cols.size_r, y), Align2::RIGHT_CENTER, fmt_bytes(r.bytes), theme::num(12.5), t.text);
+                        p.text(pos2(rect.min.x + cols.size_r, y), Align2::RIGHT_CENTER, fmt_bytes(r.bytes), theme::num(theme::ts::SMALL), t.text);
                         // % bar
                         let track = Rect::from_min_size(pos2(rect.min.x + cols.bar_x, y - 4.0), vec2(cols.bar_w, 8.0));
                         p.rect_filled(track, CornerRadius::same(2), t.head);
@@ -2498,11 +2498,11 @@ impl DiskRootApp {
                             pos2(track.max.x + 44.0, y),
                             Align2::RIGHT_CENTER,
                             fmt_pct(r.bytes, r.parent_bytes),
-                            theme::regular(11.5),
+                            theme::regular(theme::ts::CAPTION),
                             t.muted,
                         );
                         if cols.wide {
-                            p.text(pos2(rect.min.x + cols.files_r, y), Align2::RIGHT_CENTER, fmt_count(r.files), theme::regular(12.0), t.muted);
+                            p.text(pos2(rect.min.x + cols.files_r, y), Align2::RIGHT_CENTER, fmt_count(r.files), theme::regular(theme::ts::SMALL), t.muted);
                             // Change since the previous scan (folders, ≥ 1 MB).
                             let mut cat_x = rect.min.x + cols.cat_x;
                             if let (Some(prev), Some(s), Key_::Node(n)) = (&self.prev_sizes, &self.scanned, &r.key)
@@ -2514,12 +2514,12 @@ impl DiskRootApp {
                                 let d = i128::from(r.bytes) - i128::from(before);
                                 if d.unsigned_abs() >= 1 << 20 {
                                     let col = if d > 0 { theme::warn() } else { t.accent };
-                                    p.text(pos2(cat_x, y), Align2::LEFT_CENTER, fmt_delta(d), theme::semibold(12.0), col);
+                                    p.text(pos2(cat_x, y), Align2::LEFT_CENTER, fmt_delta(d), theme::semibold(theme::ts::SMALL), col);
                                     cat_x += 74.0;
                                 }
                             }
                             if let Some(c) = map::fit(&p, &r.cat_label, 12.0, rect.max.x - cat_x - 8.0) {
-                                p.text(pos2(cat_x, y), Align2::LEFT_CENTER, c, theme::regular(12.0), t.muted);
+                                p.text(pos2(cat_x, y), Align2::LEFT_CENTER, c, theme::regular(theme::ts::SMALL), t.muted);
                             }
                         }
                     }
@@ -2565,7 +2565,7 @@ impl DiskRootApp {
                                         }
                                     });
                                     ui.menu_button("This is…", |ui| {
-                                        ui.label(RichText::new("Teach DiskRoot what this folder is (a category in your own rules; never a safety label)").color(t.faint).size(11.5));
+                                        ui.label(RichText::new("Teach DiskRoot what this folder is (a category in your own rules; never a safety label)").color(t.faint).size(theme::ts::CAPTION));
                                         const ACTS: [&str; 5] = ["teach-0", "teach-1", "teach-2", "teach-3", "teach-4"];
                                         for (k, (label, _, _)) in diskroot_session::TEACH.iter().enumerate() {
                                             if ui.button(*label).clicked() {
@@ -3235,7 +3235,7 @@ impl DiskRootApp {
             p.rect_filled(hr, CornerRadius { nw: t.radius, ne: t.radius, sw: 0, se: 0 }, t.head);
             p.line_segment([hr.left_bottom(), hr.right_bottom()], Stroke::new(1.0, t.line));
             let Some(m) = &self.map else {
-                p.text(pos2(hr.min.x + 10.0, hr.center().y), Align2::LEFT_CENTER, "Map", theme::semibold(12.0), t.text);
+                p.text(pos2(hr.min.x + 10.0, hr.center().y), Align2::LEFT_CENTER, "Map", theme::semibold(theme::ts::SMALL), t.text);
                 return;
             };
             if m.nodes.is_empty() {
@@ -3246,7 +3246,7 @@ impl DiskRootApp {
             // When they don't fit, the first levels give way to "…".
             let crumbs: Vec<(Key_, String)> = if m.crumbs.is_empty() { vec![(Key_::Node(0), root.name.clone())] } else { m.crumbs.clone() };
             let sep = "  ›  ";
-            let width = |text: &str, last: bool| p.layout_no_wrap(text.to_owned(), if last { theme::semibold(12.0) } else { theme::regular(12.0) }, t.text).size().x;
+            let width = |text: &str, last: bool| p.layout_no_wrap(text.to_owned(), if last { theme::semibold(theme::ts::SMALL) } else { theme::regular(theme::ts::SMALL) }, t.text).size().x;
             let sep_w = width(sep, false);
             // Room left of the switches (2.5D, Size, Growth, Reclaimable ≈ 340 px);
             // the size text only shows when there's room besides.
@@ -3261,9 +3261,9 @@ impl DiskRootApp {
             }
             let mut x = hr.min.x + 10.0;
             if first > 0 {
-                p.text(pos2(x, hr.center().y), Align2::LEFT_CENTER, "…", theme::regular(12.0), t.faint);
+                p.text(pos2(x, hr.center().y), Align2::LEFT_CENTER, "…", theme::regular(theme::ts::SMALL), t.faint);
                 x += width("…", false);
-                p.text(pos2(x, hr.center().y), Align2::LEFT_CENTER, sep, theme::regular(12.0), t.faint);
+                p.text(pos2(x, hr.center().y), Align2::LEFT_CENTER, sep, theme::regular(theme::ts::SMALL), t.faint);
                 x += sep_w;
             }
             for (i, (key, name)) in crumbs.iter().enumerate().skip(first) {
@@ -3273,7 +3273,7 @@ impl DiskRootApp {
                 let text = if last { map::fit(p, &shown, 12.0, (hr.max.x - 380.0 - x).max(40.0)).unwrap_or_default() } else { shown.clone() };
                 let w = width(&text, last);
                 if last {
-                    p.text(pos2(x, hr.center().y), Align2::LEFT_CENTER, text, theme::semibold(12.0), t.text);
+                    p.text(pos2(x, hr.center().y), Align2::LEFT_CENTER, text, theme::semibold(theme::ts::SMALL), t.text);
                     x += w;
                 } else {
                     let r = Rect::from_min_size(pos2(x - 2.0, hr.min.y + 3.0), vec2(w + 4.0, hr.height() - 6.0));
@@ -3283,12 +3283,12 @@ impl DiskRootApp {
                     if hovered {
                         p.rect_filled(r, CornerRadius::same(3), t.hover);
                     }
-                    p.text(pos2(x, hr.center().y), Align2::LEFT_CENTER, text, theme::regular(12.0), if hovered { t.text } else { t.muted });
+                    p.text(pos2(x, hr.center().y), Align2::LEFT_CENTER, text, theme::regular(theme::ts::SMALL), if hovered { t.text } else { t.muted });
                     if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                         crumb_go = Some(key.clone());
                     }
                     x += w;
-                    p.text(pos2(x, hr.center().y), Align2::LEFT_CENTER, sep, theme::regular(12.0), t.faint);
+                    p.text(pos2(x, hr.center().y), Align2::LEFT_CENTER, sep, theme::regular(theme::ts::SMALL), t.faint);
                     x += sep_w;
                 }
             }
@@ -3302,7 +3302,7 @@ impl DiskRootApp {
                 (1, "Growth", "Colour what grew or shrank since the previous scan"),
                 (0, "Size", "Colour by category"),
             ] {
-                if strip.selectable_label(mode == v, RichText::new(label).size(11.5)).on_hover_text(tip).clicked() {
+                if strip.selectable_label(mode == v, RichText::new(label).size(theme::ts::CAPTION)).on_hover_text(tip).clicked() {
                     mode = v;
                 }
             }
@@ -3317,8 +3317,8 @@ impl DiskRootApp {
             let by_cat = self.settings.by_category;
             let tilt = self.settings.map_25d;
             let style = format!("{}{} ▾", if tm { "▦ Treemap" } else { "◎ Sunburst" }, if tilt { " 2.5D" } else { "" });
-            strip.menu_button(RichText::new(style).size(11.5), |ui| {
-                ui.label(RichText::new("Shape").font(theme::semibold(12.0)).color(t.muted));
+            strip.menu_button(RichText::new(style).size(theme::ts::CAPTION), |ui| {
+                ui.label(RichText::new("Shape").font(theme::semibold(theme::ts::SMALL)).color(t.muted));
                 if ui.radio(!tm, "◎ Sunburst (rings)").on_hover_text("The middle is this folder, each ring one level deeper").clicked() {
                     shape_go = Some(false);
                     ui.close();
@@ -3333,7 +3333,7 @@ impl DiskRootApp {
                     ui.close();
                 }
                 ui.separator();
-                ui.label(RichText::new("Group the map and the list").font(theme::semibold(12.0)).color(t.muted));
+                ui.label(RichText::new("Group the map and the list").font(theme::semibold(theme::ts::SMALL)).color(t.muted));
                 if ui.radio(!by_cat, "By location (folders)").clicked() {
                     group_go = Some(false);
                     ui.close();
@@ -3346,7 +3346,7 @@ impl DiskRootApp {
             let size_text = format!("{} · {}", fmt_bytes(root.size), fmt_files(u64::from(root.files)));
             let size_w = width(&size_text, false) + 16.0;
             if strip.min_rect().min.x - size_w > crumbs_end + 12.0 {
-                p.text(pos2(strip.min_rect().min.x - 10.0, hr.center().y), Align2::RIGHT_CENTER, size_text, theme::regular(11.5), t.muted);
+                p.text(pos2(strip.min_rect().min.x - 10.0, hr.center().y), Align2::RIGHT_CENTER, size_text, theme::regular(theme::ts::CAPTION), t.muted);
             }
 
             // Legend (bottom)
@@ -3416,7 +3416,7 @@ impl DiskRootApp {
             }
             // Nothing to draw: say so instead of an empty area.
             if m.nodes.len() <= 1 || m.nodes[0].size == 0 {
-                ui.painter_at(map_rect).text(map_rect.center(), Align2::CENTER_CENTER, if m.nodes[0].size == 0 { "Empty: nothing here takes space" } else { "Nothing inside to show" }, theme::regular(13.0), t.muted);
+                ui.painter_at(map_rect).text(map_rect.center(), Align2::CENTER_CENTER, if m.nodes[0].size == 0 { "Empty: nothing here takes space" } else { "Nothing inside to show" }, theme::regular(theme::ts::BODY), t.muted);
             }
             let mode_hint = match m.mode {
                 1 if self.prev_sizes.is_none() => Some("Growth needs a previous scan of this place: it shows from the next scan on (File → Remember scans)"),
@@ -3431,15 +3431,15 @@ impl DiskRootApp {
                 MapLayout::Sun { center, arcs, .. } => center.x - arcs.iter().map(|a| a.ro).fold(0.0, f32::max) - map_rect.min.x - 16.0,
                 MapLayout::Tree { .. } => 0.0,
             };
-            let fits = |h: &str| ui.painter().layout_no_wrap(h.to_owned(), theme::regular(11.0), t.faint).size().x <= room;
+            let fits = |h: &str| ui.painter().layout_no_wrap(h.to_owned(), theme::regular(theme::ts::MICRO), t.faint).size().x <= room;
             if kind == Kind::Treemap || !mode_hint.is_none_or(fits) {
                 // no room
             } else if let Some(h) = mode_hint {
-                ui.painter_at(map_rect).text(map_rect.left_top() + vec2(10.0, 8.0), Align2::LEFT_TOP, h, theme::regular(11.0), if m.mode == 1 && self.prev_sizes.is_none() { theme::warn() } else { t.faint });
+                ui.painter_at(map_rect).text(map_rect.left_top() + vec2(10.0, 8.0), Align2::LEFT_TOP, h, theme::regular(theme::ts::MICRO), if m.mode == 1 && self.prev_sizes.is_none() { theme::warn() } else { t.faint });
             } else if kind == Kind::Sunburst {
                 let hint = if m.up.is_some() { "Click a piece to open it · the centre goes up · Ctrl+K: everything" } else { "Click a piece to open it · Ctrl+K: everything" };
                 let hint = if fits(hint) { hint } else if fits("Click a piece to open it") { "Click a piece to open it" } else { "" };
-                ui.painter_at(map_rect).text(map_rect.left_top() + vec2(10.0, 8.0), Align2::LEFT_TOP, hint, theme::regular(11.0), t.faint);
+                ui.painter_at(map_rect).text(map_rect.left_top() + vec2(10.0, 8.0), Align2::LEFT_TOP, hint, theme::regular(theme::ts::MICRO), t.faint);
             }
 
 
@@ -3460,7 +3460,7 @@ impl DiskRootApp {
                     let root_size = m.nodes[0].size;
                     let label = self.cat_label(if n.own_cat == u8::MAX { n.cat } else { n.own_cat }, n.sub);
                     let resp = resp.on_hover_ui_at_pointer(|ui| {
-                        ui.label(RichText::new(&n.name).font(theme::semibold(13.0)));
+                        ui.label(RichText::new(&n.name).font(theme::semibold(theme::ts::BODY)));
                         ui.label(RichText::new(format!("{}  ·  {} of {}", fmt_bytes(n.size), fmt_pct(n.size, root_size), m.nodes[0].name)).color(t.muted));
                         if let Some(sum) = &self.summary
                             && sum.on_disk > root_size
@@ -3477,10 +3477,10 @@ impl DiskRootApp {
                             ui.label(RichText::new(format!("{what}: {}", diskroot_session::age_text(diskroot_session::today_days(), n.mtime))).color(t.muted));
                         }
                         if !n.hint.is_empty() {
-                            ui.label(RichText::new(&n.hint).color(t.faint).size(11.5));
+                            ui.label(RichText::new(&n.hint).color(t.faint).size(theme::ts::CAPTION));
                         }
                         if let Some(note) = m.notes.get(i).filter(|x| !x.is_empty()) {
-                            ui.label(RichText::new(note).color(t.text).size(12.0));
+                            ui.label(RichText::new(note).color(t.text).size(theme::ts::SMALL));
                         }
                     });
                     if resp.clicked() && n.merged == 0 {
@@ -3521,11 +3521,11 @@ impl DiskRootApp {
                     lp.rect_filled(Rect::from_center_size(pos2(cx + 6.0, cy), vec2(10.0, 10.0)), CornerRadius::same(2), theme::swatch(*cat));
                     // The name gives way to the number when the column is narrow.
                     let value = format!("{} · {}", fmt_bytes(*bytes), fmt_pct(*bytes, *total));
-                    let value_w = lp.layout_no_wrap(value.clone(), theme::regular(11.5), t.muted).size().x;
+                    let value_w = lp.layout_no_wrap(value.clone(), theme::regular(theme::ts::CAPTION), t.muted).size().x;
                     if let Some(shown) = map::fit(lp, name, 12.0, (col_w - 12.0 - value_w - 17.0 - 10.0).max(20.0)) {
-                        lp.text(pos2(cx + 17.0, cy), Align2::LEFT_CENTER, shown, theme::regular(12.0), t.text);
+                        lp.text(pos2(cx + 17.0, cy), Align2::LEFT_CENTER, shown, theme::regular(theme::ts::SMALL), t.text);
                     }
-                    lp.text(pos2(cx + col_w - 12.0, cy), Align2::RIGHT_CENTER, value, theme::regular(11.5), t.muted);
+                    lp.text(pos2(cx + col_w - 12.0, cy), Align2::RIGHT_CENTER, value, theme::regular(theme::ts::CAPTION), t.muted);
                     if resp.clicked() {
                         clicked_leg = Some(key.clone());
                     }
@@ -3534,7 +3534,8 @@ impl DiskRootApp {
                 if let Some(k) = clicked_leg
                     && let Key_::Cat(key) = &k
                     && !key.starts_with("age:")
-                    && !key.starts_with("mode:") {
+                    && !key.starts_with("mode:")
+                    && !key.starts_with("fold:") {
                         if !self.settings.by_category {
                             self.settings.by_category = true;
                             self.regroup();
@@ -3739,6 +3740,17 @@ impl DiskRootApp {
             }
             MapRoot::Cat(_) => {}
         }
+        // Rows under 1% are noise ("AI & data 5 MB · 0.0%"): two or more of
+        // them become one "Other" row. (One alone stays: it's still a name.)
+        let small = |r: &(Key_, String, u64, u64, u8)| r.3 > 0 && r.2.saturating_mul(100) < r.3;
+        if out.iter().filter(|r| small(r)).count() >= 2 {
+            let total = out.first().map_or(0, |r| r.3);
+            let (few, keep): (Vec<_>, Vec<_>) = out.into_iter().partition(|r| small(r));
+            let bytes: u64 = few.iter().map(|r| r.2).sum();
+            let other = cats.iter().position(|c| c.name.eq_ignore_ascii_case("other")).and_then(|i| u8::try_from(i).ok()).unwrap_or(0);
+            out = keep;
+            out.push((Key_::Cat("fold:other".into()), format!("{} more, each under 1%", few.len()), bytes, total, other));
+        }
         out
     }
 
@@ -3774,7 +3786,7 @@ impl DiskRootApp {
             let mut mark_key: Option<String> = None;
             if !self.marked.is_empty() {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("{} items marked", self.marked.len())).font(theme::semibold(13.0)).color(theme::warn()));
+                    ui.label(RichText::new(format!("{} items marked", self.marked.len())).font(theme::semibold(theme::ts::BODY)).color(theme::warn()));
                     if ui.add_enabled(self.job.is_none(), egui::Button::new(format!("Review {} marked…", self.marked.len()))).on_hover_text("Check each one and decide: delete or keep").clicked() {
                         action = Some(("review-marked", 0));
                     }
@@ -3811,12 +3823,16 @@ impl DiskRootApp {
                             // Leave room for the buttons on the right (170 px + gap);
                             // long names and paths wrap instead of running under them.
                             ui.set_max_width((ui.available_width() - 190.0).max(220.0));
-                            egui::Grid::new("props").num_columns(2).spacing([14.0, 1.0]).show(ui, |ui| {
+                            // A grid sizes its columns to their content; cap them so
+                            // long values (size history, safety notes) wrap instead of
+                            // pushing the buttons out of the pane.
+                            let value_w = (ui.max_rect().width() - 120.0).max(120.0);
+                            egui::Grid::new("props").num_columns(2).spacing([14.0, 1.0]).max_col_width(value_w).show(ui, |ui| {
                                 let key = |ui: &mut Ui, s: &str| {
                                     ui.label(RichText::new(s).color(t.muted));
                                 };
                                 key(ui, "Name");
-                                ui.add(egui::Label::new(RichText::new(&info.name).font(theme::semibold(13.0))).wrap());
+                                ui.add(egui::Label::new(RichText::new(&info.name).font(theme::semibold(theme::ts::BODY))).wrap());
                                 ui.end_row();
                                 key(ui, "Location");
                                 ui.add(egui::Label::new(&info.path).wrap());
@@ -3884,7 +3900,7 @@ impl DiskRootApp {
                                 ui.end_row();
                                 key(ui, "Safe to delete?");
                                 ui.horizontal_wrapped(|ui| {
-                                    ui.label(RichText::new(label).color(color).font(theme::semibold(13.0)));
+                                    ui.label(RichText::new(label).color(color).font(theme::semibold(theme::ts::BODY)));
                                     if let Some(n) = &note {
                                         ui.label(RichText::new(n).color(t.muted));
                                     }
@@ -3915,7 +3931,7 @@ impl DiskRootApp {
                             if let Some(why) = &why_not {
                                 ui.allocate_ui(vec2(170.0, 0.0), |ui| {
                                     ui.set_max_width(170.0);
-                                    ui.add(egui::Label::new(RichText::new(why).color(t.muted).size(11.5)).wrap());
+                                    ui.add(egui::Label::new(RichText::new(why).color(t.muted).size(theme::ts::CAPTION)).wrap());
                                 });
                             }
                             if let Some(a) = tool {
@@ -3951,7 +3967,7 @@ impl DiskRootApp {
                 Some(Key_::Cat(k)) => {
                     let (bytes, files) = s.cat_total(k);
                     let name = self.rows.as_ref().and_then(|rs| rs.iter().find(|r| &r.key == self.selected.as_ref().unwrap())).map(|r| r.name.clone()).unwrap_or_default();
-                    ui.label(RichText::new(name).font(theme::semibold(14.0)));
+                    ui.label(RichText::new(name).font(theme::semibold(theme::ts::LEAD)));
                     ui.label(format!("{} on disk · {}", fmt_bytes(bytes), fmt_files(files)));
                     ui.label(
                         RichText::new("Expand it to see the places holding these bytes. Select a place to see what it is and whether it's safe to remove.")
@@ -4031,7 +4047,7 @@ impl DiskRootApp {
                 // Fixed size from the first frame, so the dialog doesn't jump.
                 ui.set_width(420.0);
                 ui.set_min_height(96.0);
-                ui.label(RichText::new(title).font(theme::semibold(14.0)));
+                ui.label(RichText::new(title).font(theme::semibold(theme::ts::LEAD)));
                 ui.add_space(6.0);
                 ui.label(RichText::new(text).color(t.muted));
                 ui.add_space(10.0);
@@ -4076,7 +4092,7 @@ impl DiskRootApp {
                 }
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("{secs:.0} s")).color(t.faint).size(11.5));
+                    ui.label(RichText::new(format!("{secs:.0} s")).color(t.faint).size(theme::ts::CAPTION));
                     if matches!(job.kind, JobKind::Fast(_)) {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             let stopping = job.cancel.load(Ordering::Relaxed);
@@ -4116,10 +4132,10 @@ impl DiskRootApp {
             ui.set_width(if wide { 720.0 } else { 500.0 });
             match d {
                 Dialog::Schedule(v) => {
-                    ui.label(RichText::new("Scheduled scans").font(theme::semibold(16.0)));
+                    ui.label(RichText::new("Scheduled scans").font(theme::semibold(theme::ts::TITLE)));
                     ui.add(egui::Label::new(RichText::new("DiskRoot can scan by itself and remember the result, so when you open it you see what changed. Each run is a normal scan (no admin, no window) at background priority; it saves the result and exits, so nothing stays in memory between scans. Fast scan stays something you start here.").color(t.muted)).wrap());
                     ui.add_space(6.0);
-                    ui.checkbox(&mut v.on, RichText::new("Scan automatically").font(theme::semibold(13.5)));
+                    ui.checkbox(&mut v.on, RichText::new("Scan automatically").font(theme::semibold(theme::ts::BODY)));
                     ui.add_enabled_ui(v.on, |ui| {
                         let label = |m: u32| {
                             let base = if m < 60 { format!("{m} minutes") } else if m == 60 { "1 hour".into() } else if m < 1440 { format!("{} hours", m / 60) } else { "1 day".into() };
@@ -4133,7 +4149,7 @@ impl DiskRootApp {
                                 }
                             });
                         });
-                        ui.add(egui::Label::new(RichText::new(v.rec.1.as_str()).color(t.faint).size(12.0)).wrap());
+                        ui.add(egui::Label::new(RichText::new(v.rec.1.as_str()).color(t.faint).size(theme::ts::SMALL)).wrap());
                         ui.add_space(4.0);
                         ui.label("What to scan:");
                         let mut remove: Option<usize> = None;
@@ -4194,7 +4210,7 @@ impl DiskRootApp {
                         !pf.is_empty() && e.to_string_lossy().to_lowercase().starts_with(&pf)
                     });
                     if !installed_copy {
-                        ui.add(egui::Label::new(RichText::new("This is a portable copy: the scheduled task runs this very file. If you move or delete it, turn scheduled scans off here first (no uninstaller removes the task for you).").color(theme::warn()).size(12.0)).wrap());
+                        ui.add(egui::Label::new(RichText::new("This is a portable copy: the scheduled task runs this very file. If you move or delete it, turn scheduled scans off here first (no uninstaller removes the task for you).").color(theme::warn()).size(theme::ts::SMALL)).wrap());
                     }
                     let state = if v.installed { "On: a Windows scheduled task runs it for your account." } else { "Off." };
                     ui.label(RichText::new(state).color(if v.installed { t.accent } else { t.muted }));
@@ -4203,7 +4219,7 @@ impl DiskRootApp {
                     }
                     if !v.runs.is_empty() {
                         ui.add_space(4.0);
-                        ui.label(RichText::new("Recent background scans").font(theme::semibold(13.0)));
+                        ui.label(RichText::new("Recent background scans").font(theme::semibold(theme::ts::BODY)));
                         egui::Grid::new("sched-runs").num_columns(5).striped(true).spacing([12.0, 3.0]).show(ui, |ui| {
                             for r in v.runs.iter().rev().take(6) {
                                 ui.label(RichText::new(remember::age_text(r.time)).color(t.muted));
@@ -4228,7 +4244,7 @@ impl DiskRootApp {
                 }
                 Dialog::Space(r) => {
                     let drive = r.root.trim_end_matches('\\').to_owned();
-                    ui.label(RichText::new(format!("Where the space on {drive} is")).font(theme::semibold(16.0)));
+                    ui.label(RichText::new(format!("Where the space on {drive} is")).font(theme::semibold(theme::ts::TITLE)));
                     ui.add_space(4.0);
                     let gap = r.not_counted();
                     let mut rows: Vec<(String, String)> = vec![
@@ -4280,17 +4296,17 @@ impl DiskRootApp {
                     };
                     ui.add(egui::Label::new(RichText::new(text).color(t.muted)).wrap());
                     if r.hardlink_names > 0 {
-                        ui.add(egui::Label::new(RichText::new(format!("{} extra names of hardlinked files (the same data under two names, mostly in Windows' WinSxS) are counted once: 0 B each.", fmt_count(r.hardlink_names))).color(t.faint).size(12.0)).wrap());
+                        ui.add(egui::Label::new(RichText::new(format!("{} extra names of hardlinked files (the same data under two names, mostly in Windows' WinSxS) are counted once: 0 B each.", fmt_count(r.hardlink_names))).color(t.faint).size(theme::ts::SMALL)).wrap());
                     }
                 }
                 Dialog::Unreadable(v) => {
                     let (root, paths) = (&v.0, &v.1);
-                    ui.label(RichText::new(format!("Folders this scan couldn't read ({})", fmt_count(paths.len() as u64))).font(theme::semibold(16.0)));
+                    ui.label(RichText::new(format!("Folders this scan couldn't read ({})", fmt_count(paths.len() as u64))).font(theme::semibold(theme::ts::TITLE)));
                     ui.add(egui::Label::new(RichText::new("Windows didn't let a normal (no-admin) scan open these: folders only administrators or the system may read, like System Volume Information, other users' folders and WindowsApps. Their size isn't in the totals. Fast scan (admin, read-only) includes them.").color(t.muted)).wrap());
                     ui.add_space(4.0);
                     egui::ScrollArea::vertical().id_salt("unreadable").max_height(380.0).show(ui, |ui| {
                         for p in paths {
-                            let r = ui.add(egui::Label::new(RichText::new(visible(p)).monospace().size(12.0)).truncate().sense(Sense::click()));
+                            let r = ui.add(egui::Label::new(RichText::new(visible(p)).monospace().size(theme::ts::SMALL)).truncate().sense(Sense::click()));
                             if r.on_hover_text("Click to show it in the tree").clicked() {
                                 jump = rel_of(root, p);
                             }
@@ -4300,7 +4316,7 @@ impl DiskRootApp {
                 Dialog::Memory => {
                     self.footprint.sample();
                     let f = self.footprint;
-                    ui.label(RichText::new("DiskRoot's memory and CPU").font(theme::semibold(16.0)));
+                    ui.label(RichText::new("DiskRoot's memory and CPU").font(theme::semibold(theme::ts::TITLE)));
                     ui.add_space(4.0);
                     facts(ui, &t, &[
                         ("RAM in use", &format!("{} (the most so far: {})", fmt_bytes(f.ram), fmt_bytes(f.peak))),
@@ -4312,7 +4328,7 @@ impl DiskRootApp {
                         let rep = s.memory_report();
                         let sum = |keys: &[&str]| rep.iter().filter(|(k, _)| keys.iter().any(|p| k.starts_with(p))).map(|r| r.1 as u64).sum::<u64>();
                         let n = s.summary().files + s.summary().dirs;
-                        ui.label(RichText::new(format!("The scan on screen ({} items) holds:", fmt_count(n))).font(theme::semibold(13.0)));
+                        ui.label(RichText::new(format!("The scan on screen ({} items) holds:", fmt_count(n))).font(theme::semibold(theme::ts::BODY)));
                         facts(ui, &t, &[
                             ("Names", &fmt_bytes(sum(&["index.names", "index.name_"]))),
                             ("Sizes and dates", &fmt_bytes(sum(&["index.size", "index.alloc", "index.files", "index.mtime", "index.added", "index.flags"]))),
@@ -4342,14 +4358,14 @@ impl DiskRootApp {
                         self.settings.save();
                     }
                     if !self.settings.remember_scans {
-                        ui.label(RichText::new("Remembering scans is off (File menu), so freeing memory means scanning again later.").color(theme::warn()).size(12.0));
+                        ui.label(RichText::new("Remembering scans is off (File menu), so freeing memory means scanning again later.").color(theme::warn()).size(theme::ts::SMALL));
                     }
                 }
                 Dialog::About => {
                     ui.horizontal(|ui| {
                         ui.add(egui::Image::new(&self.logo).fit_to_exact_size(vec2(56.0, 56.0)));
                         ui.vertical(|ui| {
-                            ui.label(RichText::new("DiskRoot").font(theme::semibold(18.0)));
+                            ui.label(RichText::new("DiskRoot").font(theme::semibold(theme::ts::HEAD)));
                             ui.label(format!("Version {} · disk space analyzer for Windows", env!("CARGO_PKG_VERSION")));
                         });
                     });
@@ -4357,7 +4373,7 @@ impl DiskRootApp {
                     ui.label(RichText::new("DiskRoot gets to the root of what fills your drive: from the raw file table up to plain-English answers.").color(t.muted));
                 }
                 Dialog::Welcome => {
-                    ui.label(RichText::new("Welcome to DiskRoot").font(theme::semibold(16.0)));
+                    ui.label(RichText::new("Welcome to DiskRoot").font(theme::semibold(theme::ts::TITLE)));
                     ui.add_space(4.0);
                     ui.label(RichText::new("A disk space analyzer that shows what fills your drive, and helps you get space back safely.").color(t.muted));
                     ui.add_space(10.0);
@@ -4368,14 +4384,14 @@ impl DiskRootApp {
                     ] {
                         ui.horizontal_wrapped(|ui| {
                             ui.label(RichText::new("✔").color(t.accent));
-                            ui.label(RichText::new(k).font(theme::semibold(13.0)));
+                            ui.label(RichText::new(k).font(theme::semibold(theme::ts::BODY)));
                             ui.label(RichText::new(v).color(t.muted));
                         });
                         ui.add_space(2.0);
                     }
                 }
                 Dialog::Security(ig) => {
-                    ui.label(RichText::new("Security & privacy").font(theme::semibold(16.0)));
+                    ui.label(RichText::new("Security & privacy").font(theme::semibold(theme::ts::TITLE)));
                     ui.add_space(8.0);
                     facts(ui, &t, &[
                         ("Network", "DiskRoot makes no network connections and sends nothing anywhere. The native app has no browser engine."),
@@ -4388,7 +4404,7 @@ impl DiskRootApp {
                     ]);
                     ui.add_space(10.0);
                     ui.separator();
-                    ui.label(RichText::new("This copy of DiskRoot").font(theme::semibold(13.5)));
+                    ui.label(RichText::new("This copy of DiskRoot").font(theme::semibold(theme::ts::BODY)));
                     ui.add_space(4.0);
                     let (sig_ok, sig_text) = match ig.signature {
                         SignatureState::Signed => (true, "Digitally signed, and Windows trusts the signature."),
@@ -4402,15 +4418,15 @@ impl DiskRootApp {
                     };
                     for (ok, k, v) in [(ig.protected_location, "Location", loc_text), (sig_ok, "Signature", sig_text)] {
                         let (mark, col) = if ok { ("✔", t.accent) } else { ("!", theme::warn()) };
-                        ui.label(RichText::new(format!("{mark}  {k}")).font(theme::semibold(13.0)).color(col));
+                        ui.label(RichText::new(format!("{mark}  {k}")).font(theme::semibold(theme::ts::BODY)).color(col));
                         ui.add(egui::Label::new(RichText::new(v).color(t.muted)).wrap());
                         ui.add_space(4.0);
                     }
                     ui.add_space(2.0);
-                    ui.label(RichText::new(&ig.exe).monospace().size(11.0).color(t.faint));
+                    ui.label(RichText::new(&ig.exe).monospace().size(theme::ts::MICRO).color(t.faint));
                 }
                 Dialog::Changes(ch) => {
-                    ui.label(RichText::new("What changed").font(theme::semibold(16.0)));
+                    ui.label(RichText::new("What changed").font(theme::semibold(theme::ts::TITLE)));
                     ui.label(
                         RichText::new(format!(
                             "{} · previous scan {} → latest scan {} ({} later)",
@@ -4449,7 +4465,7 @@ impl DiskRootApp {
                         egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                             egui::Grid::new("changes").num_columns(4).striped(true).spacing([14.0, 5.0]).show(ui, |ui| {
                                 for h in ["Change", "Now", "Before", "Folder"] {
-                                    ui.label(RichText::new(h).color(t.muted).size(12.0));
+                                    ui.label(RichText::new(h).color(t.muted).size(theme::ts::SMALL));
                                 }
                                 ui.end_row();
                                 for c in &ch.items {
@@ -4471,7 +4487,7 @@ impl DiskRootApp {
                     }
                 }
                 Dialog::ConfirmMany(c) => {
-                    ui.label(RichText::new(format!("Move {} items to the Recycle Bin?", c.items.len())).font(theme::semibold(15.0)));
+                    ui.label(RichText::new(format!("Move {} items to the Recycle Bin?", c.items.len())).font(theme::semibold(theme::ts::SECTION)));
                     ui.label(format!("Frees {} in total", fmt_bytes(c.bytes)));
                     ui.add_space(6.0);
                     egui::ScrollArea::vertical().id_salt("many").max_height(160.0).show(ui, |ui| {
@@ -4484,7 +4500,7 @@ impl DiskRootApp {
                     });
                     if !c.refused.is_empty() {
                         ui.add_space(6.0);
-                        ui.label(RichText::new(format!("Skipped ({}): DiskRoot won't delete these", c.refused.len())).font(theme::semibold(13.0)).color(theme::cat_color(5)));
+                        ui.label(RichText::new(format!("Skipped ({}): DiskRoot won't delete these", c.refused.len())).font(theme::semibold(theme::ts::BODY)).color(theme::cat_color(5)));
                         for (name, why) in &c.refused {
                             ui.add(egui::Label::new(RichText::new(format!("{}: {why}", visible(name))).color(t.muted)).wrap());
                         }
@@ -4519,11 +4535,11 @@ impl DiskRootApp {
                     }
                 }
                 Dialog::Files(fv) => {
-                    ui.label(RichText::new("Largest files & file types").font(theme::semibold(16.0)));
+                    ui.label(RichText::new("Largest files & file types").font(theme::semibold(theme::ts::TITLE)));
                     ui.add_space(6.0);
                     ui.columns(2, |cols| {
                         let ui = &mut cols[0];
-                        ui.label(RichText::new("Largest files").font(theme::semibold(13.0)));
+                        ui.label(RichText::new("Largest files").font(theme::semibold(theme::ts::BODY)));
                         let r = ui.add(TextEdit::singleline(&mut fv.query).hint_text("Search file names").desired_width(f32::INFINITY));
                         if r.changed() {
                             requery = Some(fv.query.clone());
@@ -4545,11 +4561,11 @@ impl DiskRootApp {
                             }
                         });
                         let ui = &mut cols[1];
-                        ui.label(RichText::new("File types").font(theme::semibold(13.0)));
+                        ui.label(RichText::new("File types").font(theme::semibold(theme::ts::BODY)));
                         egui::ScrollArea::vertical().id_salt("file-types").max_height(410.0).show(ui, |ui| {
                             egui::Grid::new("types").num_columns(3).striped(true).spacing([12.0, 4.0]).show(ui, |ui| {
                                 for h in ["Type", "Size", "Files"] {
-                                    ui.label(RichText::new(h).color(t.muted).size(12.0));
+                                    ui.label(RichText::new(h).color(t.muted).size(theme::ts::SMALL));
                                 }
                                 ui.end_row();
                                 for ty in &fv.types {
@@ -4564,7 +4580,7 @@ impl DiskRootApp {
                 }
                 Dialog::Rules => {
                     let st = &self.rules_status;
-                    ui.label(RichText::new("Custom rules").font(theme::semibold(16.0)));
+                    ui.label(RichText::new("Custom rules").font(theme::semibold(theme::ts::TITLE)));
                     ui.add_space(4.0);
                     ui.add(egui::Label::new(RichText::new("Add your own categories for folders and file types, e.g. \"Projects/*/out\" as Dev stuff > My build output. Your rules can't change what DiskRoot protects: they never apply where a built-in rule matches or inside protected places like C:\\Windows, and their safety label stays \"Your rule\".").color(t.muted)).wrap());
                     ui.add_space(8.0);
@@ -4573,13 +4589,13 @@ impl DiskRootApp {
                         (None, true) => ("✔", t.accent, format!("{} of your own rules loaded", st.user_rules)),
                         (None, false) => ("·", t.muted, "No rules file yet. \"Edit rules\" creates one with an example.".to_owned()),
                     };
-                    ui.label(RichText::new(format!("{mark}  {text}")).color(col).font(theme::semibold(13.0)));
+                    ui.label(RichText::new(format!("{mark}  {text}")).color(col).font(theme::semibold(theme::ts::BODY)));
                     if let Some(p) = &st.path {
-                        ui.label(RichText::new(p.display().to_string()).monospace().size(11.0).color(t.faint));
+                        ui.label(RichText::new(p.display().to_string()).monospace().size(theme::ts::MICRO).color(t.faint));
                     }
                 }
                 Dialog::Compress(c) => {
-                    ui.label(RichText::new("Compress").font(theme::semibold(16.0)));
+                    ui.label(RichText::new("Compress").font(theme::semibold(theme::ts::TITLE)));
                     ui.label(RichText::new(visible(&c.path)).monospace().color(t.muted));
                     ui.add_space(6.0);
                     let p = &c.plan;
@@ -4594,11 +4610,11 @@ impl DiskRootApp {
                         ("too small to gain anything", p.skipped_tiny),
                     ] {
                         if n > 0 {
-                            ui.label(RichText::new(format!("Left alone: {} files ({}), {why}", fmt_count(n), fmt_bytes(b))).color(t.faint).size(12.0));
+                            ui.label(RichText::new(format!("Left alone: {} files ({}), {why}", fmt_count(n), fmt_bytes(b))).color(t.faint).size(theme::ts::SMALL));
                         }
                     }
                     if p.protected_inside > 0 {
-                        ui.label(RichText::new(format!("Left alone: {} protected places inside", p.protected_inside)).color(t.faint).size(12.0));
+                        ui.label(RichText::new(format!("Left alone: {} protected places inside", p.protected_inside)).color(t.faint).size(theme::ts::SMALL));
                     }
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
@@ -4612,7 +4628,7 @@ impl DiskRootApp {
                     ui.add(egui::Label::new(RichText::new(format!("{hint} Rough estimate: about {} saved (the real result depends on the data).", fmt_bytes(p.estimate(c.level)))).color(t.muted)).wrap());
                     // Compressing rewrites the files once: say what that costs an SSD.
                     let rewritten = p.bytes.saturating_sub(p.estimate(c.level));
-                    ui.add(egui::Label::new(RichText::new(format!("SSD wear: compressing writes about {} once (the compressed copy of these files). Later reads cost nothing extra.", fmt_bytes(rewritten))).color(t.faint).size(12.0)).wrap());
+                    ui.add(egui::Label::new(RichText::new(format!("SSD wear: compressing writes about {} once (the compressed copy of these files). Later reads cost nothing extra.", fmt_bytes(rewritten))).color(t.faint).size(theme::ts::SMALL)).wrap());
                     ui.add_space(6.0);
                     let undo_text = if c.undo.files.is_empty() {
                         "Uncompress restores everything later (nothing here is compressed yet).".to_owned()
@@ -4628,7 +4644,7 @@ impl DiskRootApp {
                     ]);
                 }
                 Dialog::Savings(v) => {
-                    ui.label(RichText::new("Ways to save space").font(theme::semibold(16.0)));
+                    ui.label(RichText::new("Ways to save space").font(theme::semibold(theme::ts::TITLE)));
                     ui.horizontal(|ui| {
                         ui.selectable_value(&mut v.tab, 0, format!("Compress ({})", v.sugg.items.len()));
                         ui.selectable_value(&mut v.tab, 1, format!("Other ways ({})", v.tips.len()));
@@ -4660,7 +4676,7 @@ impl DiskRootApp {
                                 }
                             });
                             if !v.sugg.has_arrival_dates {
-                                ui.label(RichText::new("This scan was saved by an older DiskRoot and has no arrival dates, so downloaded files may look older than they are. Press Scan for exact ages.").color(theme::warn()).size(12.0));
+                                ui.label(RichText::new("This scan was saved by an older DiskRoot and has no arrival dates, so downloaded files may look older than they are. Press Scan for exact ages.").color(theme::warn()).size(theme::ts::SMALL));
                             }
                             let n = v.sugg.items.len();
                             let summary = if n == 0 {
@@ -4681,7 +4697,7 @@ impl DiskRootApp {
                                         let fast = c.estimate(Level::Fast);
                                         ui.add_sized(vec2(78.0, 18.0), egui::Label::new(RichText::new(format!("~{}", fmt_bytes(fast))).color(t.accent)));
                                         ui.add_sized(vec2(70.0, 18.0), egui::Label::new(RichText::new(fmt_bytes(c.on_disk)).color(t.muted)));
-                                        ui.add_sized(vec2(90.0, 18.0), egui::Label::new(RichText::new(diskroot_session::age_text(today, c.mtime)).color(t.faint).size(11.5)));
+                                        ui.add_sized(vec2(90.0, 18.0), egui::Label::new(RichText::new(diskroot_session::age_text(today, c.mtime)).color(t.faint).size(theme::ts::CAPTION)));
                                         let level = c.suggested(today);
                                         let w = (ui.available_width() - 100.0).max(80.0);
                                         ui.allocate_ui_with_layout(vec2(w, 18.0), Layout::left_to_right(Align::Center), |ui| {
@@ -4709,7 +4725,7 @@ impl DiskRootApp {
                                 }
                             });
                             ui.add_space(6.0);
-                            ui.add(egui::Label::new(RichText::new("Age: when the newest file inside last changed or arrived on this PC (a download keeps its author's old date, so the arrival date counts too). Windows doesn't reliably record when a file was last opened, so this means \"not changed since\", not \"not used since\". Compressed files still open as usual. Zip or 7z archives save more, but the files can't be opened until unpacked, so DiskRoot doesn't make them.").color(t.muted).size(11.5)).wrap());
+                            ui.add(egui::Label::new(RichText::new("Age: when the newest file inside last changed or arrived on this PC (a download keeps its author's old date, so the arrival date counts too). Windows doesn't reliably record when a file was last opened, so this means \"not changed since\", not \"not used since\". Compressed files still open as usual. Zip or 7z archives save more, but the files can't be opened until unpacked, so DiskRoot doesn't make them.").color(t.muted).size(theme::ts::CAPTION)).wrap());
                         }
                     } else {
                         ui.add(egui::Label::new(RichText::new("Biggest first, from this scan. DiskRoot doesn't delete anything from here: each way says how, or opens the right place.").color(t.muted)).wrap());
@@ -4723,7 +4739,7 @@ impl DiskRootApp {
                                         ui.horizontal(|ui| {
                                             ui.add_sized(vec2(70.0, 18.0), egui::Label::new(RichText::new(fmt_bytes(p.bytes)).color(t.muted)));
                                             let age = if p.mtime > 0 { diskroot_session::age_text(today, p.mtime) } else { String::new() };
-                                            ui.add_sized(vec2(90.0, 18.0), egui::Label::new(RichText::new(age).color(t.faint).size(11.5)));
+                                            ui.add_sized(vec2(90.0, 18.0), egui::Label::new(RichText::new(age).color(t.faint).size(theme::ts::CAPTION)));
                                             let w = (ui.available_width() - if p.vhdx { 90.0 } else { 0.0 }).max(80.0);
                                             ui.allocate_ui_with_layout(vec2(w, 18.0), Layout::left_to_right(Align::Center), |ui| {
                                                 ui.set_min_width(w);
@@ -4742,7 +4758,7 @@ impl DiskRootApp {
                                         });
                                     }
                                     if tip.places.len() > 30 {
-                                        ui.label(RichText::new(format!("…and {} smaller places", tip.places.len() - 30)).color(t.faint).size(11.5));
+                                        ui.label(RichText::new(format!("…and {} smaller places", tip.places.len() - 30)).color(t.faint).size(theme::ts::CAPTION));
                                     }
                                     let marks: Vec<u32> = tip.places.iter().filter(|p| p.markable).map(|p| p.node).collect();
                                     if tip.button.is_some() || !marks.is_empty() {
@@ -4768,7 +4784,7 @@ impl DiskRootApp {
                     }
                 }
                 Dialog::Vhdx(path, size, busy) => {
-                    ui.label(RichText::new("Compact a virtual disk").font(theme::semibold(16.0)));
+                    ui.label(RichText::new("Compact a virtual disk").font(theme::semibold(theme::ts::TITLE)));
                     ui.label(RichText::new(visible(path)).monospace().color(t.muted));
                     ui.add_space(6.0);
                     ui.add(egui::Label::new(RichText::new(format!("This disk file is {}. WSL and Docker disks grow but never shrink by themselves: space freed inside (deleted files, pruned images) stays in the file until it's compacted.", fmt_bytes(*size))).color(t.muted)).wrap());
@@ -4780,10 +4796,10 @@ impl DiskRootApp {
                     ]);
                     ui.add_space(6.0);
                     let (mark, col, text) = if *busy { ("!", theme::warn(), "In use right now: stop WSL or Docker first.") } else { ("✔", t.accent, "Not in use: ready to compact.") };
-                    ui.label(RichText::new(format!("{mark}  {text}")).color(col).font(theme::semibold(13.0)));
+                    ui.label(RichText::new(format!("{mark}  {text}")).color(col).font(theme::semibold(theme::ts::BODY)));
                 }
                 Dialog::Alerts => {
-                    ui.label(RichText::new("Size alerts").font(theme::semibold(16.0)));
+                    ui.label(RichText::new("Size alerts").font(theme::semibold(theme::ts::TITLE)));
                     ui.add(egui::Label::new(RichText::new("DiskRoot checks these folders after every scan and, with live updates on, while it's open. It doesn't run in the background. Right-click a folder > \"Alert me if it grows by\" to add one.").color(t.muted)).wrap());
                     ui.add_space(8.0);
                     if self.settings.alerts.is_empty() {
@@ -4808,11 +4824,11 @@ impl DiskRootApp {
                 }
                 Dialog::Tool(a) => {
                     let _ = a;
-                    ui.label(RichText::new("Clean up the component store with Windows").font(theme::semibold(16.0)));
+                    ui.label(RichText::new("Clean up the component store with Windows").font(theme::semibold(theme::ts::TITLE)));
                     ui.add_space(6.0);
                     ui.add(egui::Label::new(RichText::new("WinSxS holds Windows components, and much of its apparent size is shared with C:\\Windows itself. Deleting files there breaks Windows. The supported way to shrink it is Windows' own DISM tool:").color(t.muted)).wrap());
                     ui.add_space(4.0);
-                    ui.label(RichText::new("Dism.exe /Online /Cleanup-Image /StartComponentCleanup").monospace().size(12.0));
+                    ui.label(RichText::new("Dism.exe /Online /Cleanup-Image /StartComponentCleanup").monospace().size(theme::ts::SMALL));
                     ui.add_space(6.0);
                     facts(ui, &t, &[
                         ("Admin", "Windows asks for permission first."),
@@ -4822,7 +4838,7 @@ impl DiskRootApp {
                     ]);
                 }
                 Dialog::Leftovers(list) => {
-                    ui.label(RichText::new("Leftovers").font(theme::semibold(16.0)));
+                    ui.label(RichText::new("Leftovers").font(theme::semibold(theme::ts::TITLE)));
                     let total: u64 = list.iter().map(|l| l.on_disk).sum();
                     ui.label(RichText::new(format!("{} items · {} · biggest first. Click a name to show it in the tree.", list.len(), fmt_bytes(total))).color(t.muted));
                     ui.add_space(6.0);
@@ -4855,20 +4871,20 @@ impl DiskRootApp {
                     let can: Vec<u32> = list.iter().filter(|l| l.deletable && !l.hint).map(|l| l.id).collect();
                     if !can.is_empty() {
                         ui.add_space(6.0);
-                        ui.add(egui::Label::new(RichText::new("Downloads are yours to judge: DiskRoot can't tell whether you still need an installer or archive. Marking selects them for one review; nothing is deleted until you confirm.").color(t.muted).size(11.5)).wrap());
+                        ui.add(egui::Label::new(RichText::new("Downloads are yours to judge: DiskRoot can't tell whether you still need an installer or archive. Marking selects them for one review; nothing is deleted until you confirm.").color(t.muted).size(theme::ts::CAPTION)).wrap());
                         if ui.button(format!("Mark the {} downloads for review", can.len())).clicked() {
                             leftover_marks = Some(can);
                         }
                     }
                 }
                 Dialog::Message(title, msg) => {
-                    ui.label(RichText::new(title.as_str()).font(theme::semibold(15.0)));
+                    ui.label(RichText::new(title.as_str()).font(theme::semibold(theme::ts::SECTION)));
                     ui.add_space(4.0);
                     ui.add(egui::Label::new(msg.as_str()).wrap());
                 }
                 Dialog::ConfirmDelete(c) => {
                     let info = &c.info;
-                    ui.label(RichText::new(format!("Move \"{}\" to the Recycle Bin?", visible(&info.name))).font(theme::semibold(15.0)));
+                    ui.label(RichText::new(format!("Move \"{}\" to the Recycle Bin?", visible(&info.name))).font(theme::semibold(theme::ts::SECTION)));
                     ui.add_space(4.0);
                     ui.label(RichText::new(visible(&info.path)).monospace().color(t.muted));
                     ui.add_space(6.0);
@@ -4889,7 +4905,7 @@ impl DiskRootApp {
                                 .inner_margin(egui::Margin::symmetric(10, 6))
                                 .show(ui, |ui| {
                                     ui.set_width(ui.available_width());
-                                    ui.label(RichText::new(title).font(theme::semibold(13.0)));
+                                    ui.label(RichText::new(title).font(theme::semibold(theme::ts::BODY)));
                                     ui.add(egui::Label::new(RichText::new(text).color(t.muted)).wrap());
                                 });
                             ui.add_space(4.0);
@@ -5625,18 +5641,18 @@ impl DiskRootApp {
                     if selected || resp.hovered() {
                         p.rect_filled(rect, CornerRadius::same(4), if selected { t.sel } else { t.hover });
                     }
-                    p.text(pos2(rect.min.x + 8.0, rect.center().y), Align2::LEFT_CENTER, group, theme::regular(10.5), t.faint);
+                    p.text(pos2(rect.min.x + 8.0, rect.center().y), Align2::LEFT_CENTER, group, theme::regular(theme::ts::MICRO), t.faint);
                     let name = map::fit(p, left, 13.0, rect.width() - 190.0).unwrap_or_default();
                     let nx = if group.is_empty() { 12.0 } else { 62.0 };
-                    p.text(pos2(rect.min.x + nx, rect.center().y), Align2::LEFT_CENTER, name, theme::regular(13.0), t.text);
-                    p.text(pos2(rect.max.x - 8.0, rect.center().y), Align2::RIGHT_CENTER, right, theme::regular(11.5), t.muted);
+                    p.text(pos2(rect.min.x + nx, rect.center().y), Align2::LEFT_CENTER, name, theme::regular(theme::ts::BODY), t.text);
+                    p.text(pos2(rect.max.x - 8.0, rect.center().y), Align2::RIGHT_CENTER, right, theme::regular(theme::ts::CAPTION), t.muted);
                     (resp, rect)
                 };
                 for (i, (group, label, key, c)) in cmds.iter().enumerate() {
                     // A small heading where a group starts (empty search).
                     if words.is_empty() && (i == 0 || cmds[i - 1].0 != *group) {
                         ui.add_space(if i == 0 { 0.0 } else { 6.0 });
-                        ui.label(RichText::new(group.to_uppercase()).color(t.faint).size(10.5));
+                        ui.label(RichText::new(group.to_uppercase()).color(t.faint).size(theme::ts::MICRO));
                     }
                     let (r, rect) = row(ui, i == pal.sel, label, (*key).to_owned(), if words.is_empty() { "" } else { group });
                     if i == pal.sel {
@@ -5665,7 +5681,7 @@ impl DiskRootApp {
                 }
             });
             ui.add_space(4.0);
-            ui.label(RichText::new("↑ ↓ to move · Enter to run · Esc to close").color(t.faint).size(11.0));
+            ui.label(RichText::new("↑ ↓ to move · Enter to run · Esc to close").color(t.faint).size(theme::ts::MICRO));
         });
         let close = resp.should_close() || pick.is_some();
         if !close {
@@ -5740,22 +5756,22 @@ impl DiskRootApp {
                     act = Some(("review", 0));
                 }
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.label(RichText::new("INSPECTOR").color(t.faint).size(10.5));
+                    ui.label(RichText::new("INSPECTOR").color(t.faint).size(theme::ts::MICRO));
                     ui.add_space(6.0);
                     let Some((name, bytes, cat, _, label, color)) = &info else { return };
                     let (rect, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
                     ui.painter().rect_filled(rect, CornerRadius::same(2), theme::cat_color(*cat));
                     let size = fmt_bytes(*bytes);
                     let w = |s: &str, f: egui::FontId| ui.painter().layout_no_wrap(s.to_owned(), f, t.text).size().x;
-                    let rest = w(&size, theme::regular(13.0)) + if label.is_empty() { 0.0 } else { w(label, theme::regular(11.5)) + 6.0 } + 8.0;
+                    let rest = w(&size, theme::regular(theme::ts::BODY)) + if label.is_empty() { 0.0 } else { w(label, theme::regular(theme::ts::CAPTION)) + 6.0 } + 8.0;
                     let name_w = (ui.available_width() - rest).max(30.0);
                     ui.scope(|ui| {
                         ui.set_max_width(name_w);
-                        ui.add(egui::Label::new(RichText::new(visible(name)).font(theme::semibold(12.5))).truncate());
+                        ui.add(egui::Label::new(RichText::new(visible(name)).font(theme::semibold(theme::ts::SMALL))).truncate());
                     });
                     ui.label(RichText::new(size).color(t.muted));
                     if !label.is_empty() {
-                        ui.label(RichText::new(*label).color(*color).size(11.5));
+                        ui.label(RichText::new(*label).color(*color).size(theme::ts::CAPTION));
                     }
                 });
             });
@@ -5872,8 +5888,8 @@ impl DiskRootApp {
                 (String::new(), t.faint)
             };
             p.circle_stroke(pos2(lx + 5.0, y + 8.0), 4.0, Stroke::new(2.0, if found >= goal || k == current { t.accent } else { t.head }));
-            p.text(pos2(lx + 16.0, y), Align2::LEFT_TOP, format!("{} items", fmt_count(goal)), theme::regular(11.5), if found >= goal { t.muted } else { t.faint });
-            p.text(pos2(lx + 120.0, y), Align2::LEFT_TOP, mark, theme::regular(11.5), col);
+            p.text(pos2(lx + 16.0, y), Align2::LEFT_TOP, format!("{} items", fmt_count(goal)), theme::regular(theme::ts::CAPTION), if found >= goal { t.muted } else { t.faint });
+            p.text(pos2(lx + 120.0, y), Align2::LEFT_TOP, mark, theme::regular(theme::ts::CAPTION), col);
         }
         // The leaf in the middle.
         let logo = Rect::from_center_size(c, vec2(inner * 1.2, inner * 1.2));
@@ -5882,16 +5898,16 @@ impl DiskRootApp {
         let p = ui.painter();
         let mut y = c.y + big_r + 18.0;
         let count = if found > 1 { fmt_count(found) } else { "…".to_owned() };
-        p.text(pos2(c.x, y), Align2::CENTER_TOP, count, theme::num(30.0), t.text);
+        p.text(pos2(c.x, y), Align2::CENTER_TOP, count, theme::num(theme::ts::HERO), t.text);
         y += 40.0;
         let rate = if secs > 0.3 && found > 1 { format!(" · {}/s", fmt_count((found as f32 / secs) as u64)) } else { String::new() };
-        p.text(pos2(c.x, y), Align2::CENTER_TOP, format!("items found{rate} · {secs:.0} s"), theme::regular(12.5), t.muted);
+        p.text(pos2(c.x, y), Align2::CENTER_TOP, format!("items found{rate} · {secs:.0} s"), theme::regular(theme::ts::SMALL), t.muted);
         y += 30.0;
-        p.text(pos2(c.x, y), Align2::CENTER_TOP, &title, theme::semibold(16.0), t.text);
+        p.text(pos2(c.x, y), Align2::CENTER_TOP, &title, theme::semibold(theme::ts::TITLE), t.text);
         y += 24.0;
         let sub = if fast && found <= 1 { "Approve the Windows prompt. DiskRoot then reads the drive's file table, read-only." } else { sub };
         if !compact || (fast && found <= 1) {
-            p.text(pos2(c.x, y), Align2::CENTER_TOP, sub, theme::regular(12.5), t.muted);
+            p.text(pos2(c.x, y), Align2::CENTER_TOP, sub, theme::regular(theme::ts::SMALL), t.muted);
             y += 30.0;
         } else {
             y += 6.0;
@@ -5911,14 +5927,14 @@ impl DiskRootApp {
             let frac = (got as f32 / used as f32).min(0.99);
             p.rect_filled(bar, CornerRadius::same(3), t.head);
             p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac, bar.height())), CornerRadius::same(3), t.accent);
-            p.text(pos2(c.x, y + 14.0), Align2::CENTER_TOP, format!("{} of about {} in use · {:.0}%", fmt_bytes(got), fmt_bytes(used), frac * 100.0), theme::regular(11.5), t.faint);
+            p.text(pos2(c.x, y + 14.0), Align2::CENTER_TOP, format!("{} of about {} in use · {:.0}%", fmt_bytes(got), fmt_bytes(used), frac * 100.0), theme::regular(theme::ts::CAPTION), t.faint);
             y += 40.0;
         } else if let Some(e) = expected.filter(|&e| e > 0 && found > 1) {
             let bar = Rect::from_center_size(pos2(c.x, y + 3.0), vec2((big_r * 2.2).min(area.width() - 40.0), 6.0));
             let frac = (found as f32 / e as f32).min(0.99);
             p.rect_filled(bar, CornerRadius::same(3), t.head);
             p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac, bar.height())), CornerRadius::same(3), t.accent);
-            p.text(pos2(c.x, y + 14.0), Align2::CENTER_TOP, format!("about {:.0}% (the last scan of this place found {})", frac * 100.0, fmt_count(e)), theme::regular(11.5), t.faint);
+            p.text(pos2(c.x, y + 14.0), Align2::CENTER_TOP, format!("about {:.0}% (the last scan of this place found {})", frac * 100.0, fmt_count(e)), theme::regular(theme::ts::CAPTION), t.faint);
             y += 40.0;
         }
         // Every scan can be stopped: the button or Esc.
@@ -5956,7 +5972,7 @@ impl DiskRootApp {
                 let ago = v.checked.elapsed().as_secs();
                 let when = if ago < 5 { "just now".to_owned() } else if ago < 90 { format!("{ago} s ago") } else { format!("{} min ago", ago / 60) };
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("Checked {when}")).color(t.faint).size(11.5));
+                    ui.label(RichText::new(format!("Checked {when}")).color(t.faint).size(theme::ts::CAPTION));
                     if ui.small_button("Check again").clicked() {
                         go = Some("refresh");
                     }
@@ -5993,29 +6009,29 @@ impl DiskRootApp {
                         ui.horizontal(|ui| {
                             let (dot, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
                             ui.painter().circle_filled(dot.center(), 6.0, col);
-                            ui.label(RichText::new(letters).font(theme::semibold(18.0)));
+                            ui.label(RichText::new(letters).font(theme::semibold(theme::ts::HEAD)));
                             ui.label(RichText::new(format!("{} · {kind}", if d.model.is_empty() { "unknown model" } else { &d.model })).color(t.muted));
                         });
                         ui.add_space(4.0);
-                        ui.add(egui::Label::new(RichText::new(verdict).color(col).font(theme::semibold(16.0))).wrap());
+                        ui.add(egui::Label::new(RichText::new(verdict).color(col).font(theme::semibold(theme::ts::TITLE))).wrap());
                         ui.add_space(8.0);
                         ui.columns(2, |cols| {
                             for f in d.facts() {
                                 plain_note(&mut cols[0], RichText::new(f).color(t.text));
                             }
                             if !d.firmware.is_empty() {
-                                plain_note(&mut cols[0], RichText::new(format!("Disk {} · firmware {}", d.number, d.firmware)).color(t.faint).size(11.5));
+                                plain_note(&mut cols[0], RichText::new(format!("Disk {} · firmware {}", d.number, d.firmware)).color(t.faint).size(theme::ts::CAPTION));
                             }
                             if let Some(tr) = trend {
                                 cols[1].label(RichText::new("Written per day").color(t.muted));
                                 match tr.per_day {
                                     Some(b) => {
-                                        cols[1].label(RichText::new(format!("about {}", fmt_bytes(b as u64))).font(theme::num(18.0)));
+                                        cols[1].label(RichText::new(format!("about {}", fmt_bytes(b as u64))).font(theme::num(theme::ts::HEAD)));
                                         if tr.daily.len() >= 2 {
                                             let w = cols[1].available_width().min(420.0);
                                             size_chart(&mut cols[1], &t, &tr.daily, vec2(w, 70.0), true);
                                         }
-                                        plain_note(&mut cols[1], RichText::new(format!("last {:.0} days", tr.days.min(30.0))).color(t.faint).size(11.5));
+                                        plain_note(&mut cols[1], RichText::new(format!("last {:.0} days", tr.days.min(30.0))).color(t.faint).size(theme::ts::CAPTION));
                                     }
                                     None => plain_note(&mut cols[1], RichText::new("Shown after two days of notes (DiskRoot notes the numbers once a day when it scans).").color(t.faint)),
                                 }
@@ -6049,7 +6065,7 @@ impl DiskRootApp {
                     };
                     plain_note(ui, RichText::new(trim_text).color(if v.trim == Some(false) { theme::warn() } else { t.text }));
                     ui.add_space(4.0);
-                    plain_note(ui, RichText::new("\"Rated life used\" is the drive's own estimate from its flash wear; a drive often keeps working past 100%. \"Written\" is what Windows sent to it.").color(t.faint).size(11.5));
+                    plain_note(ui, RichText::new("\"Rated life used\" is the drive's own estimate from its flash wear; a drive often keeps working past 100%. \"Written\" is what Windows sent to it.").color(t.faint).size(theme::ts::CAPTION));
                 });
             });
         });
@@ -6082,7 +6098,7 @@ impl DiskRootApp {
             // Still working the numbers out (about half a second on a big drive).
             let c = ui.available_rect_before_wrap().center();
             ui.put(Rect::from_center_size(c - vec2(0.0, 20.0), vec2(28.0, 28.0)), egui::Spinner::new().size(26.0).color(t.accent));
-            ui.painter().text(c + vec2(0.0, 18.0), Align2::CENTER_TOP, "Working out the answers…", theme::regular(13.0), t.muted);
+            ui.painter().text(c + vec2(0.0, 18.0), Align2::CENTER_TOP, "Working out the answers…", theme::regular(theme::ts::BODY), t.muted);
             return;
         }
         let (Some(h), Some(s)) = (&self.home, &self.scanned) else { return };
@@ -6115,7 +6131,7 @@ impl DiskRootApp {
                             self.settings.save();
                         }
                         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                            ui.add(egui::Label::new(RichText::new(format!("{} at a glance", visible(&h.root))).font(theme::semibold(24.0))).truncate())
+                            ui.add(egui::Label::new(RichText::new(format!("{} at a glance", visible(&h.root))).font(theme::semibold(theme::ts::DISPLAY))).truncate())
                                 .on_hover_text(visible(&h.root));
                         });
                     });
@@ -6154,9 +6170,9 @@ impl DiskRootApp {
                             p.add(egui::Shape::mesh(m));
                         }
                         let used = total.saturating_sub(free);
-                        p.text(c - vec2(0.0, 10.0), Align2::CENTER_CENTER, fmt_bytes(used), theme::num(20.0), t.text);
-                        p.text(c + vec2(0.0, 14.0), Align2::CENTER_CENTER, format!("used of {}", fmt_bytes(total)), theme::regular(11.5), t.muted);
-                        p.text(c + vec2(0.0, 30.0), Align2::CENTER_CENTER, format!("{} free", fmt_bytes(free)), theme::regular(11.5), if h.nearly_full.is_some() { theme::warn() } else { t.faint });
+                        p.text(c - vec2(0.0, 10.0), Align2::CENTER_CENTER, fmt_bytes(used), theme::num(theme::ts::HEAD), t.text);
+                        p.text(c + vec2(0.0, 14.0), Align2::CENTER_CENTER, format!("used of {}", fmt_bytes(total)), theme::regular(theme::ts::CAPTION), t.muted);
+                        p.text(c + vec2(0.0, 30.0), Align2::CENTER_CENTER, format!("{} free", fmt_bytes(free)), theme::regular(theme::ts::CAPTION), if h.nearly_full.is_some() { theme::warn() } else { t.faint });
                         // What the disc's parts are.
                         let scanned = s.summary().on_disk;
                         let mut ly = rect.max.y + 10.0;
@@ -6169,7 +6185,7 @@ impl DiskRootApp {
                         for (col, text) in rows {
                             p.rect_filled(Rect::from_min_size(pos2(rect.min.x + 4.0, ly + 3.0), vec2(10.0, 10.0)), CornerRadius::same(2), col);
                             p.rect_stroke(Rect::from_min_size(pos2(rect.min.x + 4.0, ly + 3.0), vec2(10.0, 10.0)), CornerRadius::same(2), Stroke::new(1.0, t.line_strong), egui::StrokeKind::Inside);
-                            p.text(pos2(rect.min.x + 20.0, ly), Align2::LEFT_TOP, text, theme::regular(11.5), t.muted);
+                            p.text(pos2(rect.min.x + 20.0, ly), Align2::LEFT_TOP, text, theme::regular(theme::ts::CAPTION), t.muted);
                             ly += 18.0;
                         }
                         ui.add_space(16.0);
@@ -6188,11 +6204,11 @@ impl DiskRootApp {
                                             ui.painter().rect_filled(bar, CornerRadius::same(2), color);
                                             ui.add_space(6.0);
                                             ui.vertical(|ui| {
-                                                ui.label(RichText::new(q).color(t.muted).size(12.0));
-                                                ui.add(egui::Label::new(RichText::new(a).font(theme::semibold(14.0))).truncate());
+                                                ui.label(RichText::new(q).color(t.muted).size(theme::ts::SMALL));
+                                                ui.add(egui::Label::new(RichText::new(a).font(theme::semibold(theme::ts::LEAD))).truncate());
                                             });
                                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                                ui.label(RichText::new("›").color(t.faint).size(18.0));
+                                                ui.label(RichText::new("›").color(t.faint).size(theme::ts::HEAD));
                                             });
                                         });
                                     })
@@ -6242,7 +6258,7 @@ impl DiskRootApp {
                     card(&t).show(&mut cols[0], |ui| {
                         ui.set_min_height(170.0);
                         ui.set_width(ui.available_width());
-                        ui.label(RichText::new("What changed").font(theme::semibold(15.0)));
+                        ui.label(RichText::new("What changed").font(theme::semibold(theme::ts::SECTION)));
                         ui.add_space(6.0);
                         match &self.changes {
                             Some(ch) if !ch.items.is_empty() => {
@@ -6250,7 +6266,7 @@ impl DiskRootApp {
                                     let name = if c.path.is_empty() { visible(&h.root) } else { visible(&c.path) };
                                     ui.horizontal(|ui| {
                                         let d = c.delta();
-                                        ui.label(RichText::new(fmt_delta(d)).font(theme::num(12.5)).color(if d > 0 { theme::warn() } else { t.accent }));
+                                        ui.label(RichText::new(fmt_delta(d)).font(theme::num(theme::ts::SMALL)).color(if d > 0 { theme::warn() } else { t.accent }));
                                         if ui.add(egui::Label::new(name).truncate().sense(Sense::click())).on_hover_text("Show it on the map").clicked() {
                                             jump_rel = Some(c.path.clone());
                                         }
@@ -6269,19 +6285,19 @@ impl DiskRootApp {
                     card(&t).show(&mut cols[1], |ui| {
                         ui.set_min_height(170.0);
                         ui.set_width(ui.available_width());
-                        ui.label(RichText::new("Top ways to get space back").font(theme::semibold(15.0)));
+                        ui.label(RichText::new("Top ways to get space back").font(theme::semibold(theme::ts::SECTION)));
                         ui.add_space(6.0);
                         if let Some(b) = h.compress {
                             ui.horizontal(|ui| {
                                 ui.label("Compress old data");
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(RichText::new(format!("about {}", fmt_bytes(b))).font(theme::num(12.5)).color(t.accent)));
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(RichText::new(format!("about {}", fmt_bytes(b))).font(theme::num(theme::ts::SMALL)).color(t.accent)));
                             });
                         }
                         for (title, bytes) in &h.tips {
                             ui.horizontal(|ui| {
                                 ui.add(egui::Label::new(title.as_str()).truncate());
                                 if let Some(b) = bytes {
-                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(RichText::new(fmt_bytes(*b)).font(theme::num(12.5)).color(t.accent)));
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(RichText::new(fmt_bytes(*b)).font(theme::num(theme::ts::SMALL)).color(t.accent)));
                                 }
                             });
                         }
@@ -6296,7 +6312,7 @@ impl DiskRootApp {
                 card(&t).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Biggest here").font(theme::semibold(15.0)));
+                        ui.label(RichText::new("Biggest here").font(theme::semibold(theme::ts::SECTION)));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui.small_button("Where every GB is…").clicked() {
                                 go = Some("space");
@@ -6307,7 +6323,7 @@ impl DiskRootApp {
                     let top = h.biggest.first().map_or(1, |x| x.2.max(1));
                     for (id, name, bytes) in &h.biggest {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(fmt_bytes(*bytes)).font(theme::num(12.5)));
+                            ui.label(RichText::new(fmt_bytes(*bytes)).font(theme::num(theme::ts::SMALL)));
                             let (bar, _) = ui.allocate_exact_size(vec2(160.0, 8.0), Sense::hover());
                             ui.painter().rect_filled(bar, CornerRadius::same(3), t.head);
                             ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * (*bytes as f32 / top as f32), bar.height())), CornerRadius::same(3), t.accent);
@@ -6433,8 +6449,8 @@ impl DiskRootApp {
                     .shadow(egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(60) })
                     .show(ui, |ui| {
                         ui.set_width(card_w - 32.0);
-                        ui.label(RichText::new(format!("{} of {}", pos + 1, shown.len())).color(t.faint).size(11.0));
-                        ui.label(RichText::new(title).font(theme::semibold(15.0)));
+                        ui.label(RichText::new(format!("{} of {}", pos + 1, shown.len())).color(t.faint).size(theme::ts::MICRO));
+                        ui.label(RichText::new(title).font(theme::semibold(theme::ts::SECTION)));
                         ui.add_space(2.0);
                         plain_note(ui, RichText::new(text).color(t.text));
                         ui.add_space(8.0);
@@ -6826,7 +6842,7 @@ fn facts(ui: &mut Ui, t: &Tokens, rows: &[(&str, &str)]) {
     // Stacked rather than a grid: wrapped labels inside an auto-sized grid
     // in a modal can grow the dialog taller than the window.
     for (k, v) in rows {
-        ui.label(RichText::new(*k).font(theme::semibold(13.0)));
+        ui.label(RichText::new(*k).font(theme::semibold(theme::ts::BODY)));
         ui.add(egui::Label::new(RichText::new(*v).color(t.muted)).wrap());
         ui.add_space(6.0);
     }
