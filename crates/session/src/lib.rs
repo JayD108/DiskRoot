@@ -22,6 +22,7 @@ pub mod lockdown;
 pub mod logs;
 pub mod recycle;
 pub mod remember;
+pub mod restore;
 pub mod safety;
 pub mod tools;
 pub mod offenders;

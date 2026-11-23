@@ -188,6 +188,8 @@ pub(super) struct ActivityView {
     entries: Vec<activity::Entry>,
     /// 0 all, 1 deleted, 2 compressed, 3 duplicate searches.
     filter: u8,
+    /// What's in the Recycle Bin now, to offer Restore on deletions.
+    bin: Vec<diskroot_session::restore::BinItem>,
 }
 
 impl DiskRootApp {
@@ -1232,7 +1234,7 @@ impl DiskRootApp {
     // ------------------------------------------------------------------
 
     pub(super) fn open_activity(&mut self) {
-        self.activity = Some(ActivityView { entries: activity::read(2000), filter: 0 });
+        self.activity = Some(ActivityView { entries: activity::read(2000), filter: 0, bin: diskroot_session::restore::list() });
         self.page = Page::Activity;
     }
 
@@ -1308,7 +1310,7 @@ impl DiskRootApp {
                         .entries
                         .iter()
                         .filter(|e| match v.filter {
-                            1 => e.kind == "deleted" || e.kind == "not deleted",
+                            1 => e.kind == "deleted" || e.kind == "not deleted" || e.kind == "restored",
                             2 => e.kind == "compressed" || e.kind == "uncompressed",
                             3 => e.kind == "duplicates",
                             _ => true,
@@ -1334,6 +1336,7 @@ impl DiskRootApp {
                             });
                             let (label, col) = match e.kind.as_str() {
                                 "deleted" => ("Deleted", theme::cat_color(5)),
+                                "restored" => ("Restored", t.accent),
                                 "not deleted" => ("Not deleted", t.muted),
                                 "compressed" => ("Compressed", t.accent),
                                 "uncompressed" => ("Uncompressed", theme::cat_color(6)),
@@ -1343,6 +1346,7 @@ impl DiskRootApp {
                             ui.horizontal(|ui| chip(ui, label, col.gamma_multiply(0.22), col));
                             let size = match e.kind.as_str() {
                                 "deleted" => format!("{} freed", fmt_bytes(e.bytes)),
+                                "restored" => format!("{} back", fmt_bytes(e.after)),
                                 "compressed" => format!("{} saved", fmt_bytes(e.bytes)),
                                 "uncompressed" => format!("{} given back", fmt_bytes(e.bytes)),
                                 "duplicates" => format!("{} in extra copies", fmt_bytes(e.bytes)),
@@ -1358,8 +1362,16 @@ impl DiskRootApp {
                                 if e.kind != "deleted" && ui.small_button("Explorer").clicked() {
                                     go = Some(("explorer", e.path.clone()));
                                 }
-                                if e.kind == "deleted" && ui.small_button("Recycle Bin").on_hover_text("Open the Recycle Bin to restore it").clicked() {
-                                    go = Some(("bin", String::new()));
+                                if e.kind == "deleted" {
+                                    // Still in the Recycle Bin: one click puts it back.
+                                    let in_bin = diskroot_session::restore::find(&v.bin, &e.path, e.time).is_some();
+                                    if in_bin {
+                                        if ui.small_button("Restore").on_hover_text("Move it back from the Recycle Bin to where it was. Nothing is overwritten.").clicked() {
+                                            go = Some(("restore", format!("{}|{}", e.time, e.path)));
+                                        }
+                                    } else if ui.small_button("Recycle Bin").on_hover_text("Not in the Recycle Bin any more (emptied or restored). Opens it.").clicked() {
+                                        go = Some(("bin", String::new()));
+                                    }
                                 }
                                 if e.kind == "duplicates" && ui.small_button("Open").clicked() {
                                     go = Some(("dupes", String::new()));
@@ -1422,6 +1434,25 @@ impl DiskRootApp {
                 let _ = std::process::Command::new(diskroot_session::integrity::windows_dir().join("explorer.exe")).arg("shell:RecycleBinFolder").spawn();
             }
             Some(("dupes", _)) => self.open_dupes_tab(2),
+            Some(("restore", key)) => {
+                let (time, path) = key.split_once('|').map_or((0, key.as_str()), |(a, b)| (a.parse().unwrap_or(0), b));
+                let bin = diskroot_session::restore::list();
+                let result = match diskroot_session::restore::find(&bin, path, time) {
+                    Some(item) => diskroot_session::restore::restore(item).map(|()| item.size),
+                    None => Err("It's no longer in the Recycle Bin.".into()),
+                };
+                match result {
+                    Ok(size) => {
+                        activity::append(&activity::Logged { time: activity::now(), kind: "restored".into(), path: path.to_owned(), files: 0, before: 0, after: size, note: "from the Recycle Bin".into() });
+                        self.say(format!("Restored {}. Scan again to see it on the map.", visible(path)));
+                    }
+                    Err(e) => self.dialog = Some(super::Dialog::Message("Couldn't restore it".into(), e)),
+                }
+                if let Some(a) = &mut self.activity {
+                    a.entries = activity::read(2000);
+                    a.bin = diskroot_session::restore::list();
+                }
+            }
             Some(("rel", rel)) => {
                 self.page = Page::Map;
                 self.show_rel(&rel);
