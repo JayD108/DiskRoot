@@ -2329,7 +2329,7 @@ impl DiskRootApp {
                                 match self.settings.freeable.get(d.as_str()) {
                                     Some(&(bytes, when)) => {
                                         ui.label(RichText::new(format!("About {}", fmt_bytes(bytes))).font(theme::semibold(theme::ts::LEAD)).color(t.text));
-                                        ui.add(egui::Label::new(RichText::new(format!("caches and temp files, from your scan {}", remember::age_text(when))).color(t.muted)).wrap());
+                                        ui.add(egui::Label::new(RichText::new(format!("labelled safe to clear by your scan {}", remember::age_text(when))).color(t.muted)).wrap());
                                     }
                                     None => {
                                         ui.add(egui::Label::new(RichText::new("Scan to find out how much can go safely.").color(t.muted)).wrap());
@@ -6136,7 +6136,15 @@ impl DiskRootApp {
                         });
                     });
                 });
-                plain_note(ui, RichText::new(if h.root.len() <= 3 { "Your drive, explained in four answers. Click one to go deeper." } else { "This folder and its drive, in four answers. Click one to go deeper." }).color(t.muted));
+                // The answer first, in one sentence; the four answers below explain it.
+                let names: Vec<(String, u64)> = breakdown.iter().map(|(c, b)| (cats[*c as usize].name.to_owned(), *b)).collect();
+                // The same "safe to clear" number as the card below (and the start screen).
+                let safe = Some(reclaim[0]);
+                let why = why_full(&visible(&h.root), &names, h.biggest.first().map(|b| (visible(&b.1), b.2)), safe, h.nearly_full.is_some());
+                ui.add_space(2.0);
+                plain_note(ui, RichText::new(why).font(theme::regular(theme::ts::LEAD)).color(t.text));
+                ui.add_space(4.0);
+                plain_note(ui, RichText::new(if h.root.len() <= 3 { "The four answers below explain it. Click one to go deeper." } else { "This folder and its drive in four answers. Click one to go deeper." }).color(t.muted));
                 ui.add_space(14.0);
                 // Hero: the drive disc and four answers.
                 card(&t).show(ui, |ui| {
@@ -6559,9 +6567,9 @@ impl DiskRootApp {
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
                     let tips = s.space_tips();
-                    // "Caches and temporary files" is the one tip that is safe
-                    // to clear as a whole; the start screen shows it per drive.
-                    let safe = tips.iter().find(|t| t.title.starts_with("Caches")).and_then(|t| t.bytes).unwrap_or(0);
+                    // What's labelled safe to clear (Home's "What can I safely
+                    // delete?"); the start screen shows it per drive.
+                    let safe = s.reclaimable().get(&0).map_or(0, |v| v[0]);
                     let best = tips.into_iter().filter_map(|t| t.bytes.map(|b| (b, t.title))).max_by_key(|x| x.0).filter(|x| x.0 >= 100 << 20);
                     let _ = tx.send((best, safe, s.summary().root));
                     ctx.request_repaint();
@@ -7013,6 +7021,39 @@ fn windows_animations_on() -> bool {
     ok == 0 || on != 0
 }
 
+/// Home's first line: why the drive (or folder) is full, in one sentence,
+/// from what the scan already knows: the categories, the biggest item, and
+/// what's safe to clear. `cats` = (name, bytes), any order.
+fn why_full(root: &str, cats: &[(String, u64)], biggest: Option<(String, u64)>, safe: Option<u64>, nearly_full: bool) -> String {
+    let mut c: Vec<&(String, u64)> = cats.iter().filter(|x| x.1 > 0).collect();
+    c.sort_by_key(|x| std::cmp::Reverse(x.1));
+    let total: u64 = c.iter().map(|x| x.1).sum();
+    let mut out = String::new();
+    if nearly_full {
+        out += &format!("{root} is nearly full. ");
+    }
+    match (c.first(), c.get(1)) {
+        (Some(a), _) if total > 0 && a.1 * 10 >= total * 6 => {
+            out += &format!("Most of it is {} ({}, {}).", a.0, fmt_bytes(a.1), fmt_pct(a.1, total));
+        }
+        (Some(a), Some(b)) if total > 0 && (a.1 + b.1) * 2 >= total => {
+            out += &format!("Most of it is {} ({}) and {} ({}).", a.0, fmt_bytes(a.1), b.0, fmt_bytes(b.1));
+        }
+        (Some(a), _) => {
+            out += &format!("It's a mix: the biggest kind is {} ({}, {}).", a.0, fmt_bytes(a.1), fmt_pct(a.1, total));
+        }
+        _ => out += "This scan found nothing that takes space.",
+    }
+    if let Some((name, b)) = biggest {
+        out += &format!(" The biggest single place is {name} ({}).", fmt_bytes(b));
+    }
+    match safe {
+        Some(b) if b >= 100 << 20 => out += &format!(" About {} of it is labelled safe to clear (caches, temporary files and leftovers).", fmt_bytes(b)),
+        _ => out += " There's little to clear safely here: Save space shows the other ways.",
+    }
+    out
+}
+
 /// A Windows error as a sentence someone can act on, with the original
 /// kept at the end for a bug report.
 fn plain_error(e: &str) -> String {
@@ -7045,7 +7086,21 @@ fn plain_note(ui: &mut Ui, text: RichText) {
 
 #[cfg(test)]
 mod tests {
-    use super::plain_error;
+    use super::{plain_error, why_full};
+
+    #[test]
+    fn why_full_sentence() {
+        let gb = 1u64 << 30;
+        let cats = vec![("Games".to_owned(), 210 * gb), ("Videos".to_owned(), 80 * gb), ("System".to_owned(), 30 * gb)];
+        let w = why_full("C:", &cats, Some(("Steam".into(), 200 * gb)), Some(18 * gb), false);
+        assert!(w.starts_with("Most of it is Games (210 GB, 66%)."), "{w}");
+        assert!(w.contains("biggest single place is Steam (200 GB)"));
+        assert!(w.contains("About 18.0 GB of it is labelled safe"), "{w}");
+        let even = vec![("A".to_owned(), gb), ("B".to_owned(), gb), ("C".to_owned(), gb), ("D".to_owned(), gb)];
+        let w = why_full("D:", &even, None, None, true);
+        assert!(w.starts_with("D: is nearly full. Most of it is"), "{w}");
+        assert!(w.contains("little to clear safely"));
+    }
 
     #[test]
     fn plain_errors() {
