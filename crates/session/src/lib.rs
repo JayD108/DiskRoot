@@ -430,6 +430,9 @@ pub struct SpaceReport {
     pub unreadable: u64,
     /// Extra names of hardlinked files (counted once, 0 B each).
     pub hardlink_names: u64,
+    /// Windows' own big files at the drive root that people don't recognise:
+    /// (what it is, file name, bytes on disk). Counted by the scan already.
+    pub system_files: Vec<(&'static str, String, u64)>,
 }
 
 impl SpaceReport {
@@ -1004,10 +1007,22 @@ It may be left over from an uninstalled program, or belong to one that's install
         // Root children: NTFS's own files ($MFT, $LogFile, ...) and System
         // Volume Information, when the scan could see them (Fast scan).
         let (mut ntfs, mut svi) = (0u64, None);
+        let mut system_files = Vec::new();
         for &c in self.children.of(0) {
             let name = idx.name(c);
             if idx.flags(c) & diskroot_core::flags::DELETED != 0 {
                 continue;
+            }
+            let what = match name.to_ascii_lowercase().as_str() {
+                "hiberfil.sys" => Some("Hibernation file"),
+                "pagefile.sys" => Some("Page file (extra memory on disk)"),
+                "swapfile.sys" => Some("Swap file (for Store apps)"),
+                _ => None,
+            };
+            if let Some(w) = what
+                && idx.alloc(c) > 0
+            {
+                system_files.push((w, name.to_owned(), idx.alloc(c)));
             }
             if name.starts_with('$') && !name.eq_ignore_ascii_case("$Recycle.Bin") && !name.eq_ignore_ascii_case("$WinREAgent") {
                 ntfs += idx.alloc(c);
@@ -1026,6 +1041,7 @@ It may be left over from an uninstalled program, or belong to one that's install
             restore_points: svi,
             unreadable: self.stats.unreadable,
             hardlink_names: hardlinks,
+            system_files,
         })
     }
 

@@ -368,6 +368,8 @@ struct HomeView {
     compress: Option<u64>,
     /// The biggest items under the root: (node, name, bytes).
     biggest: Vec<(u32, String, u64)>,
+    /// Whole drive only: used space against what the scan found.
+    space_report: Option<diskroot_session::SpaceReport>,
 }
 
 impl HomeView {
@@ -388,7 +390,8 @@ impl HomeView {
         let sugg = s.compress_suggestions(180, SAVINGS_MIN, 200);
         let compress = (sugg.not_possible.is_none() && !sugg.items.is_empty()).then(|| sugg.total(Level::Fast));
         let biggest = s.list(0, 5).map(|l| l.items.into_iter().map(|i| (i.id, i.name, i.on_disk)).collect()).unwrap_or_default();
-        Self { root, space, nearly_full, forecast, health, tips, compress, biggest }
+        let space_report = s.space_report();
+        Self { root, space, nearly_full, forecast, health, tips, compress, biggest, space_report }
     }
 }
 
@@ -4257,6 +4260,14 @@ impl DiskRootApp {
                     if let Some(v) = r.restore_points {
                         rows.push(("  incl. System Volume Information".into(), format!("{} (restore points, shadow copies, indexing data)", fmt_bytes(v))));
                     }
+                    for (what, name, bytes) in &r.system_files {
+                        let how = match name.to_ascii_lowercase().as_str() {
+                            "hiberfil.sys" => "Windows writes memory here to hibernate. `powercfg /h off` (admin) removes it, and hibernation with it.",
+                            "pagefile.sys" => "Windows manages its size. Leave it: too small a page file makes apps crash.",
+                            _ => "Windows manages it. Leave it.",
+                        };
+                        rows.push((format!("  incl. {what}"), format!("{} ({name}). {how}", fmt_bytes(*bytes))));
+                    }
                     rows.push(if gap >= 0 {
                         ("Not counted".into(), fmt_bytes(gap as u64))
                     } else {
@@ -6144,7 +6155,7 @@ impl DiskRootApp {
                 ui.add_space(2.0);
                 plain_note(ui, RichText::new(why).font(theme::regular(theme::ts::LEAD)).color(t.text));
                 ui.add_space(4.0);
-                plain_note(ui, RichText::new(if h.root.len() <= 3 { "The four answers below explain it. Click one to go deeper." } else { "This folder and its drive in four answers. Click one to go deeper." }).color(t.muted));
+                plain_note(ui, RichText::new(if h.root.len() <= 3 { "The answers below explain it. Click one to go deeper." } else { "This folder and its drive, answer by answer. Click one to go deeper." }).color(t.muted));
                 ui.add_space(14.0);
                 // Hero: the drive disc and four answers.
                 card(&t).show(ui, |ui| {
@@ -6256,6 +6267,21 @@ impl DiskRootApp {
                             };
                             if answer(ui, hc, "Is the drive itself OK?", ht, "Open Drive health") {
                                 go = Some("health");
+                            }
+                            // Space Windows counts as used that people never see in a
+                            // folder: hibernation / page file, restore points, unreadable folders.
+                            if let Some(r) = &h.space_report {
+                                let gap = r.not_counted().max(0) as u64;
+                                let sys: u64 = r.system_files.iter().map(|x| x.2).sum();
+                                let a = match (gap > r.used / 100, sys > 0) {
+                                    (true, true) => format!("{} the scan couldn't open, plus {} in Windows' own files", fmt_bytes(gap), fmt_bytes(sys)),
+                                    (true, false) => format!("{} the scan couldn't open (restore points, protected folders)", fmt_bytes(gap)),
+                                    (false, true) => format!("{} in Windows' own files (hibernation, page file)", fmt_bytes(sys)),
+                                    (false, false) => "Nothing: the scan found all the used space".to_owned(),
+                                };
+                                if answer(ui, t.faint, "What doesn't show up as folders?", a, "Open Where every GB is") {
+                                    go = Some("space");
+                                }
                             }
                         });
                     });
