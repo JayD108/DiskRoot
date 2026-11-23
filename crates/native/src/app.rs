@@ -1737,6 +1737,11 @@ impl DiskRootApp {
                 if ui.checkbox(&mut tilt, "Tilted map (2.5D)").on_hover_text("Boxes and rings stand up by size; 2D is the default").changed() {
                     self.run_cmd(ui.ctx(), Cmd::Tilt);
                 }
+                let mut res = self.settings.show_resources;
+                if ui.checkbox(&mut res, "Show resource use").on_hover_text("DiskRoot's own RAM and CPU at the top right, and Free memory").changed() {
+                    self.settings.show_resources = res;
+                    self.settings.save();
+                }
                 let mut anim = self.settings.animations;
                 if ui.checkbox(&mut anim, "Smooth transitions").on_hover_text("A short movement when the map opens a folder or goes up").changed() {
                     self.settings.animations = anim;
@@ -1860,27 +1865,29 @@ impl DiskRootApp {
                 if cr.clicked() {
                     self.palette = Some(Palette::default());
                 }
-                if ui
+                if self.settings.show_resources && ui
                     .add_enabled(self.scanned.is_some(), egui::Button::new(RichText::new("Free memory").size(11.5)).small())
                     .on_hover_text("Drop the scan from memory. It stays saved on this PC and reopens in about a second.")
                     .clicked()
                 {
                     self.free_memory();
                 }
-                self.footprint.sample();
-                let f = self.footprint;
-                let r = ui
-                    .add(egui::Label::new(RichText::new(format!("●  RAM {} · CPU {:.0}%", fmt_bytes(f.ram), f.cpu_pct)).color(t.muted).size(11.5)).sense(Sense::click()))
-                    .on_hover_text(format!(
-                        "DiskRoot's own use of this PC.\nRAM in use: {} (peak {}, private {}).\nCPU: {:.1}% of the whole processor.\nClick to see what uses the memory.",
-                        fmt_bytes(f.ram),
-                        fmt_bytes(f.peak),
-                        fmt_bytes(f.private),
-                        f.cpu_pct
-                    ))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                if r.clicked() {
-                    self.dialog = Some(Dialog::Memory);
+                if self.settings.show_resources {
+                    self.footprint.sample();
+                    let f = self.footprint;
+                    let r = ui
+                        .add(egui::Label::new(RichText::new(format!("●  RAM {} · CPU {:.0}%", fmt_bytes(f.ram), f.cpu_pct)).color(t.muted).size(11.5)).sense(Sense::click()))
+                        .on_hover_text(format!(
+                            "DiskRoot's own use of this PC.\nRAM in use: {} (peak {}, private {}).\nCPU: {:.1}% of the whole processor.\nClick to see what uses the memory.",
+                            fmt_bytes(f.ram),
+                            fmt_bytes(f.peak),
+                            fmt_bytes(f.private),
+                            f.cpu_pct
+                        ))
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if r.clicked() {
+                        self.dialog = Some(Dialog::Memory);
+                    }
                 }
                 if self.scanned.is_some() && ui.selectable_label(self.focus, RichText::new("Focus").size(11.5)).on_hover_text("Only the map (F; Esc to leave)").clicked() {
                     self.focus = !self.focus;
@@ -1930,43 +1937,28 @@ impl DiskRootApp {
             {
                 self.start_scan(true);
             }
+            let scanned = self.scanned.is_some();
             ui.separator();
-            let up = self.map.as_ref().and_then(|m| m.up.clone());
-            if ui.add_enabled(up.is_some(), egui::Button::new("↑")).on_hover_text("Up one level (Backspace)").clicked()
-                && let Some(k) = up {
-                    self.go_to(k);
-                }
-            ui.separator();
-            let mut tm = self.settings.treemap;
-            ui.selectable_value(&mut tm, false, if compact { "Sunburst" } else { "◎ Sunburst" });
-            ui.selectable_value(&mut tm, true, if compact { "Treemap" } else { "▦ Treemap" });
-            if tm != self.settings.treemap {
-                self.page = Page::Map;
-                self.settings.treemap = tm;
-                self.settings.save();
-                if let Some(m) = &mut self.map {
-                    m.cached = None;
-                }
+            if scanned {
+                let up = self.map.as_ref().and_then(|m| m.up.clone());
+                if ui.add_enabled(up.is_some(), egui::Button::new("↑")).on_hover_text("Up one level (Backspace)").clicked()
+                    && let Some(k) = up {
+                        self.go_to(k);
+                    }
             }
-            ui.separator();
-            let mut bc = self.settings.by_category;
-            ui.selectable_value(&mut bc, false, "Location");
-            ui.selectable_value(&mut bc, true, "Category");
-            if bc != self.settings.by_category {
-                self.page = Page::Map;
-                self.settings.by_category = bc;
-                self.regroup();
-            }
-            ui.separator();
             let home_key = ui.input(|i| i.modifiers.ctrl && i.key_pressed(Key::H));
             let on_home = self.page == Page::Home;
-            let hr = ui.add_enabled(self.scanned.is_some(), egui::Button::new("Home").selected(on_home)).on_hover_text("The drive at a glance, as a page (Ctrl+H; again or Esc: back to the map)");
-            if self.home_rx.is_some() {
-                ui.add(egui::Spinner::new().size(14.0).color(t.accent));
-            }
-            self.anchors.insert("home", hr.rect);
-            if (hr.clicked() || home_key) && self.scanned.is_some() {
-                self.toggle_home();
+            // Home and Save space need a scan: hidden until there is one
+            // (a greyed button looks broken to someone who just arrived).
+            if scanned {
+                let hr = ui.add(egui::Button::new("Home").selected(on_home)).on_hover_text("The drive at a glance, as a page (Ctrl+H; again or Esc: back to the map)");
+                if self.home_rx.is_some() {
+                    ui.add(egui::Spinner::new().size(14.0).color(t.accent));
+                }
+                self.anchors.insert("home", hr.rect);
+                if hr.clicked() || home_key {
+                    self.toggle_home();
+                }
             }
             let on_status = self.page == Page::Status;
             let sr = ui.add(egui::Button::new(if compact { "Drive status" } else { "◉ Drive status" }).selected(on_status)).on_hover_text("Your drive status: health, who's writing, size history and past scans, in one page");
@@ -1991,7 +1983,7 @@ impl DiskRootApp {
                 }
                 None => "Ways to save space: what could be compressed, and other ways to get space back".to_owned(),
             };
-            if ui.add_enabled(self.scanned.is_some(), egui::Button::new(job)).on_hover_text(tip).clicked() {
+            if scanned && ui.add(egui::Button::new(job)).on_hover_text(tip).clicked() {
                 self.open_savings();
             }
             if self.savings_rx.is_some() {
@@ -3197,6 +3189,8 @@ impl DiskRootApp {
         let mut crumb_go: Option<Key_> = None;
         let mut mode_go: Option<u8> = None;
         let mut tilt_go = false;
+        let mut shape_go: Option<bool> = None;
+        let mut group_go: Option<bool> = None;
         Self::pane_frame(&t).show(ui, |ui| {
             ui.set_min_size(ui.available_size());
             let full = ui.available_width();
@@ -3241,7 +3235,7 @@ impl DiskRootApp {
                 let last = i + 1 == crumbs.len();
                 let shown = visible(name);
                 // The last level gets what's left before the mode switch (~300 px).
-                let text = if last { map::fit(p, &shown, 12.0, (hr.max.x - 350.0 - x).max(40.0)).unwrap_or_default() } else { shown.clone() };
+                let text = if last { map::fit(p, &shown, 12.0, (hr.max.x - 380.0 - x).max(40.0)).unwrap_or_default() } else { shown.clone() };
                 let w = width(&text, last);
                 if last {
                     p.text(pos2(x, hr.center().y), Align2::LEFT_CENTER, text, theme::semibold(12.0), t.text);
@@ -3282,9 +3276,38 @@ impl DiskRootApp {
             }
             self.anchors.insert("modes", strip.min_rect());
             strip.separator();
-            if strip.selectable_label(self.settings.map_25d, RichText::new("2.5D").size(11.5)).on_hover_text("Tilted map: boxes and rings stand up by size (2D is the default)").clicked() {
-                tilt_go = true;
-            }
+            // The map's shape, grouping and tilt: one menu (they used to be
+            // four toolbar toggles plus a 2.5D switch here).
+            let tm = self.settings.treemap;
+            let by_cat = self.settings.by_category;
+            let tilt = self.settings.map_25d;
+            let style = format!("{}{} ▾", if tm { "▦ Treemap" } else { "◎ Sunburst" }, if tilt { " 2.5D" } else { "" });
+            strip.menu_button(RichText::new(style).size(11.5), |ui| {
+                ui.label(RichText::new("Shape").font(theme::semibold(12.0)).color(t.muted));
+                if ui.radio(!tm, "◎ Sunburst (rings)").on_hover_text("The middle is this folder, each ring one level deeper").clicked() {
+                    shape_go = Some(false);
+                    ui.close();
+                }
+                if ui.radio(tm, "▦ Treemap (boxes)").on_hover_text("Each box's area is its size").clicked() {
+                    shape_go = Some(true);
+                    ui.close();
+                }
+                let mut t25 = tilt;
+                if ui.checkbox(&mut t25, "Tilted (2.5D)").on_hover_text("Boxes and rings stand up by size").changed() {
+                    tilt_go = true;
+                    ui.close();
+                }
+                ui.separator();
+                ui.label(RichText::new("Group the map and the list").font(theme::semibold(12.0)).color(t.muted));
+                if ui.radio(!by_cat, "By location (folders)").clicked() {
+                    group_go = Some(false);
+                    ui.close();
+                }
+                if ui.radio(by_cat, "By category (videos, games, apps…)").on_hover_text("Everything grouped by what it is, wherever it lives").clicked() {
+                    group_go = Some(true);
+                    ui.close();
+                }
+            }).response.on_hover_text(format!("Map style: {}, grouped by {}", if tm { "treemap" } else { "sunburst" }, if by_cat { "category" } else { "location" }));
             let size_text = format!("{} · {}", fmt_bytes(root.size), fmt_files(u64::from(root.files)));
             let size_w = width(&size_text, false) + 16.0;
             if strip.min_rect().min.x - size_w > crumbs_end + 12.0 {
@@ -3491,6 +3514,19 @@ impl DiskRootApp {
         }
         if tilt_go {
             self.run_cmd(&ui.ctx().clone(), Cmd::Tilt);
+        }
+        if let Some(tm) = shape_go {
+            self.settings.treemap = tm;
+            self.settings.save();
+            if let Some(m) = &mut self.map {
+                m.cached = None;
+            }
+        }
+        if let Some(bc) = group_go
+            && bc != self.settings.by_category
+        {
+            self.settings.by_category = bc;
+            self.regroup();
         }
         if let Some(v) = mode_go
             && v != self.settings.map_mode
