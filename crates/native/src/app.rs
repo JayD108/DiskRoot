@@ -164,7 +164,13 @@ enum Cmd {
 
 /// The height a full page (Duplicates, Large files...) gets at least; a
 /// shorter window scrolls the page.
-const PAGE_MIN_H: f32 = 480.0;
+const PAGE_MIN_H: f32 = 440.0;
+
+/// A menu taller than the window scrolls instead of running off the bottom.
+fn menu_scroll(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    let room = (ui.ctx().content_rect().bottom() - ui.cursor().top() - 12.0).max(120.0);
+    ScrollArea::vertical().id_salt(("menu", ui.scope_id())).max_height(room).show(ui, add);
+}
 
 /// What fills the window under the toolbar.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1082,7 +1088,7 @@ impl DiskRootApp {
                 let what = match &job.kind {
                     JobKind::Scan(p) | JobKind::Fast(p) => format!("The scan of {} stopped because of a bug in DiskRoot. Scanning only reads, so nothing on your drive changed. Try Scan again; if it happens again, a folder walk (Scan) instead of Fast scan, or the other way round, may get past it.", visible(p)),
                     JobKind::Reopen(p) => format!("Opening the saved scan of {} failed because of a bug in DiskRoot. Nothing on your drive changed. Scan it again instead.", visible(p)),
-                    JobKind::Delete(_) | JobKind::DeleteMany(_) => "Moving to the Recycle Bin stopped because of a bug in DiskRoot. Some items may already be in the Recycle Bin: File > Activity and the Recycle Bin show what moved. Scan again for exact sizes.".to_owned(),
+                    JobKind::Delete(_) | JobKind::DeleteMany(_) => "Moving to the Recycle Bin stopped because of a bug in DiskRoot. Some items may already be in the Recycle Bin: the Activity tab and the Recycle Bin show what moved. Scan again for exact sizes.".to_owned(),
                     JobKind::Compress(..) => "Compressing stopped because of a bug in DiskRoot. Files it already compressed stay compressed and work normally; the rest are unchanged.".to_owned(),
                     JobKind::Export(_) => "Saving the report stopped because of a bug in DiskRoot. Nothing on your drive changed.".to_owned(),
                     JobKind::Tool(n) => format!("Waiting for {n} stopped because of a bug in DiskRoot. The Windows tool itself may still be running."),
@@ -1645,16 +1651,7 @@ impl DiskRootApp {
 
     fn menu_bar(&mut self, ui: &mut Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                if ui.add(egui::Button::new("Scan").shortcut_text("F5")).clicked() {
-                    self.start_scan(false);
-                    ui.close();
-                }
-                if ui.add(egui::Button::new("Fast scan (MFT, admin)").shortcut_text("Ctrl+F5")).clicked() {
-                    self.start_scan(true);
-                    ui.close();
-                }
-                ui.separator();
+            ui.menu_button("File", |ui| menu_scroll(ui, |ui| {
                 let mut keep = self.settings.remember_scans;
                 if ui
                     .checkbox(&mut keep, "Remember scans")
@@ -1689,36 +1686,15 @@ impl DiskRootApp {
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Activity…").on_hover_text("What you deleted and compressed with DiskRoot, and what changed on the drive, with times").clicked() {
-                    self.open_activity();
-                    ui.close();
-                }
-                ui.separator();
                 if ui.button("Exit").clicked() {
                     ui.ctx().send_viewport_cmd(ViewportCommand::Close);
                 }
-            });
-            ui.menu_button("View", |ui| {
+            }));
+            ui.menu_button("View", |ui| menu_scroll(ui, |ui| {
                 if ui.add_enabled(self.changes.is_some(), egui::Button::new("What changed since the previous scan…")).clicked() {
                     if let Some(c) = &self.changes {
                         self.dialog = Some(Dialog::Changes(Box::new(c.clone())));
                     }
-                    ui.close();
-                }
-                if ui
-                    .add_enabled(self.scanned.is_some(), egui::Button::new("Ways to save space…"))
-                    .on_hover_text("What could be compressed (big, not changed for a while), and other ways to get space back")
-                    .clicked()
-                {
-                    self.open_savings();
-                    ui.close();
-                }
-                if ui
-                    .add_enabled(self.summary.is_some(), egui::Button::new("Size history…"))
-                    .on_hover_text("How this drive or folder grew over time, what grew the most, and when the drive would be full")
-                    .clicked()
-                {
-                    self.open_growth();
                     ui.close();
                 }
                 if ui
@@ -1729,40 +1705,8 @@ impl DiskRootApp {
                     self.open_space();
                     ui.close();
                 }
-                if ui.button("Your drive status…").on_hover_text("Health, who's writing, size history and past scans, as one page").clicked() {
-                    self.open_status(0);
-                    ui.close();
-                }
-                if ui.button("Who's writing…").on_hover_text("Which programs write to your drives right now and while the PC is idle, and which folders change most (no admin)").clicked() {
-                    self.open_status(1);
-                    ui.close();
-                }
-                if ui.button("Drive health…").on_hover_text("How worn your SSDs are, how much was written to them, temperature and errors (the drives' own reports; no admin)").clicked() {
-                    self.open_health();
-                    ui.close();
-                }
                 if ui.button("Scheduled scans…").on_hover_text("Let DiskRoot scan by itself every few hours (no admin, no window), so it can show what changed").clicked() {
                     self.open_schedule();
-                    ui.close();
-                }
-                if ui.add_enabled(!self.marked.is_empty(), egui::Button::new(format!("Review marked ({})…", self.marked.len()))).clicked() {
-                    self.open_review();
-                    ui.close();
-                }
-                if ui.add_enabled(self.scanned.is_some(), egui::Button::new("Find duplicate files…")).clicked() {
-                    self.open_dupes();
-                    ui.close();
-                }
-                if ui.add_enabled(self.scanned.is_some(), egui::Button::new("Largest files & file types…")).clicked() {
-                    self.open_files();
-                    ui.close();
-                }
-                if ui
-                    .add_enabled(self.scanned.is_some(), egui::Button::new("Similar folders…"))
-                    .on_hover_text("Folders that look like copies of each other, and folders with similar names (project, project_v2, project - Copy)")
-                    .clicked()
-                {
-                    self.open_similar();
                     ui.close();
                 }
                 if ui
@@ -1774,10 +1718,6 @@ impl DiskRootApp {
                     ui.close();
                 }
                 ui.separator();
-                if ui.add(egui::Button::new("Command palette…").shortcut_text("Ctrl+K")).on_hover_text("Every command and every folder, one search").clicked() {
-                    self.palette = Some(Palette::default());
-                    ui.close();
-                }
                 let mut list = !self.settings.hide_list;
                 if ui.add(egui::Checkbox::new(&mut list, "Folder list")).on_hover_text("Show or minimize the list on the left (Ctrl+B)").changed() {
                     self.run_cmd(ui.ctx(), Cmd::ToggleList);
@@ -1785,10 +1725,6 @@ impl DiskRootApp {
                 let mut insp = !self.settings.hide_inspector;
                 if ui.add(egui::Checkbox::new(&mut insp, "Inspector")).on_hover_text("Show or minimize the details at the bottom (Ctrl+J)").changed() {
                     self.run_cmd(ui.ctx(), Cmd::ToggleInspector);
-                }
-                let mut tilt = self.settings.map_25d;
-                if ui.checkbox(&mut tilt, "Tilted map (2.5D)").on_hover_text("Boxes and rings stand up by size; 2D is the default").changed() {
-                    self.run_cmd(ui.ctx(), Cmd::Tilt);
                 }
                 let mut res = self.settings.show_resources;
                 if ui.checkbox(&mut res, "Show resource use").on_hover_text("DiskRoot's own RAM and CPU at the top right, and Free memory").changed() {
@@ -1800,14 +1736,8 @@ impl DiskRootApp {
                     self.settings.animations = anim;
                     self.settings.save();
                 }
-                let mut focus = self.focus;
-                if ui.add_enabled(self.scanned.is_some(), egui::Checkbox::new(&mut focus, "Focus on the map")).on_hover_text("Only the map (F; Esc to leave)").changed() {
-                    self.run_cmd(ui.ctx(), Cmd::Focus);
-                }
                 ui.separator();
                 let mut changed = false;
-                changed |= ui.radio_value(&mut self.settings.treemap, false, "Sunburst map").clicked();
-                changed |= ui.radio_value(&mut self.settings.treemap, true, "Treemap").clicked();
                 let mut live = self.settings.live_updates;
                 if ui.checkbox(&mut live, "Live updates").on_hover_text("Watch the scanned folder while DiskRoot is open and update sizes as files change").changed() {
                     self.settings.live_updates = live;
@@ -1826,13 +1756,6 @@ impl DiskRootApp {
                     self.settings.save();
                     self.map = None;
                     self.rows = None;
-                }
-                ui.separator();
-                let before = self.settings.by_category;
-                ui.radio_value(&mut self.settings.by_category, false, "Group by location");
-                ui.radio_value(&mut self.settings.by_category, true, "Group by category");
-                if before != self.settings.by_category {
-                    self.regroup();
                 }
                 ui.separator();
                 let classic = self.settings.classic;
@@ -1860,12 +1783,8 @@ impl DiskRootApp {
                         m.cached = None;
                     }
                 }
-            });
-            ui.menu_button("Help", |ui| {
-                if ui.button("Security & privacy").clicked() {
-                    self.open_security();
-                    ui.close();
-                }
+            }));
+            ui.menu_button("Help", |ui| menu_scroll(ui, |ui| {
                 if ui.button("Memory and CPU…").clicked() {
                     self.dialog = Some(Dialog::Memory);
                     ui.close();
@@ -1907,7 +1826,7 @@ impl DiskRootApp {
                     self.dialog = Some(Dialog::About);
                     ui.close();
                 }
-            });
+            }));
             // Right: DiskRoot's own footprint, Free memory, Focus, Security.
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let t = self.tokens();
@@ -3908,7 +3827,7 @@ impl DiskRootApp {
                                         let span = remember::gap_text(last.0.saturating_sub(week.0));
                                         let text = if d == 0 { format!("no change in {span}") } else { format!("{} in {span}", fmt_delta(d)) };
                                         ui.label(RichText::new(text).color(if d > 0 { theme::warn() } else { t.muted }))
-                                            .on_hover_text("From the scans DiskRoot remembered (folders of 1 MB or more). View → Size history for more.");
+                                            .on_hover_text("From the scans DiskRoot remembered (folders of 1 MB or more). Drive status → Size history for more.");
                                     });
                                     ui.end_row();
                                 } else if info.dir {
@@ -4163,8 +4082,14 @@ impl DiskRootApp {
         // One window id per dialog kind, so a dialog never inherits another
         // one's remembered size.
         let kind = std::mem::discriminant(&*d);
+        // Sized to the window: wide dialogs use most of it, and the body
+        // scrolls when it's taller than the window (buttons stay visible).
+        let screen = ctx.content_rect();
+        let room = (screen.height() - 330.0).max(200.0);
         let resp = Modal::new(egui::Id::unique("diskroot-dialog").with(kind)).show(ctx, |ui| {
-            ui.set_width(if wide { 720.0 } else { 500.0 });
+            ui.set_width(if wide { (screen.width() - 160.0).clamp(720.0, 1100.0) } else { 500.0 });
+            let body_h = (screen.height() - 170.0).max(160.0);
+            ScrollArea::vertical().id_salt(("dialog-body", kind)).max_height(body_h).auto_shrink([false, true]).show(ui, |ui| {
             match d {
                 Dialog::Schedule(v) => {
                     ui.label(RichText::new("Scheduled scans").font(theme::semibold(theme::ts::TITLE)));
@@ -4347,7 +4272,7 @@ impl DiskRootApp {
                     ui.label(RichText::new(format!("Folders this scan couldn't read ({})", fmt_count(paths.len() as u64))).font(theme::semibold(theme::ts::TITLE)));
                     ui.add(egui::Label::new(RichText::new("Windows didn't let a normal (no-admin) scan open these: folders only administrators or the system may read, like System Volume Information, other users' folders and WindowsApps. Their size isn't in the totals. Fast scan (admin, read-only) includes them.").color(t.muted)).wrap());
                     ui.add_space(4.0);
-                    egui::ScrollArea::vertical().id_salt("unreadable").max_height(380.0).show(ui, |ui| {
+                    egui::ScrollArea::vertical().id_salt("unreadable").max_height(room).show(ui, |ui| {
                         for p in paths {
                             let r = ui.add(egui::Label::new(RichText::new(visible(p)).monospace().size(theme::ts::SMALL)).truncate().sense(Sense::click()));
                             if r.on_hover_text("Click to show it in the tree").clicked() {
@@ -4505,7 +4430,7 @@ impl DiskRootApp {
                     if ch.items.is_empty() {
                         ui.label(RichText::new("No folder changed by more than 1 MB (or 0.1% of the total).").color(t.faint));
                     } else {
-                        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                        egui::ScrollArea::vertical().max_height(room).show(ui, |ui| {
                             egui::Grid::new("changes").num_columns(4).striped(true).spacing([14.0, 5.0]).show(ui, |ui| {
                                 for h in ["Change", "Now", "Before", "Folder"] {
                                     ui.label(RichText::new(h).color(t.muted).size(theme::ts::SMALL));
@@ -4703,7 +4628,7 @@ impl DiskRootApp {
                             };
                             ui.add(egui::Label::new(RichText::new(summary).color(t.muted)).wrap());
                             ui.add_space(4.0);
-                            egui::ScrollArea::vertical().id_salt("savings-compress").max_height(360.0).show(ui, |ui| {
+                            egui::ScrollArea::vertical().id_salt("savings-compress").max_height(room).show(ui, |ui| {
                                 for c in &v.sugg.items {
                                     ui.horizontal(|ui| {
                                         let fast = c.estimate(Level::Fast);
@@ -4742,7 +4667,7 @@ impl DiskRootApp {
                     } else {
                         ui.add(egui::Label::new(RichText::new("Biggest first, from this scan. DiskRoot doesn't delete anything from here: each way says how, or opens the right place.").color(t.muted)).wrap());
                         ui.add_space(4.0);
-                        egui::ScrollArea::vertical().id_salt("savings-tips").max_height(400.0).show(ui, |ui| {
+                        egui::ScrollArea::vertical().id_salt("savings-tips").max_height(room).show(ui, |ui| {
                             for (ti, tip) in v.tips.iter().enumerate() {
                                 let size = tip.bytes.map_or_else(|| "size unknown".to_owned(), fmt_bytes);
                                 egui::CollapsingHeader::new(format!("{size} · {}", tip.title)).id_salt(("tip", ti)).default_open(ti == 0).show(ui, |ui| {
@@ -4857,7 +4782,7 @@ impl DiskRootApp {
                     if list.is_empty() {
                         ui.label(RichText::new("Nothing found: no installers, archives or disk images in Downloads folders, and no Windows upgrade leftovers.").color(t.faint));
                     }
-                    egui::ScrollArea::vertical().id_salt("leftovers").max_height(380.0).show(ui, |ui| {
+                    egui::ScrollArea::vertical().id_salt("leftovers").max_height(room).show(ui, |ui| {
                         for l in list.iter() {
                             ui.horizontal(|ui| {
                                 ui.add_sized(vec2(70.0, 18.0), egui::Label::new(RichText::new(fmt_bytes(l.on_disk)).color(t.muted)));
@@ -4946,6 +4871,7 @@ impl DiskRootApp {
                     }
                 }
             }
+            });
             ui.add_space(12.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 match d {
@@ -6138,12 +6064,6 @@ impl DiskRootApp {
                 // running under them.
                 ui.horizontal(|ui| {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("Back to the map  (Esc)").clicked() {
-                            go = Some("map");
-                        }
-                        if ui.button("Activity…").on_hover_text("What you deleted and compressed with DiskRoot, and when").clicked() {
-                            go = Some("activity");
-                        }
                         if ui.checkbox(&mut self.settings.home_at_start, "Show when DiskRoot starts").changed() {
                             self.settings.save();
                         }

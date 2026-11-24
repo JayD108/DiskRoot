@@ -264,10 +264,9 @@ impl DiskRootApp {
         let t = self.tokens();
         let scanned = self.scanned.is_some();
         let marks = self.marked.len();
-        let later_n = self.dupes.as_ref().map_or_else(|| later::load().len(), |d| d.later.len());
         let tabs: [(u8, String, bool, bool, &str); 6] = [
             (0, "Storage overview".into(), matches!(self.page, Page::Map | Page::Home), true, "The folder list, the map and the Inspector (Home: Ctrl+H)"),
-            (1, if later_n > 0 { format!("Duplicates & same names · {later_n} for later") } else { "Duplicates & same names".into() }, self.page == Page::Dupes, scanned, "Identical files, files with the same name, similar folders, and what you marked for later"),
+            (1, "Duplicates & same names".into(), self.page == Page::Dupes, scanned, "Identical files, files with the same name, similar folders, and what you marked for later"),
             (2, "Large files".into(), self.page == Page::Files, scanned, "The biggest files and file types in this scan"),
             (3, "Drive status".into(), self.page == Page::Status, true, "Health, who's writing, size history and past scans"),
             (4, format!("Review {marks} marked"), self.page == Page::Review, marks > 0, "Check each marked item and decide: delete or keep"),
@@ -305,7 +304,7 @@ impl DiskRootApp {
             }
         });
         match go {
-            Some(0) if self.page != Page::Home => self.page = Page::Map,
+            Some(0) => self.page = Page::Map,
             Some(1) => {
                 let tab = self.dupes.as_ref().map_or(0, |d| d.tab);
                 self.open_dupes_tab(tab);
@@ -331,10 +330,9 @@ impl DiskRootApp {
     pub(super) fn files_page(&mut self, ui: &mut Ui) {
         let t = self.tokens();
         let Some(mut fv) = self.files_view.take() else { return };
-        let mut back = false;
         let mut go: Option<(&'static str, u32, String)> = None;
         Frame::new().inner_margin(Margin { left: 20, right: 20, top: 18, bottom: 12 }).show(ui, |ui| {
-            back = page_header(ui, &t, "Large files", "The biggest files in this scan and which file types take the most space. Mark files to review them for the Recycle Bin, or open their folder.");
+            page_header(ui, &t, "Large files", "The biggest files in this scan and which file types take the most space. Mark files to review them for the Recycle Bin, or open their folder.");
             ui.add_space(8.0);
             let r = ui.add(TextEdit::singleline(&mut fv.query).hint_text("Search file names").desired_width(320.0));
             if r.changed()
@@ -413,9 +411,6 @@ impl DiskRootApp {
             });
         });
         self.files_view = Some(fv);
-        if back {
-            self.page = Page::Map;
-        }
         match go {
             Some(("mark", n, _)) => {
                 if !self.marked.remove(&n) {

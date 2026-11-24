@@ -196,16 +196,14 @@ pub(super) fn chip(ui: &mut Ui, text: &str, fill: Color32, ink: Color32) {
     ui.painter().galley(r.min + vec2(6.0, 2.0), g, ink);
 }
 
-/// Page title, one line of explanation, and "Back to the map". True when
-/// Back was pressed.
-pub(super) fn page_header(ui: &mut Ui, t: &Tokens, title: &str, about: &str) -> bool {
-    let mut back = false;
+/// Page title and one line of explanation (the tabs above lead back to the
+/// map; so does Esc).
+pub(super) fn page_header(ui: &mut Ui, t: &Tokens, title: &str, about: &str) {
     // In a short window the explanation moves into the title's tooltip, so
     // the lists keep their room.
     let short = ui.ctx().content_rect().height() < 700.0;
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            back = ui.button("Back to the map  (Esc)").clicked();
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 let size = if short { theme::ts::TITLE } else { theme::ts::DISPLAY };
                 let r = ui.add(egui::Label::new(RichText::new(title).font(theme::semibold(size))).truncate());
@@ -218,7 +216,6 @@ pub(super) fn page_header(ui: &mut Ui, t: &Tokens, title: &str, about: &str) -> 
     if !short {
         plain_note(ui, RichText::new(about).color(t.muted));
     }
-    back
 }
 
 /// A row of page tabs; returns the clicked one.
@@ -313,10 +310,9 @@ impl DiskRootApp {
 
     pub(super) fn status_page(&mut self, ui: &mut Ui) {
         let t = self.tokens();
-        let mut back = false;
         let mut go: Option<&'static str> = None;
         Frame::new().inner_margin(Margin { left: 20, right: 20, top: 18, bottom: 0 }).show(ui, |ui| {
-            back = page_header(ui, &t, "Your drive status", "Everything about the drive itself in one place: how healthy it is, what writes to it, how it grew, and the scans DiskRoot remembers. DiskRoot only reads here; it changes nothing.");
+            page_header(ui, &t, "Your drive status", "Everything about the drive itself in one place: how healthy it is, what writes to it, how it grew, and the scans DiskRoot remembers. DiskRoot only reads here; it changes nothing.");
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let names = ["Health", "Who's writing", "Size history", "Past scans"].map(String::from);
@@ -391,9 +387,6 @@ impl DiskRootApp {
                 }
             }
             _ => self.past_scans_body(ui, &t),
-        }
-        if back {
-            self.page = Page::Map;
         }
         match go {
             Some("schedule") => self.open_schedule(),
@@ -678,10 +671,9 @@ impl DiskRootApp {
         let t = self.tokens();
         let Some(mut d) = self.dupes.take() else { return };
         triage::poll_verify(ui.ctx(), &mut d);
-        let mut back = false;
         let mut switched = false;
         Frame::new().inner_margin(Margin { left: 20, right: 20, top: 18, bottom: 0 }).show(ui, |ui| {
-            back = page_header(ui, &t, "Duplicates & same names", "Identical files (same bytes, BLAKE3) and files that only share a name. Compare them, delete, or mark them for later. Nothing is deleted without a confirmation.");
+            page_header(ui, &t, "Duplicates & same names", "Identical files (same bytes, BLAKE3) and files that only share a name. Compare them, delete, or mark them for later. Nothing is deleted without a confirmation.");
             ui.add_space(8.0);
             let sets = d.run.as_ref().map_or(String::new(), |r| format!(" ({})", r.groups.len()));
             let same = d.names.as_ref().map_or(String::new(), |n| format!(" ({})", n.len()));
@@ -715,9 +707,6 @@ impl DiskRootApp {
         self.dupes = Some(d);
         if switched {
             self.prepare_dupes_tab();
-        }
-        if back {
-            self.page = Page::Map;
         }
         match out {
             Some(DupesGo::Start) => self.start_dupes(),
@@ -1266,10 +1255,9 @@ impl DiskRootApp {
     pub(super) fn review_page(&mut self, ui: &mut Ui) {
         let t = self.tokens();
         self.review_rows();
-        let mut back = false;
         let mut go: Option<(&'static str, u32, String)> = None;
         Frame::new().inner_margin(Margin { left: 20, right: 20, top: 18, bottom: 12 }).show(ui, |ui| {
-            back = page_header(ui, &t, "Review marked items", "Look at each marked item before anything is deleted. Untick what you want to keep; the ticked ones go to the Recycle Bin after one more confirmation (with all the usual checks), so they can be restored.");
+            page_header(ui, &t, "Review marked items", "Look at each marked item before anything is deleted. Untick what you want to keep; the ticked ones go to the Recycle Bin after one more confirmation (with all the usual checks), so they can be restored.");
             ui.add_space(10.0);
             let rows = &self.review.rows;
             let ticked: Vec<&ReviewRow> = rows.iter().filter(|r| !self.review.untick.contains(&r.node)).collect();
@@ -1348,9 +1336,6 @@ impl DiskRootApp {
                 });
             });
         });
-        if back {
-            self.page = Page::Map;
-        }
         let Some((what, n, path)) = go else { return };
         match what {
             "toggle" => {
@@ -1399,12 +1384,11 @@ impl DiskRootApp {
     pub(super) fn activity_page(&mut self, ui: &mut Ui) {
         let t = self.tokens();
         let Some(mut v) = self.activity.take() else { return };
-        let mut back = false;
         let mut go: Option<(&'static str, String)> = None;
         let since = self.prev_visit;
         ScrollArea::vertical().id_salt("activity").auto_shrink([false, false]).show(ui, |ui| {
             Frame::new().inner_margin(Margin::same(20)).show(ui, |ui| {
-                back = page_header(ui, &t, "Activity", "What you did with DiskRoot on this PC, and what changed on the drive between scans. Times are this PC's local time. Kept only on this PC.");
+                page_header(ui, &t, "Activity", "What you did with DiskRoot on this PC, and what changed on the drive between scans. Times are this PC's local time. Kept only on this PC.");
                 ui.add_space(12.0);
                 // Since the last visit.
                 let new: Vec<&activity::Entry> = v.entries.iter().filter(|e| since > 0 && e.time > since).collect();
@@ -1578,9 +1562,6 @@ impl DiskRootApp {
             });
         });
         self.activity = Some(v);
-        if back {
-            self.page = Page::Map;
-        }
         match go {
             Some(("logs", _)) => {
                 if let Some(dir) = activity::log_path().and_then(|p| p.parent().map(|d| d.display().to_string())) {

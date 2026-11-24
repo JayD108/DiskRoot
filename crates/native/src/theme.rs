@@ -426,6 +426,20 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
         style.spacing.button_padding = egui::vec2(10.0, 4.0);
         style.spacing.interact_size.y = 26.0;
         style.spacing.menu_margin = egui::Margin::same(4);
+        // Scroll bars always visible as a light grey line (egui's default
+        // ones are hidden until hovered, so a list looks like it can't
+        // scroll); they widen and darken under the mouse.
+        let mut sc = egui::style::ScrollStyle::floating();
+        sc.foreground_color = true;
+        sc.bar_width = 9.0;
+        sc.floating_width = 5.0;
+        sc.floating_allocated_width = 8.0;
+        sc.dormant_handle_opacity = 0.35;
+        sc.active_handle_opacity = 0.55;
+        sc.interact_handle_opacity = 0.8;
+        sc.dormant_background_opacity = 0.0;
+        sc.active_background_opacity = 0.15;
+        style.spacing.scroll = sc;
         style.interaction.selectable_labels = false;
     });
 }
