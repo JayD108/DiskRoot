@@ -8,11 +8,16 @@
 //!   changed on the drive, with times.
 
 use super::*;
-use diskroot_session::{activity, dupes};
+use diskroot_session::{activity, dupes, later};
+use super::triage::{self, Meta};
+use std::collections::HashMap;
 
 /// A running duplicate search: shared progress, the cancel flag, and where
 /// the finished search arrives.
 pub(super) type DupesRun = (Arc<dupes::Progress>, Arc<AtomicBool>, Receiver<dupes::Run>);
+
+/// "Verify now" results: the paths and their full BLAKE3 (None: unreadable).
+pub(super) type Verified = (Vec<String>, Vec<Option<String>>);
 
 /// The Duplicates page.
 pub(super) struct DupesPage {
@@ -44,6 +49,33 @@ pub(super) struct DupesPage {
     pub similar: Option<Box<similar::Found>>,
     /// Similar folders picked for review.
     pub sim_pick: BTreeSet<u32>,
+    /// Same names: the sets (made for `names_for`, in bytes), the one shown,
+    /// the ticked files per set, and the name filter.
+    pub names: Option<Vec<diskroot_session::NameGroup>>,
+    pub names_min: u64,
+    pub names_for: u64,
+    pub names_sel: usize,
+    pub names_pick: Vec<Vec<bool>>,
+    pub names_filter: String,
+    pub names_shown: Vec<usize>,
+    pub names_shown_for: Option<(String, usize)>,
+    /// Marked for later (saved on this PC, see session::later), the ticked
+    /// ones (lowercase paths), the filter, and which still exist.
+    pub later: Vec<later::Later>,
+    pub later_pick: BTreeSet<String>,
+    pub later_filter: String,
+    pub later_exists: HashMap<String, bool>,
+    /// Show the set side by side (metadata compare) instead of as a list.
+    pub compare: bool,
+    /// File details read for the compare view, by lowercase path.
+    pub meta: HashMap<String, Meta>,
+    /// Full BLAKE3 from "Verify now", by lowercase path (None: unreadable).
+    pub hashes: HashMap<String, Option<String>>,
+    pub verifying: Option<Receiver<Verified>>,
+    /// Lowercase path -> identical set, for the search on screen (and the
+    /// search time it was built for).
+    pub run_index: HashMap<String, usize>,
+    pub run_index_for: Option<(u64, usize)>,
 }
 
 impl DupesPage {
@@ -67,11 +99,29 @@ impl DupesPage {
             past: dupes::past_runs(),
             similar: None,
             sim_pick: BTreeSet::new(),
+            names: None,
+            names_min: 10,
+            names_for: 0,
+            names_sel: 0,
+            names_pick: Vec::new(),
+            names_filter: String::new(),
+            names_shown: Vec::new(),
+            names_shown_for: None,
+            later: later::load(),
+            later_pick: BTreeSet::new(),
+            later_filter: String::new(),
+            later_exists: HashMap::new(),
+            compare: false,
+            meta: HashMap::new(),
+            hashes: HashMap::new(),
+            verifying: None,
+            run_index: HashMap::new(),
+            run_index_for: None,
         }
     }
 
     /// Shows `run`: the original-looking copy kept in each set, nothing chosen yet.
-    fn show(&mut self, run: dupes::Run, from_past: bool) {
+    pub(super) fn show(&mut self, run: dupes::Run, from_past: bool) {
         self.keep = vec![0; run.groups.len()];
         self.remove = run.groups.iter().map(|g| vec![false; g.files.len()]).collect();
         self.sel = 0;
@@ -82,7 +132,7 @@ impl DupesPage {
 }
 
 /// File kinds for the filter: (name, extensions).
-const KINDS: [(&str, &[&str]); 5] = [
+pub(super) const KINDS: [(&str, &[&str]); 5] = [
     ("Photos", &["jpg", "jpeg", "png", "heic", "heif", "gif", "webp", "bmp", "tif", "tiff", "raw", "cr2", "cr3", "nef", "arw", "dng", "orf", "rw2"]),
     ("Videos", &["mp4", "mkv", "mov", "avi", "wmv", "m4v", "webm", "mts", "m2ts", "3gp", "flv"]),
     ("Music", &["mp3", "flac", "wav", "m4a", "aac", "ogg", "wma", "opus", "aiff"]),
@@ -91,7 +141,7 @@ const KINDS: [(&str, &[&str]); 5] = [
 ];
 
 /// 1-based index into KINDS, or KINDS.len() + 1 for anything else.
-fn kind_of(path: &str) -> u8 {
+pub(super) fn kind_of(path: &str) -> u8 {
     let ext = path.rsplit('\\').next().and_then(|n| n.rsplit_once('.')).map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
     KINDS.iter().position(|(_, list)| list.contains(&ext.as_str())).map_or(KINDS.len() as u8 + 1, |i| i as u8 + 1)
 }
@@ -99,29 +149,46 @@ fn kind_of(path: &str) -> u8 {
 /// Ways to pick the copy to keep in every set.
 const KEEP_RULES: [&str; 4] = ["the original-looking one", "the newest", "the oldest", "the one with the shortest path"];
 
-fn file_name(path: &str) -> &str {
+pub(super) fn file_name(path: &str) -> &str {
     path.rsplit('\\').next().unwrap_or(path)
 }
 
-fn parent_of(path: &str) -> &str {
+pub(super) fn parent_of(path: &str) -> &str {
     path.rsplit_once('\\').map_or("", |(p, _)| p)
 }
 
 /// The node for `path` in the scan on screen: `hint` if it still is that
 /// path, else looked up by its path below the scan root.
-fn resolve(s: &Scanned, root: &str, hint: u32, path: &str) -> Option<u32> {
+pub(super) fn resolve(s: &Scanned, root: &str, hint: u32, path: &str) -> Option<u32> {
     if s.path(hint).is_ok_and(|p| p.eq_ignore_ascii_case(path)) {
         return Some(hint);
     }
     s.find_rel(&rel_of(root, path)?).filter(|&n| n != 0)
 }
 
-fn card(t: &Tokens) -> Frame {
+pub(super) fn card(t: &Tokens) -> Frame {
     Frame::new().fill(t.panel).stroke(Stroke::new(1.0, t.line)).corner_radius(CornerRadius::same(t.radius + 4)).inner_margin(Margin::same(16))
 }
 
+/// A column of exactly `size` at the cursor (allocate_ui_with_layout may
+/// grow to the whole remaining height in a row, pushing what's below it
+/// off the page).
+pub(super) fn fixed_box<R>(ui: &mut Ui, size: egui::Vec2, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let rect = Rect::from_min_size(ui.cursor().min, size);
+    let r = ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(Layout::top_down(Align::Min)), add).inner;
+    ui.advance_cursor_after_rect(rect);
+    r
+}
+
+/// Text cut to one line with "…" (for rows drawn with the painter).
+pub(super) fn one_line(ui: &Ui, text: String, font: egui::FontId, color: Color32, width: f32) -> Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple(text, font, color, width.max(20.0));
+    job.wrap = egui::text::TextWrapping { max_width: width.max(20.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+    ui.painter().layout_job(job)
+}
+
 /// A small coloured label.
-fn chip(ui: &mut Ui, text: &str, fill: Color32, ink: Color32) {
+pub(super) fn chip(ui: &mut Ui, text: &str, fill: Color32, ink: Color32) {
     let font = theme::semibold(theme::ts::MICRO);
     let g = ui.painter().layout_no_wrap(text.to_owned(), font, ink);
     let (r, _) = ui.allocate_exact_size(g.size() + vec2(12.0, 4.0), Sense::hover());
@@ -131,17 +198,26 @@ fn chip(ui: &mut Ui, text: &str, fill: Color32, ink: Color32) {
 
 /// Page title, one line of explanation, and "Back to the map". True when
 /// Back was pressed.
-fn page_header(ui: &mut Ui, t: &Tokens, title: &str, about: &str) -> bool {
+pub(super) fn page_header(ui: &mut Ui, t: &Tokens, title: &str, about: &str) -> bool {
     let mut back = false;
+    // In a short window the explanation moves into the title's tooltip, so
+    // the lists keep their room.
+    let short = ui.ctx().content_rect().height() < 700.0;
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             back = ui.button("Back to the map  (Esc)").clicked();
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                ui.add(egui::Label::new(RichText::new(title).font(theme::semibold(theme::ts::DISPLAY))).truncate());
+                let size = if short { theme::ts::TITLE } else { theme::ts::DISPLAY };
+                let r = ui.add(egui::Label::new(RichText::new(title).font(theme::semibold(size))).truncate());
+                if short {
+                    r.on_hover_text(about);
+                }
             });
         });
     });
-    plain_note(ui, RichText::new(about).color(t.muted));
+    if !short {
+        plain_note(ui, RichText::new(about).color(t.muted));
+    }
     back
 }
 
@@ -512,6 +588,7 @@ impl DiskRootApp {
             d.similar = None;
         }
         self.page = Page::Dupes;
+        self.prepare_dupes_tab();
     }
 
     fn start_dupes(&mut self) {
@@ -600,15 +677,28 @@ impl DiskRootApp {
     pub(super) fn dupes_page(&mut self, ui: &mut Ui) {
         let t = self.tokens();
         let Some(mut d) = self.dupes.take() else { return };
+        triage::poll_verify(ui.ctx(), &mut d);
         let mut back = false;
+        let mut switched = false;
         Frame::new().inner_margin(Margin { left: 20, right: 20, top: 18, bottom: 0 }).show(ui, |ui| {
-            back = page_header(ui, &t, "Duplicates", "Find copies, pick which one to keep, and review before anything moves to the Recycle Bin. DiskRoot never deletes from this page by itself.");
+            back = page_header(ui, &t, "Duplicates & same names", "Identical files (same bytes, BLAKE3) and files that only share a name. Compare them, delete, or mark them for later. Nothing is deleted without a confirmation.");
             ui.add_space(8.0);
             let sets = d.run.as_ref().map_or(String::new(), |r| format!(" ({})", r.groups.len()));
-            let names = [format!("Identical files{sets}"), "Similar folders".to_owned(), format!("Past searches ({})", d.past.len())];
-            if let Some(i) = tabs(ui, &t, d.tab, &names) {
-                d.tab = i;
-                if i == 2 {
+            let same = d.names.as_ref().map_or(String::new(), |n| format!(" ({})", n.len()));
+            // Shown order; d.tab keeps its old numbers (0 identical, 1 similar, 2 past, 3 same names, 4 later).
+            const ORDER: [u8; 5] = [0, 3, 1, 4, 2];
+            let names = [
+                format!("Identical files{sets}"),
+                format!("Same names{same}"),
+                "Similar folders".to_owned(),
+                format!("Marked for later ({})", d.later.len()),
+                format!("Past searches ({})", d.past.len()),
+            ];
+            let cur = ORDER.iter().position(|&o| o == d.tab).unwrap_or(0) as u8;
+            if let Some(i) = tabs(ui, &t, cur, &names) {
+                d.tab = ORDER[i as usize];
+                switched = true;
+                if d.tab == 2 {
                     d.past = dupes::past_runs();
                 }
             }
@@ -618,9 +708,14 @@ impl DiskRootApp {
         Frame::new().inner_margin(Margin { left: 20, right: 20, top: 8, bottom: 12 }).show(ui, |ui| match d.tab {
             0 => self.identical_tab(ui, &t, &mut d, &mut out),
             1 => self.similar_tab(ui, &t, &mut d, &mut out),
+            3 => self.names_tab(ui, &t, &mut d, &mut out),
+            4 => self.later_tab(ui, &t, &mut d, &mut out),
             _ => past_tab(ui, &t, &mut d, &mut out),
         });
         self.dupes = Some(d);
+        if switched {
+            self.prepare_dupes_tab();
+        }
         if back {
             self.page = Page::Map;
         }
@@ -632,6 +727,11 @@ impl DiskRootApp {
                 }
             }
             Some(DupesGo::Explorer(p)) => self.explorer(&p),
+            Some(DupesGo::Preview(p)) => {
+                if let Err(e) = diskroot_session::open_file(&p) {
+                    self.say(e);
+                }
+            }
             Some(DupesGo::Map(n)) => self.jump_to(n),
             Some(DupesGo::Review(items)) => self.review_these(items),
             Some(DupesGo::Open(file)) => match dupes::load_run(&file) {
@@ -648,6 +748,16 @@ impl DiskRootApp {
                 if let Some(d) = &mut self.dupes {
                     d.past = dupes::past_runs();
                 }
+            }
+            Some(DupesGo::Verify(paths)) => self.verify_files(paths),
+            Some(DupesGo::Later(items)) => self.mark_later(items),
+            Some(DupesGo::Unlater(paths)) => self.unmark_later(&paths),
+            Some(DupesGo::DeleteNow(nodes)) => self.ask_delete_nodes(nodes),
+            Some(DupesGo::Names) => {
+                if let Some(d) = &mut self.dupes {
+                    d.names = None;
+                }
+                self.prepare_dupes_tab();
             }
             None => {}
         }
@@ -829,7 +939,7 @@ impl DiskRootApp {
         let w = ui.available_width();
         let left_w = (w * 0.38).clamp(260.0, 460.0);
         ui.horizontal_top(|ui| {
-            ui.allocate_ui_with_layout(vec2(left_w, h), Layout::top_down(Align::Min), |ui| {
+            fixed_box(ui, vec2(left_w, h), |ui| {
                 card(t).inner_margin(Margin::same(6)).show(ui, |ui| {
                     ui.set_min_size(vec2(left_w - 14.0, h - 14.0));
                     ui.set_max_width(left_w - 14.0);
@@ -849,7 +959,8 @@ impl DiskRootApp {
                                 p.rect_filled(r, CornerRadius::same(6), t.field);
                             }
                             let first = g.files.first().map_or("", |f| file_name(&f.1));
-                            let name = p.layout(visible(first), theme::semibold(theme::ts::SMALL), t.text, r.width() - 110.0);
+                            let name = one_line(ui, visible(first), theme::semibold(theme::ts::SMALL), t.text, r.width() - 110.0);
+                            let p = ui.painter();
                             p.galley(r.min + vec2(8.0, 3.0), name, t.text);
                             p.text(r.min + vec2(8.0, 21.0), Align2::LEFT_TOP, format!("{} copies × {}", g.files.len(), fmt_bytes(g.size)), theme::regular(theme::ts::CAPTION), t.muted);
                             p.text(pos2(r.max.x - 8.0, r.min.y + 4.0), Align2::RIGHT_TOP, format!("+{}", fmt_bytes(g.wasted())), theme::num(theme::ts::SMALL), t.accent);
@@ -866,15 +977,31 @@ impl DiskRootApp {
             });
             ui.add_space(8.0);
             let rw = ui.available_width();
-            ui.allocate_ui_with_layout(vec2(rw, h), Layout::top_down(Align::Min), |ui| {
+            fixed_box(ui, vec2(rw, h), |ui| {
                 card(t).show(ui, |ui| {
                     ui.set_min_size(vec2(rw - 34.0, h - 34.0));
                     let Some(g) = run.groups.get(d.sel) else { return };
                     let gi = d.sel;
-                    ui.label(RichText::new(visible(g.files.first().map_or("", |f| file_name(&f.1)))).font(theme::semibold(theme::ts::TITLE)));
+                    let paths: Vec<String> = g.files.iter().map(|f| f.1.clone()).collect();
+                    triage::set_header(ui, visible(g.files.first().map_or("", |f| file_name(&f.1))), ("IDENTICAL · BLAKE3", t.accent), &mut d.compare, d.verifying.is_some(), &paths, out);
                     ui.label(RichText::new(format!("{} identical copies of {} · keeping one frees {}", g.files.len(), fmt_bytes(g.size), fmt_bytes(g.wasted()))).color(t.muted))
                         .on_hover_text("Identical means byte for byte the same, not just the same name. The kept copy is suggested from its name and folder (not \"copy\" or \"(1)\", not in a backup, old or Downloads folder); pick another if that's the one you use.");
                     ui.add_space(6.0);
+                    if d.compare {
+                        let rows: Vec<triage::CmpRow> = g
+                            .files
+                            .iter()
+                            .map(|(hint, path)| triage::CmpRow {
+                                path: path.clone(),
+                                size: g.size,
+                                node: resolve(s, &scan_root, *hint, path),
+                                content: triage::identical_status(&d.hashes, &paths, path, t),
+                                later: later::contains(&d.later, path),
+                            })
+                            .collect();
+                        triage::compare_grid(ui, t, ("cmp-dupe", gi), &rows, &mut d.meta, out);
+                        return;
+                    }
                     ScrollArea::vertical().id_salt(("dupe-set", gi)).auto_shrink([false, false]).show(ui, |ui| {
                         for (i, (hint, path)) in g.files.iter().enumerate() {
                             let node = resolve(s, &scan_root, *hint, path);
@@ -893,6 +1020,14 @@ impl DiskRootApp {
                                     ui.add_space(6.0);
                                     // Buttons on the right first, so the name is shortened instead.
                                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        let flagged = later::contains(&d.later, path);
+                                        if triage::later_button(ui, t, flagged) {
+                                            *out = Some(if flagged {
+                                                DupesGo::Unlater(vec![path.clone()])
+                                            } else {
+                                                DupesGo::Later(vec![triage::later_item(path, g.size, format!("Identical copy of {}", visible(&g.files[d.keep[gi]].1)))])
+                                            });
+                                        }
                                         if let Some(n) = node
                                             && ui.small_button("Map").on_hover_text("Show it on the map").clicked()
                                         {
@@ -911,6 +1046,9 @@ impl DiskRootApp {
                                                 }
                                                 if node.is_none() {
                                                     bits.push("no longer in this scan".into());
+                                                }
+                                                if later::contains(&d.later, path) {
+                                                    bits.push("marked for later".into());
                                                 }
                                                 ui.add(egui::Label::new(RichText::new(visible(file_name(path))).font(theme::semibold(theme::ts::SMALL))).truncate()).on_hover_text(visible(path));
                                                 ui.add(egui::Label::new(RichText::new(bits.join(" · ")).color(t.muted).size(theme::ts::CAPTION)).truncate()).on_hover_text(visible(path));
@@ -936,6 +1074,26 @@ impl DiskRootApp {
         ui.horizontal(|ui| {
             ui.label(RichText::new(if n == 0 { "Nothing chosen yet. Tick copies to remove, or use \"Choose the other copies\".".to_owned() } else { format!("{n} copies chosen · {} would be freed", fmt_bytes(bytes)) }).font(theme::semibold(theme::ts::BODY)).color(if n == 0 { t.muted } else { t.text }));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let chosen = || {
+                    let mut v = Vec::new();
+                    for (gi, g) in run.groups.iter().enumerate() {
+                        for (i, (hint, path)) in g.files.iter().enumerate() {
+                            if d.remove[gi][i] {
+                                v.push((gi, *hint, path.clone()));
+                            }
+                        }
+                    }
+                    v
+                };
+                let del = egui::Button::new(RichText::new(format!("Delete {n} now…")).color(Color32::WHITE).font(theme::semibold(theme::ts::BODY))).fill(theme::cat_color(5)).min_size(vec2(120.0, 30.0));
+                if ui.add_enabled(n > 0, del).on_hover_text("Straight to the confirmation: Recycle Bin by default, or permanently if you tick that there").clicked() {
+                    *out = Some(DupesGo::DeleteNow(chosen().into_iter().filter_map(|(_, h, p)| resolve(s, &scan_root, h, &p)).collect()));
+                }
+                if ui.add_enabled(n > 0, egui::Button::new(format!("Mark {n} for later")).min_size(vec2(0.0, 30.0))).on_hover_text("Not sure yet? Keeps them on the \"Marked for later\" list (saved on this PC, also after a restart). Nothing is deleted.").clicked() {
+                    *out = Some(DupesGo::Later(
+                        chosen().into_iter().map(|(gi, _, p)| triage::later_item(&p, run.groups[gi].size, format!("Identical copy of {}", visible(&run.groups[gi].files[d.keep[gi]].1)))).collect(),
+                    ));
+                }
                 let b = egui::Button::new(RichText::new(format!("Review {n} and remove…")).color(t.accent_ink).font(theme::semibold(theme::ts::BODY))).fill(t.accent).min_size(vec2(170.0, 30.0));
                 if ui.add_enabled(n > 0, b).on_hover_text("Opens Review marked: check each one, untick what to keep, then move the rest to the Recycle Bin").clicked() {
                     let mut items = Vec::new();
@@ -1463,11 +1621,22 @@ impl DiskRootApp {
 }
 
 /// What a click on the Duplicates page asks for (done after drawing).
-enum DupesGo {
+pub(super) enum DupesGo {
     Start,
+    /// Read these files in full now (compare view's "Verify").
+    Verify(Vec<String>),
+    /// Add to / take off the "marked for later" list.
+    Later(Vec<later::Later>),
+    Unlater(Vec<String>),
+    /// Straight to the delete confirmation (no Review page).
+    DeleteNow(Vec<u32>),
+    /// Same names: look again with the minimum size now set.
+    Names,
     /// Back to the search options.
     NewSearch,
     Explorer(String),
+    /// Open a photo/video/document in its usual app.
+    Preview(String),
     Map(u32),
     /// (node if still in the scan, the kept copy for duplicates).
     Review(Vec<(Option<u32>, Option<String>)>),

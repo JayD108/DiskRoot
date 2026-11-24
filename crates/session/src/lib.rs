@@ -18,6 +18,7 @@ pub mod elevate;
 pub mod health;
 pub mod helper;
 pub mod integrity;
+pub mod later;
 pub mod lockdown;
 pub mod logs;
 pub mod recycle;
@@ -540,6 +541,36 @@ pub struct DeleteOut {
     pub freed: u64,
     pub name: String,
     pub cancelled: bool,
+}
+
+/// Files with the same name in different folders (see
+/// [`Scanned::name_collisions`]).
+#[derive(Clone, Debug, Serialize)]
+pub struct NameGroup {
+    pub name: String,
+    /// Biggest first.
+    pub files: Vec<NameFile>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct NameFile {
+    pub id: u32,
+    pub path: String,
+    pub size: u64,
+    /// Last-modified day (0 = unknown).
+    pub mtime: u16,
+}
+
+impl NameGroup {
+    pub fn total(&self) -> u64 {
+        self.files.iter().map(|f| f.size).sum()
+    }
+
+    /// Every copy has the same size (they may be identical; only a
+    /// content compare can say).
+    pub fn same_size(&self) -> bool {
+        self.files.windows(2).all(|w| w[0].size == w[1].size)
+    }
 }
 
 /// A row of the "largest files" list.
@@ -1472,6 +1503,33 @@ It may be left over from an uninstalled program, or belong to one that's install
         v
     }
 
+    /// Files that share a name (ignoring case) with a file in another
+    /// folder, at least `min_size` bytes each, whatever their contents:
+    /// the "same name" view next to identical files. Biggest sets first,
+    /// at most `limit`. Nothing is opened.
+    pub fn name_collisions(&self, min_size: u64, limit: usize) -> Vec<NameGroup> {
+        let idx = &self.index;
+        let mut by_name: std::collections::HashMap<String, Vec<u32>> = std::collections::HashMap::new();
+        for id in 1..idx.len() as u32 {
+            if idx.is_dir(id) || idx.flags(id) & (flags::DELETED | flags::LINK) != 0 || idx.size(id) < min_size {
+                continue;
+            }
+            by_name.entry(idx.name(id).to_lowercase()).or_default().push(id);
+        }
+        let mut v: Vec<NameGroup> = by_name
+            .into_values()
+            .filter(|ids| ids.len() > 1)
+            .map(|ids| {
+                let mut files: Vec<NameFile> = ids.into_iter().map(|id| NameFile { id, path: idx.path(id), size: idx.size(id), mtime: self.mtime(id) }).collect();
+                files.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
+                NameGroup { name: idx.name(files[0].id).to_owned(), files }
+            })
+            .collect();
+        v.sort_by(|a, b| b.total().cmp(&a.total()).then_with(|| a.name.cmp(&b.name)));
+        v.truncate(limit);
+        v
+    }
+
     /// Bytes and file counts per file extension (lowercase, "" = none),
     /// biggest first.
     pub fn file_types(&self, limit: usize) -> Vec<TypeRow> {
@@ -1652,6 +1710,12 @@ impl PendingDelete {
     /// show its own progress or "too big to recycle" prompt): use a worker
     /// thread.
     pub fn recycle(&self) -> Result<DeleteOut, String> {
+        self.remove(false)
+    }
+
+    /// Like [`PendingDelete::recycle`], but `permanent` deletes for good
+    /// (no Recycle Bin). Only when the user chose that and confirmed it.
+    pub fn remove(&self, permanent: bool) -> Result<DeleteOut, String> {
         let identity = match &self.identity {
             Some(chain) => Ok(chain.clone()),
             None => safety::identity_chain(&self.path, &self.scan_root),
@@ -1662,7 +1726,7 @@ impl PendingDelete {
             let r = safety::hard_lock(&self.path)
                 .map_or(Ok(()), Err)
                 .and_then(|()| safety::verify_before_recycle(&self.path, &self.scan_root, self.dir, self.was_link))
-                .and_then(|()| recycle::to_recycle_bin(&self.path));
+                .and_then(|()| if permanent { recycle::delete_permanently(&self.path) } else { recycle::to_recycle_bin(&self.path) });
             drop(pinned);
             r
         });
@@ -1675,6 +1739,7 @@ impl PendingDelete {
             category: self.category.clone(),
             outcome: match &result {
                 Ok(recycle::Outcome::Recycled) => "recycled".into(),
+                Ok(recycle::Outcome::Deleted) => "deleted permanently".into(),
                 Ok(recycle::Outcome::Cancelled) => "cancelled".into(),
                 Err(e) => format!("refused: {e}"),
             },
@@ -1682,6 +1747,35 @@ impl PendingDelete {
         result?;
         Ok(DeleteOut { freed: if cancelled { 0 } else { self.freed }, name: self.name.clone(), cancelled })
     }
+}
+
+/// File types the compare view may open in their usual app: things to look
+/// at, never anything that runs (no programs, scripts, shortcuts or macros).
+const PREVIEW_EXT: &[&str] = &[
+    "jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "heic", "heif", "mp4", "mkv", "mov", "avi", "wmv", "m4v", "webm", "mp3", "flac", "wav", "m4a", "aac", "ogg", "opus", "wma", "pdf", "txt",
+    "md", "csv", "docx", "xlsx", "pptx", "odt", "ods", "odp", "epub", "rtf",
+];
+
+/// True if [`open_file`] would open this file.
+pub fn can_preview(path: &str) -> bool {
+    path.rsplit('\\').next().and_then(|n| n.rsplit_once('.')).is_some_and(|(_, e)| PREVIEW_EXT.contains(&e.to_ascii_lowercase().as_str()))
+}
+
+/// Opens a photo, video, song or document in its usual app (to check it
+/// before deleting). Refuses every other type, so nothing runs.
+pub fn open_file(path: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    if !can_preview(path) || path.contains('"') || !Path::new(path).is_absolute() {
+        return Err("DiskRoot only opens photos, videos, music and documents. Use Explorer for this one.".into());
+    }
+    if !Path::new(path).is_file() {
+        return Err("It no longer exists. Rescan to refresh.".into());
+    }
+    std::process::Command::new(integrity::windows_dir().join("explorer.exe"))
+        .raw_arg(format!("\"{path}\""))
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Could not open it: {e}"))
 }
 
 /// Shows `path` selected in Windows Explorer.
@@ -1705,6 +1799,39 @@ const CAT_TEMP: u8 = 6;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_names_in_different_folders_are_grouped() {
+        let mut idx = Index::new("C:\\");
+        let a = idx.push(0, "A", 0, 0, flags::DIR);
+        let b = idx.push(0, "B", 0, 0, flags::DIR);
+        idx.push(a, "Report.pdf", 5000, 8192, 0);
+        idx.push(b, "report.PDF", 7000, 8192, 0);
+        idx.push(a, "alone.txt", 5000, 8192, 0);
+        idx.push(b, "tiny.txt", 10, 4096, 0);
+        idx.push(a, "tiny.txt", 10, 4096, 0);
+        idx.compute_totals();
+        let s = Scanned::new(idx, ScanStats::default(), "test".into());
+        let g = s.name_collisions(0, 10);
+        assert_eq!(g.len(), 2);
+        assert_eq!(g[0].files.len(), 2);
+        assert!(g[0].name.eq_ignore_ascii_case("report.pdf"));
+        assert!(!g[0].same_size());
+        assert!(g[1].same_size());
+        // The minimum size leaves the small ones out.
+        assert_eq!(s.name_collisions(100, 10).len(), 1);
+    }
+
+    #[test]
+    fn preview_only_opens_things_to_look_at() {
+        assert!(can_preview(r"C:\a\photo.JPG"));
+        assert!(can_preview(r"C:\a\b.pdf"));
+        assert!(!can_preview(r"C:\a\setup.exe"));
+        assert!(!can_preview(r"C:\a\x.lnk"));
+        assert!(!can_preview(r"C:\a\macro.docm"));
+        assert!(!can_preview(r"C:\a\noext"));
+        assert!(open_file(r"C:\a\setup.exe").is_err());
+    }
 
     #[test]
     fn temp_category_index_is_right() {

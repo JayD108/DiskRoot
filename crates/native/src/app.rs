@@ -29,6 +29,7 @@ use crate::theme::{self, Theme, Tokens};
 use crate::{fmt_bytes, fmt_count, fmt_files, fmt_pct};
 
 mod pages;
+mod triage;
 use pages::{ActivityView, DupesPage, ReviewView};
 
 const ROW_H: f32 = 24.0;
@@ -148,8 +149,8 @@ enum Cmd {
     Focus,
     ToggleList,
     ToggleInspector,
-    Light,
-    Dark,
+    /// Ctrl+Shift+D: dark <-> light.
+    ToggleTheme,
     Export,
     Rules,
     Alerts,
@@ -160,6 +161,10 @@ enum Cmd {
     Security,
     About,
 }
+
+/// The height a full page (Duplicates, Large files...) gets at least; a
+/// shorter window scrolls the page.
+const PAGE_MIN_H: f32 = 480.0;
 
 /// What fills the window under the toolbar.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -176,6 +181,8 @@ enum Page {
     Review,
     /// What was deleted and compressed through DiskRoot, and what changed.
     Activity,
+    /// Largest files and file types (was a dialog).
+    Files,
 }
 
 /// What was picked in the palette.
@@ -190,7 +197,6 @@ enum Dialog {
     Welcome,
     Security(Box<Integrity>),
     Changes(Box<Changes>),
-    Files(Box<FilesView>),
     Message(String, String),
     ConfirmDelete(Box<Confirm>),
     ConfirmMany(Box<ConfirmMany>),
@@ -425,6 +431,10 @@ struct ConfirmMany {
     bytes: u64,
     warnings: DeleteWarnings,
     ack: bool,
+    /// "Delete permanently" ticked (skips the Recycle Bin), and the extra
+    /// "can't be undone" tick it needs.
+    permanent: bool,
+    permanent_ack: bool,
 }
 
 /// Result of the background "remember" step: what changed, and the previous
@@ -444,7 +454,7 @@ struct DriveBar {
 }
 
 /// "Largest files & file types": the search text and current results.
-struct FilesView {
+pub(super) struct FilesView {
     query: String,
     top: Vec<FileRow>,
     types: Vec<TypeRow>,
@@ -619,6 +629,10 @@ pub struct DiskRootApp {
     /// Review marked page.
     review: ReviewView,
     /// Marked duplicate copies: node -> the copy that is kept.
+    /// Largest files page.
+    files_view: Option<Box<FilesView>>,
+    /// The running "delete several" skips the Recycle Bin.
+    delete_permanent: bool,
     dupe_of: std::collections::HashMap<u32, String>,
     /// The Activity page.
     activity: Option<ActivityView>,
@@ -702,6 +716,8 @@ impl DiskRootApp {
             dupes: None,
             review: ReviewView::default(),
             dupe_of: std::collections::HashMap::new(),
+            files_view: None,
+            delete_permanent: false,
             activity: None,
             prev_visit,
             scan_after_welcome: false,
@@ -1833,6 +1849,7 @@ impl DiskRootApp {
                 let dark = self.settings.dark;
                 ui.radio_value(&mut self.settings.dark, false, "Light theme");
                 ui.radio_value(&mut self.settings.dark, true, "Dark theme");
+                ui.label(RichText::new("Ctrl+Shift+D switches between them").color(self.tokens().faint).size(theme::ts::CAPTION));
                 if dark != self.settings.dark {
                     theme::apply(ui.ctx(), if self.settings.dark { Theme::Dark } else { Theme::Light });
                     changed = true;
@@ -1864,6 +1881,8 @@ impl DiskRootApp {
                             "F5 · Scan (no admin)",
                             "Ctrl+F5 · Fast scan (admin, whole NTFS drives)",
                             "Ctrl+H · Home: the drive at a glance",
+                            "Ctrl+1 … Ctrl+6 · Workspace tabs: overview, duplicates, large files, drive status, review, activity",
+                            "Ctrl+Shift+D · Switch between dark and light theme",
                             "Ctrl+F · Filter by name",
                             "↑ / ↓ · Move in the tree",
                             "→ / ← · Open / close a folder (← on a closed one goes to its parent)",
@@ -1995,19 +2014,6 @@ impl DiskRootApp {
                 self.anchors.insert("home", hr.rect);
                 if hr.clicked() || home_key {
                     self.toggle_home();
-                }
-            }
-            let on_status = self.page == Page::Status;
-            let sr = ui.add(egui::Button::new(if compact { "Drive status" } else { "◉ Drive status" }).selected(on_status)).on_hover_text("Your drive status: health, who's writing, size history and past scans, in one page");
-            self.anchors.insert("status", sr.rect);
-            if sr.clicked() {
-                if on_status { self.page = Page::Map } else { self.open_status(self.status_tab) }
-            }
-            if !self.marked.is_empty() {
-                let on_review = self.page == Page::Review;
-                let label = RichText::new(format!("Review {} marked", self.marked.len())).color(theme::warn());
-                if ui.add(egui::Button::new(label).selected(on_review)).on_hover_text("Check each marked item and decide: delete or keep").clicked() {
-                    if on_review { self.page = Page::Map } else { self.open_review() }
                 }
             }
             let mut job = egui::text::LayoutJob::default();
@@ -3116,10 +3122,17 @@ impl DiskRootApp {
     /// Prepares every marked item (skipping ones inside another marked
     /// folder), arms each, and asks once.
     fn ask_delete_many(&mut self) {
-        let Some(s) = &self.scanned else { return };
         let marked: Vec<u32> = self.marked.iter().copied().collect();
+        self.ask_delete_nodes(marked);
+    }
+
+    /// The one confirmation for several items (marks, or a selection on the
+    /// Duplicates page).
+    pub(super) fn ask_delete_nodes(&mut self, marked: Vec<u32>) {
+        let Some(s) = &self.scanned else { return };
+        let set: BTreeSet<u32> = marked.iter().copied().collect();
         let inside_other = |n: u32| {
-            s.crumbs(n).map(|c| c.iter().rev().skip(1).any(|a| self.marked.contains(&a.id))).unwrap_or(false)
+            s.crumbs(n).map(|c| c.iter().rev().skip(1).any(|a| set.contains(&a.id))).unwrap_or(false)
         };
         let (mut items, mut refused) = (Vec::new(), Vec::new());
         let mut warnings = DeleteWarnings::default();
@@ -3145,14 +3158,15 @@ impl DiskRootApp {
         let bytes: u64 = items.iter().map(|p| p.freed).sum();
         let files: u64 = items.iter().map(|p| u64::from(p.files)).sum();
         warnings.large |= bytes >= diskroot_session::safety::LARGE_BYTES || files >= u64::from(diskroot_session::safety::LARGE_FILES);
-        self.dialog = Some(Dialog::ConfirmMany(Box::new(ConfirmMany { items, refused, bytes, warnings, ack: false })));
+        self.dialog = Some(Dialog::ConfirmMany(Box::new(ConfirmMany { items, refused, bytes, warnings, ack: false, permanent: false, permanent_ack: false })));
     }
 
-    fn start_delete_many(&mut self, items: Vec<PendingDelete>) {
+    fn start_delete_many(&mut self, items: Vec<PendingDelete>, permanent: bool) {
         let (tx, rx) = mpsc::channel();
         let n = items.len();
+        self.delete_permanent = permanent;
         std::thread::spawn(move || {
-            let results = items.into_iter().map(|p| (p.node, p.recycle())).collect();
+            let results = items.into_iter().map(|p| (p.node, p.remove(permanent))).collect();
             let _ = tx.send(Done::DeletedMany(results));
         });
         self.job = Some(Job { kind: JobKind::DeleteMany(n), started: Instant::now(), rx, cancel: Arc::default() });
@@ -3161,13 +3175,19 @@ impl DiskRootApp {
     fn finish_delete_many(&mut self, results: Vec<(u32, Result<DeleteOut, String>)>) {
         self.job = None;
         self.badge_dirty = true;
-        self.marked.clear();
         let (mut done, mut freed, mut failed) = (0, 0u64, Vec::new());
+        let mut gone_paths = Vec::new();
         if let Some(s) = &mut self.scanned {
             remember::forget_index(&s.summary().root);
             for (node, r) in results {
+                // Only what was handled leaves the marks; other marks stay.
+                self.marked.remove(&node);
+                self.dupe_of.remove(&node);
                 match r {
                     Ok(out) if !out.cancelled => {
+                        if let Ok(p) = s.path(node) {
+                            gone_paths.push(p);
+                        }
                         s.apply_delete(node);
                         done += 1;
                         freed += out.freed;
@@ -3181,11 +3201,16 @@ impl DiskRootApp {
         self.invalidate();
         self.refresh_drive_bar();
         self.selected = Some(self.root_key());
-        if failed.is_empty() {
+        self.forget_deleted(&gone_paths);
+        let permanent = std::mem::take(&mut self.delete_permanent);
+        let verb = if permanent { "Deleted" } else { "Moved" };
+        if failed.is_empty() && permanent {
+            self.say(format!("Deleted {done} item{} permanently · {} freed", if done == 1 { "" } else { "s" }, fmt_bytes(freed)));
+        } else if failed.is_empty() {
             self.say(format!("Moved {done} items to the Recycle Bin · {} freed", fmt_bytes(freed)));
         } else {
             self.dialog = Some(Dialog::Message(
-                format!("Moved {done} items; {} couldn't be moved", failed.len()),
+                format!("{verb} {done} items; {} couldn't be removed", failed.len()),
                 failed.join("\n\n"),
             ));
         }
@@ -3218,8 +3243,9 @@ impl DiskRootApp {
 
     fn open_files(&mut self) {
         let Some(s) = &self.scanned else { return };
-        let view = FilesView { query: String::new(), top: s.top_files(100, ""), types: s.file_types(40) };
-        self.dialog = Some(Dialog::Files(Box::new(view)));
+        let view = FilesView { query: String::new(), top: s.top_files(500, ""), types: s.file_types(200) };
+        self.files_view = Some(Box::new(view));
+        self.page = Page::Files;
     }
 
     fn open_history(&mut self) {
@@ -4042,6 +4068,7 @@ impl DiskRootApp {
                 JobKind::Delete(n) => (format!("Moving \"{n}\" to the Recycle Bin"), "Windows is moving the files…".to_owned()),
                 JobKind::Reopen(p) => (format!("Opening the remembered scan of {p}"), "Loading the last scan from this PC…".to_owned()),
                 JobKind::Export(p) => ("Exporting to CSV".to_owned(), format!("Writing {p}…")),
+                JobKind::DeleteMany(n) if self.delete_permanent => (format!("Deleting {n} items permanently"), "Each item is re-checked on disk first…".to_owned()),
                 JobKind::DeleteMany(n) => (format!("Moving {n} items to the Recycle Bin"), "Each item is re-checked on disk first…".to_owned()),
                 JobKind::Compress(title, ..) => (
                     title.clone(),
@@ -4128,10 +4155,9 @@ impl DiskRootApp {
         let mut confirm: Option<u32> = None;
         let mut action: Option<&'static str> = None;
         let mut jump: Option<String> = None;
-        let wide = matches!(d, Dialog::Changes(_) | Dialog::Files(_) | Dialog::ConfirmMany(_) | Dialog::Leftovers(_) | Dialog::Savings(_) | Dialog::Schedule(_) | Dialog::Space(_) | Dialog::Unreadable(_));
+        let wide = matches!(d, Dialog::Changes(_) | Dialog::ConfirmMany(_) | Dialog::Leftovers(_) | Dialog::Savings(_) | Dialog::Schedule(_) | Dialog::Space(_) | Dialog::Unreadable(_));
         let mut leftover_marks: Option<Vec<u32>> = None;
         let mut tool_start: Option<(Action, bool)> = None;
-        let mut requery: Option<String> = None;
         let mut jump_node: Option<u32> = None;
         let mut savings_go: Option<SavingsGo> = None;
         // One window id per dialog kind, so a dialog never inherits another
@@ -4397,7 +4423,7 @@ impl DiskRootApp {
                     for (k, v) in [
                         ("Only looks", "Reads file names and sizes. Nothing on your drive changes unless you confirm."),
                         ("Stays offline", "No network, no account, no telemetry."),
-                        ("Deletes to the Recycle Bin", "Always after you confirm, and Windows' own folders are locked."),
+                        ("Deletes to the Recycle Bin", "Always after you confirm, and Windows' own folders are locked. Deleting permanently happens only if you tick it in the confirmation."),
                     ] {
                         ui.horizontal_wrapped(|ui| {
                             ui.label(RichText::new("✔").color(t.accent));
@@ -4414,7 +4440,7 @@ impl DiskRootApp {
                         ("Network", "DiskRoot makes no network connections and sends nothing anywhere. The native app has no browser engine."),
                         ("Disk access", "Folders and drives are opened for reading only; scanning never changes your files. DiskRoot saves its own scans (compressed) in %LOCALAPPDATA%\\DiskRoot."),
                         ("Admin rights", "Only after the Windows prompt: for Fast scan (a helper reads the file table in about 1–5 s and exits), and if you use them, Windows' DISM cleanup and virtual-disk compaction."),
-                        ("Deleting", "Always to the Recycle Bin, after you confirm. Right before moving, DiskRoot re-checks the item: if it changed, or a folder on its path became a link since the scan, it refuses."),
+                        ("Deleting", "To the Recycle Bin, after you confirm (permanently only if you tick \"Delete permanently\" there and confirm that it can't be undone). Right before deleting, DiskRoot re-checks the item: if it changed, or a folder on its path became a link since the scan, it refuses."),
                         ("Warnings", "Extra confirmation for OneDrive folders (deleting syncs to your other devices), Git repositories (unpushed work) and very large deletes."),
                         ("History", "Each delete is logged on this PC in %LOCALAPPDATA%\\DiskRoot\\deletions.log."),
                         ("Remembered scans", "Names and sizes of your last scans (up to 8 drives or folders) are kept in %LOCALAPPDATA%\\DiskRoot\\cache for instant reopen and \"what changed\". Never uploaded. File → Remember scans turns it off; File → Forget remembered scans deletes them."),
@@ -4504,7 +4530,9 @@ impl DiskRootApp {
                     }
                 }
                 Dialog::ConfirmMany(c) => {
-                    ui.label(RichText::new(format!("Move {} items to the Recycle Bin?", c.items.len())).font(theme::semibold(theme::ts::SECTION)));
+                    let what = if c.items.len() == 1 { "1 item".to_owned() } else { format!("{} items", c.items.len()) };
+                    let q = if c.permanent { format!("Delete {what} permanently?") } else { format!("Move {what} to the Recycle Bin?") };
+                    ui.label(RichText::new(q).font(theme::semibold(theme::ts::SECTION)));
                     ui.label(format!("Frees {} in total", fmt_bytes(c.bytes)));
                     ui.add_space(6.0);
                     egui::ScrollArea::vertical().id_salt("many").max_height(160.0).show(ui, |ui| {
@@ -4550,50 +4578,17 @@ impl DiskRootApp {
                     if !notes.is_empty() {
                         ui.checkbox(&mut c.ack, "I understand. Move them to the Recycle Bin.");
                     }
-                }
-                Dialog::Files(fv) => {
-                    ui.label(RichText::new("Largest files & file types").font(theme::semibold(theme::ts::TITLE)));
                     ui.add_space(6.0);
-                    ui.columns(2, |cols| {
-                        let ui = &mut cols[0];
-                        ui.label(RichText::new("Largest files").font(theme::semibold(theme::ts::BODY)));
-                        let r = ui.add(TextEdit::singleline(&mut fv.query).hint_text("Search file names").desired_width(f32::INFINITY));
-                        if r.changed() {
-                            requery = Some(fv.query.clone());
-                        }
-                        egui::ScrollArea::vertical().id_salt("top-files").max_height(380.0).show(ui, |ui| {
-                            if fv.top.is_empty() {
-                                ui.label(RichText::new("No matching files.").color(t.faint));
-                            }
-                            for f in &fv.top {
-                                ui.horizontal(|ui| {
-                                    ui.add_sized(vec2(70.0, 18.0), egui::Label::new(RichText::new(fmt_bytes(f.on_disk)).color(t.muted)));
-                                    let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
-                                    ui.painter().rect_filled(dot, CornerRadius::same(2), theme::cat_color(f.cat));
-                                    let r = ui.add(egui::Label::new(visible(&f.name)).truncate().sense(Sense::click()));
-                                    if r.on_hover_text(format!("{}\nModified {}\nClick to show it in the tree", visible(&f.path), diskroot_session::age_text(diskroot_session::today_days(), f.mtime))).clicked() {
-                                        jump_node = Some(f.id);
-                                    }
-                                });
-                            }
+                    if ui.checkbox(&mut c.permanent, "Delete permanently (skip the Recycle Bin)").on_hover_text("Off by default. The items are removed for good: they can't be restored from the Recycle Bin or from Activity.").changed() && !c.permanent {
+                        c.permanent_ack = false;
+                    }
+                    if c.permanent {
+                        egui::Frame::new().fill(theme::cat_color(5).gamma_multiply(if t.dark { 0.25 } else { 0.15 })).corner_radius(CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.add(egui::Label::new(RichText::new("These items won't go to the Recycle Bin. Once deleted they can't be restored, by DiskRoot or by Windows. All the usual safety checks still run.").color(t.text)).wrap());
+                            ui.checkbox(&mut c.permanent_ack, "I understand this can't be undone.");
                         });
-                        let ui = &mut cols[1];
-                        ui.label(RichText::new("File types").font(theme::semibold(theme::ts::BODY)));
-                        egui::ScrollArea::vertical().id_salt("file-types").max_height(410.0).show(ui, |ui| {
-                            egui::Grid::new("types").num_columns(3).striped(true).spacing([12.0, 4.0]).show(ui, |ui| {
-                                for h in ["Type", "Size", "Files"] {
-                                    ui.label(RichText::new(h).color(t.muted).size(theme::ts::SMALL));
-                                }
-                                ui.end_row();
-                                for ty in &fv.types {
-                                    ui.label(if ty.ext.is_empty() { "(no extension)".to_owned() } else { format!(".{}", visible(&ty.ext)) });
-                                    ui.label(fmt_bytes(ty.bytes));
-                                    ui.label(RichText::new(fmt_count(ty.files)).color(t.muted));
-                                    ui.end_row();
-                                }
-                            });
-                        });
-                    });
+                    }
                 }
                 Dialog::Rules => {
                     let st = &self.rules_status;
@@ -4967,8 +4962,9 @@ impl DiskRootApp {
                     }
                     Dialog::ConfirmMany(c) => {
                         let needs = c.warnings.needs_ack();
-                        let ready = !c.items.is_empty() && (c.ack || !needs);
-                        let b = egui::Button::new(RichText::new(format!("Move {} to Recycle Bin", c.items.len())).color(Color32::WHITE)).fill(theme::cat_color(5));
+                        let ready = !c.items.is_empty() && (c.ack || !needs) && (!c.permanent || c.permanent_ack);
+                        let text = if c.permanent { format!("Delete {} permanently", c.items.len()) } else { format!("Move {} to Recycle Bin", c.items.len()) };
+                        let b = egui::Button::new(RichText::new(text).color(Color32::WHITE)).fill(theme::cat_color(5));
                         if ui.add_enabled(ready, b).clicked() {
                             action = Some("delete-many");
                         }
@@ -5114,7 +5110,8 @@ impl DiskRootApp {
             }
             Some("delete-many") => {
                 if let Some(Dialog::ConfirmMany(c)) = self.dialog.take() {
-                    self.start_delete_many(c.items);
+                    let permanent = c.permanent && c.permanent_ack;
+                    self.start_delete_many(c.items, permanent);
                 }
             }
             Some(a @ ("compress-go" | "uncompress-go")) => {
@@ -5250,9 +5247,6 @@ impl DiskRootApp {
             self.rows = None;
             self.say(format!("{} downloads marked · press Delete to review them", self.marked.len()));
         }
-        if let (Some(q), Some(s), Some(Dialog::Files(fv))) = (requery, &self.scanned, &mut self.dialog) {
-            fv.top = s.top_files(100, &q);
-        }
         if let Some(n) = jump_node {
             self.dialog = None;
             if self.settings.by_category {
@@ -5293,6 +5287,11 @@ impl DiskRootApp {
     }
 
     fn keyboard(&mut self, ctx: &egui::Context) {
+        // Ctrl+Shift+D: dark <-> light, from anywhere (also over a dialog
+        // or the palette).
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, Key::D)) {
+            self.run_cmd(ctx, Cmd::ToggleTheme);
+        }
         if self.dialog.is_some() || self.job.is_some() || self.palette.is_some() || self.tour.is_some() {
             return;
         }
@@ -5426,8 +5425,7 @@ impl DiskRootApp {
             (if self.settings.hide_list { "Show the folder list" } else { "Minimize the folder list" }, "Ctrl+B", Cmd::ToggleList, true),
             (if self.settings.hide_inspector { "Show the Inspector" } else { "Minimize the Inspector" }, "Ctrl+J", Cmd::ToggleInspector, true),
             (if self.settings.classic { "Look: Studio" } else { "Look: Classic" }, "", Cmd::Look, true),
-            ("Light theme", "", Cmd::Light, self.settings.dark),
-            ("Dark theme", "", Cmd::Dark, !self.settings.dark),
+            (if self.settings.dark { "Switch to light theme" } else { "Switch to dark theme" }, "Ctrl+Shift+D", Cmd::ToggleTheme, true),
             ("Export to CSV", "", Cmd::Export, scan && idle),
             ("Custom rules", "", Cmd::Rules, true),
             ("Size alerts", "", Cmd::Alerts, true),
@@ -5532,8 +5530,8 @@ impl DiskRootApp {
                 self.settings.hide_inspector = !self.settings.hide_inspector;
                 self.settings.save();
             }
-            Cmd::Light | Cmd::Dark => {
-                self.settings.dark = c == Cmd::Dark;
+            Cmd::ToggleTheme => {
+                self.settings.dark = !self.settings.dark;
                 theme::apply(ctx, if self.settings.dark { Theme::Dark } else { Theme::Light });
                 self.settings.save();
                 if let Some(m) = &mut self.map {
@@ -5557,6 +5555,7 @@ impl DiskRootApp {
                         "Ctrl+J · Show or minimize the Inspector",
                         "F5 · Scan (no admin) · Ctrl+F5 · Fast scan (admin)",
                         "Ctrl+H · Home · Ctrl+F · Filter by name",
+                        "Ctrl+1 … Ctrl+6 · Workspace tabs · Ctrl+Shift+D · Dark / light theme",
                         "↑ / ↓ / → / ← / Enter · Move in the tree, open and close folders",
                         "Backspace · Up one folder",
                         "Space or Ctrl+click · Mark / unmark · Delete · Move to the Recycle Bin (always asks first)",
@@ -6771,6 +6770,11 @@ impl DiskRootApp {
             .frame(Frame::new().fill(t.win).inner_margin(Margin::symmetric(8, 5)).stroke(Stroke::new(1.0, t.line)))
             .exact_size(40.0)
             .show(ui, |ui| self.toolbar(ui));
+        egui::Panel::top("workspace")
+            .frame(Frame::new().fill(t.win).inner_margin(Margin { left: 8, right: 8, top: 3, bottom: 0 }).stroke(Stroke::new(1.0, t.line)))
+            .exact_size(34.0)
+            .show_separator_line(false)
+            .show(ui, |ui| self.workspace_tabs(ui));
         egui::Panel::bottom("status")
             .frame(Frame::new().fill(t.win).inner_margin(Margin::symmetric(10, 2)).stroke(Stroke::new(1.0, t.line)))
             .exact_size(26.0)
@@ -6782,7 +6786,7 @@ impl DiskRootApp {
         let home = self.page == Page::Home && self.scanned.is_some() && (self.home.is_some() || self.home_rx.is_some()) && !scanning;
         let other = !scanning && match self.page {
             Page::Status | Page::Activity => true,
-            Page::Dupes | Page::Review => self.scanned.is_some(),
+            Page::Dupes | Page::Review | Page::Files => self.scanned.is_some(),
             Page::Map | Page::Home => false,
         };
         let empty = self.scanned.is_none();
@@ -6796,12 +6800,25 @@ impl DiskRootApp {
                     if scanning {
                         self.scan_view(ui)
                     } else if other {
-                        match self.page {
-                            Page::Status => self.status_page(ui),
-                            Page::Dupes => self.dupes_page(ui),
-                            Page::Review => self.review_page(ui),
-                            _ => self.activity_page(ui),
-                        }
+                        // A full page fills the window; in a short window it
+                        // keeps a usable height and scrolls as a whole, so no
+                        // list or button is cut off.
+                        let view = ui.available_size();
+                        let h = view.y.max(PAGE_MIN_H);
+                        let page = self.page;
+                        ScrollArea::vertical().id_salt(("page", page as u8)).auto_shrink([false, false]).show(ui, |ui| {
+                            let rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), h));
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(Layout::top_down(Align::Min)), |ui| {
+                                ui.set_min_height(h);
+                                match page {
+                                    Page::Status => self.status_page(ui),
+                                    Page::Dupes => self.dupes_page(ui),
+                                    Page::Review => self.review_page(ui),
+                                    Page::Files => self.files_page(ui),
+                                    _ => self.activity_page(ui),
+                                }
+                            });
+                        });
                     } else {
                         self.home_page(ui)
                     }

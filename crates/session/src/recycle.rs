@@ -1,10 +1,13 @@
 //! Moves a file or folder to the Recycle Bin with the Windows shell.
 //!
-//! Uses SHFileOperationW with FOF_ALLOWUNDO (Recycle Bin, never a permanent
+//! Uses SHFileOperationW with FOF_ALLOWUNDO (Recycle Bin, not a permanent
 //! delete) and FOF_WANTNUKEWARNING: if something can't go to the Recycle Bin
 //! (too big, network drive...), Windows itself asks before deleting it
 //! permanently. DiskRoot has already asked the user, so the normal
 //! "are you sure" prompt is skipped (FOF_NOCONFIRMATION).
+//!
+//! [`delete_permanently`] is the one exception: it is only called when the
+//! user ticked "Delete permanently" and confirmed that it can't be undone.
 
 use std::ffi::c_void;
 use std::path::Path;
@@ -33,10 +36,22 @@ unsafe extern "system" {
 
 pub enum Outcome {
     Recycled,
+    /// Removed without the Recycle Bin (only after the user chose that).
+    Deleted,
     Cancelled,
 }
 
 pub fn to_recycle_bin(path: &Path) -> Result<Outcome, String> {
+    shell_delete(path, false)
+}
+
+/// Deletes `path` for good (no Recycle Bin). Same path checks as
+/// [`to_recycle_bin`]; the caller has already asked the user.
+pub fn delete_permanently(path: &Path) -> Result<Outcome, String> {
+    shell_delete(path, true)
+}
+
+fn shell_delete(path: &Path, permanent: bool) -> Result<Outcome, String> {
     let text = path.to_str().ok_or("Path is not valid Unicode")?;
     // The shell treats '*' and '?' as wildcards. Windows file names can't
     // contain them, but refuse anyway rather than risk a wider delete.
@@ -53,7 +68,7 @@ pub fn to_recycle_bin(path: &Path) -> Result<Outcome, String> {
         w_func: FO_DELETE,
         p_from: from.as_ptr(),
         p_to: std::ptr::null(),
-        f_flags: FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_WANTNUKEWARNING,
+        f_flags: if permanent { FOF_NOCONFIRMATION } else { FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_WANTNUKEWARNING },
         f_any_operations_aborted: 0,
         h_name_mappings: std::ptr::null_mut(),
         lpsz_progress_title: std::ptr::null(),
@@ -64,13 +79,16 @@ pub fn to_recycle_bin(path: &Path) -> Result<Outcome, String> {
     if op.f_any_operations_aborted != 0 {
         return Ok(Outcome::Cancelled);
     }
+    if code != 0 && permanent {
+        return Err(format!("Windows couldn't delete it (error 0x{code:X}). It may be in use, or the path may be too long."));
+    }
     if code != 0 {
         return Err(format!("Windows couldn't move it to the Recycle Bin (error 0x{code:X}). It may be in use, or the path may be too long."));
     }
     if std::fs::symlink_metadata(path).is_ok() {
         return Err("Windows reported success but it is still there (partly in use?).".into());
     }
-    Ok(Outcome::Recycled)
+    Ok(if permanent { Outcome::Deleted } else { Outcome::Recycled })
 }
 
 #[cfg(test)]
@@ -92,6 +110,14 @@ mod tests {
         let p = std::env::temp_dir().join(format!("diskroot-recycle-test-{}.txt", std::process::id()));
         std::fs::write(&p, b"diskroot test file - safe to delete").unwrap();
         assert!(matches!(to_recycle_bin(&p), Ok(Outcome::Recycled)));
+        assert!(!p.exists());
+    }
+
+    #[test]
+    fn permanently_deletes_a_temp_file() {
+        let p = std::env::temp_dir().join(format!("diskroot-nuke-test-{}.txt", std::process::id()));
+        std::fs::write(&p, b"diskroot test file").unwrap();
+        assert!(matches!(delete_permanently(&p), Ok(Outcome::Deleted)));
         assert!(!p.exists());
     }
 }

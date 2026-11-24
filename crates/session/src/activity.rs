@@ -119,7 +119,8 @@ pub fn read(limit: usize) -> Vec<Entry> {
     let mut v: Vec<Entry> = Vec::new();
     for d in safety::read_log(limit) {
         let Some(time) = parse_utc(&d.time) else { continue };
-        let ok = d.outcome == "recycled";
+        let gone = d.outcome == "deleted permanently";
+        let ok = d.outcome == "recycled" || gone;
         v.push(Entry {
             time,
             kind: if ok { "deleted".into() } else { "not deleted".into() },
@@ -128,7 +129,11 @@ pub fn read(limit: usize) -> Vec<Entry> {
             bytes: if ok { d.bytes } else { 0 },
             before: d.bytes,
             after: 0,
-            note: if ok { format!("to the Recycle Bin · {}", d.category) } else { d.outcome },
+            note: match (ok, gone) {
+                (true, false) => format!("to the Recycle Bin · {}", d.category),
+                (true, true) => format!("deleted permanently (not in the Recycle Bin) · {}", d.category),
+                _ => d.outcome,
+            },
         });
     }
     if let Some(text) = log_path().and_then(|p| std::fs::read_to_string(p).ok()) {

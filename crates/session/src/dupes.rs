@@ -113,6 +113,25 @@ fn full_hash(path: &Path, cancel: &AtomicBool, p: &Progress) -> Option<[u8; 32]>
     Some(*h.finalize().as_bytes())
 }
 
+/// Full BLAKE3 of each path (hex), for the compare view's "verify now".
+/// None for a file that couldn't be read (locked, gone, online-only).
+/// Online-only cloud files are skipped, never downloaded.
+pub fn hash_paths(paths: &[String], cancel: &AtomicBool) -> Vec<Option<String>> {
+    let p = Progress::default();
+    paths
+        .iter()
+        .map(|path| {
+            let path = Path::new(path);
+            let m = std::fs::metadata(path).ok()?;
+            // FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | OFFLINE | RECALL_ON_OPEN
+            if m.file_attributes() & (0x0040_0000 | 0x1000 | 0x0004_0000) != 0 {
+                return None;
+            }
+            full_hash(path, cancel, &p).map(|h| h.iter().map(|b| format!("{b:02x}")).collect())
+        })
+        .collect()
+}
+
 /// Fingerprints from an earlier search, by lowercased path: valid while
 /// the file's size and last-write time are the same.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
