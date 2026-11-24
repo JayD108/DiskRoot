@@ -2,6 +2,34 @@
 
 **DiskRoot {{VERSION}}**: a fast disk space analyzer for Windows 10/11. It shows what fills your drive, what each thing is, and whether it's safe to delete.
 
+## New in 0.7.1
+Everything from using 0.7.0 every day: whole pages instead of small popups, a duplicate manager you can act on, and clearer first steps.
+
+**Workspace tabs**
+- **Tabs under the toolbar:** Storage overview · Duplicates & same names · Large files · Drive status · Review marked · Activity (**Ctrl+1 … Ctrl+6**). Each one fills the window. Lists scroll on their own, and a page scrolls as a whole in a short window, so no button is ever cut off. Scroll bars are always visible.
+- **Every option in one place:** menus no longer repeat what a tab, the toolbar or the map's style menu already does. Menus and dialogs scroll when they're taller than the window.
+- **Ctrl+Shift+D** switches dark / light from anywhere, and is remembered (no flash of the wrong theme at start).
+
+**Duplicates & same names**
+- **Identical files:** byte-for-byte copies (BLAKE3), with which copy to keep suggested per set. Repeat searches skip files that haven't changed, and every search is saved, so you can come back to it.
+- **Same names:** files that share a name in different folders, whatever is inside, with what's known about their contents (identical, different, or not compared yet).
+- **Compare side by side:** folder, exact size in bytes, created and modified time, and contents, with differences highlighted. **Verify now** reads them again in full. Explorer, Open (photos, videos, music and documents only) and Map for each copy.
+- **Delete now, review, or mark for later:** tick copies and delete them, send them to Review, or put them on a **Marked for later** list that stays on your PC across restarts.
+- **Delete permanently (optional):** the confirmation can skip the Recycle Bin. It's off by default, needs a second tick ("I understand this can't be undone"), and every safety check still runs.
+
+**Pages for what were dialogs**
+- **Drive status:** health, who's writing, size history and past scans, as tabs of one page.
+- **Large files:** the 500 biggest files and all file types, with mark, Explorer and Map.
+- **Review marked:** every marked item with its safety label, ticked to delete or not, before the confirmation.
+- **Activity:** what you deleted and compressed through DiskRoot, and when. Deletions still in the Recycle Bin get a **Restore** button.
+
+**Clearer first steps**
+- **Start screen:** one card per drive with space, health and how much is labelled safe to clear; nearly full drives first. A 3-line welcome instead of a wall of text.
+- **Home says why the drive is full** in one sentence, shows **space you can't see** as folders (hibernation, page and swap files), and warns when a drive **grew suddenly** since the previous scan, with where.
+- **The map opens in Reclaimable colours** when a scan finds 1 GB or more that's safe to clear (until you pick colours yourself).
+- **Cancel (and Esc) on every scan**, with a real progress bar for whole drives. Map shape, grouping and 2.5D moved into one menu above the map; RAM / CPU only when you turn on View → Show resource use.
+- **Never crashes silently:** a bug writes a local report (no file names from your drive) and says so; plain sentences for common Windows errors; a greyed Delete says why.
+
 ## New in 0.7.0
 A new window, designed as "DiskRoot Studio", and a map that answers more questions. Still one small exe, offline, read-only scanning.
 

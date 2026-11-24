@@ -2,7 +2,7 @@
 
 [← Back to README](../README.md) · How the engine works inside: [HOW-IT-WORKS.md](HOW-IT-WORKS.md) · Safety details: [SECURITY-AND-PRIVACY.md](SECURITY-AND-PRIVACY.md)
 
-This page explains every feature of DiskRoot 0.2: **what it does, how to use it, and what happens underneath.** The second half is for people who want to build or change DiskRoot.
+This page explains every feature of DiskRoot 0.7: **what it does, how to use it, and what happens underneath.** The second half is for people who want to build or change DiskRoot.
 
 **Contents**
 1. [Scanning](#1-scanning)
@@ -55,15 +55,17 @@ This page explains every feature of DiskRoot 0.2: **what it does, how to use it,
 ## 2. Seeing where the space goes
 
 ### The Studio window
-- **Layout:** the map in the middle, the folder list on the left, the **Inspector** under the map (what the selected item is, whether it's safe to delete, its size history, and Compress / Recycle Bin). Drag the edges to resize; **Ctrl+B** / **Ctrl+J** (or View) minimize the list / the Inspector; DiskRoot remembers that.
+- **Workspace tabs** under the toolbar: **Storage overview** (the map, list and Inspector; Home lives here too) · **Duplicates & same names** · **Large files** · **Drive status** · **Review N marked** (when something is marked) · **Activity**. **Ctrl+1 … Ctrl+6** switch between them, Esc goes back to the overview. Each tab fills the window; its lists scroll on their own, and in a short window the page scrolls as a whole so no button is cut off. Every option lives in one place: menus don't repeat what a tab, the toolbar or the map's style menu does.
+- **Layout:** the map in the middle, the folder list on the left, the **Inspector** under the map (what the selected item is, whether it's safe to delete, its size history, and Compress / Recycle Bin). Drag the edges to resize; **Ctrl+B** / **Ctrl+J** (or View → Folder list / Inspector) minimize the list / the Inspector; DiskRoot remembers that.
 - **Focus (F):** only the map; Esc brings the rest back.
 - **Command palette (Ctrl+K, or Commands at the top):** type a few letters: every command, and every folder or file in the scan by name, biggest first. ↑ ↓ Enter.
-- **Top row:** DiskRoot's own RAM and CPU (click for details), Free memory, Focus, Commands, Security. The status bar ends with "Read-only · no network".
+- **Top row:** Focus, Commands, Security (the shield); with View → Show resource use also DiskRoot's own RAM and CPU (click for details) and Free memory. The status bar ends with "Read-only · no network".
 - **Save space badge:** the biggest single way to get space back (not a sum: some ways overlap).
 - **Notices:** what just happened (moved to the Recycle Bin, exported, memory freed, errors) pops up bottom-right for a few seconds.
 - **Guided tour:** after the first scan, six short steps point at the map, its colours, the list, the Inspector, Home and Ctrl+K (Enter / → next, ← back, Esc skips). Once; Help → Take the tour or Ctrl+K shows it again.
 - **Palette suggestions:** an empty Ctrl+K shows grouped suggestions (Start here, See it, Find) before you type.
-- **Looks:** Studio (dark or Daylight) by default; View → Classic look for the warm paper and moss green of earlier versions.
+- **Looks:** Studio (dark or Daylight) by default; View → Classic look for the warm paper and moss green of earlier versions. **Ctrl+Shift+D** (or View, or Ctrl+K) switches dark / light from anywhere; the choice is saved and applied before the window first appears, so there's no flash of the other theme.
+- **Menus and dialogs** scroll when they're taller than the window; dialogs size themselves to the window. Scroll bars are always shown as a thin line and widen under the mouse.
 - **Underneath:** the palette's name search is one pass over the scan with no allocation per name (about 4 ms on a 1.7M-file drive).
 
 ### The tree-table
@@ -74,14 +76,14 @@ This page explains every feature of DiskRoot 0.2: **what it does, how to use it,
 ### The map: sunburst or treemap
 - **Sunburst:** the current folder in the middle, each ring one level deeper, each slice as wide as its share of the space. Labels curve along the rings.
 - **Treemap:** nested rectangles, area = size.
-- **Use it:** click a slice to go into it, click the middle (or press Backspace) to go up. Hover for details. Switch in the toolbar or the View menu.
+- **Use it:** click a slice to go into it, click the middle (or press Backspace) to go up. Hover for details. Switch in the map style menu above the map (or Ctrl+K).
 - **Underneath:** the engine sends the map a *pruned view*: about 6 levels deep, with anything under 0.2% merged into "N small items". The map never draws millions of shapes, and its layout is cached until the window size or the folder changes. It only redraws when you move the mouse or something changes.
 - **Breadcrumbs:** the path to the folder on the map, each level clickable.
 - **Colours: Size / Growth / Reclaimable** (switch in the map's title, or Ctrl+K):
   - **Size:** by category (or by age, below).
   - **Growth:** each folder against the previous scan of the same place: grew a lot, grew, about the same, shrank, new. Files and folders under 1 MB aren't tracked between scans (grey).
   - **Reclaimable:** green = what DiskRoot's rules label *safe to clear*; amber = *check first* places that are still space to get back (caches, Windows leftovers with a Windows cleanup tool). Documents, Downloads and other personal folders are "check first" too, but they aren't reclaimable space, so they're not counted. Each place is counted once; protected places never. About 9 ms for a whole drive.
-- **2.5D (optional, the "2.5D" switch or View → Tilted map):** the same map tilted: treemap boxes stand up by size (square root, so small ones still show), the sunburst becomes a low stepped relief. Flat polygons drawn back to front, no 3D engine; clicks and hover hit what you see.
+- **2.5D (optional, map style menu → Tilted):** the same map tilted: treemap boxes stand up by size (square root, so small ones still show), the sunburst becomes a low stepped relief. Flat polygons drawn back to front, no 3D engine; clicks and hover hit what you see.
   ![The tilted 2.5D treemap of C:\Windows](screenshots/diskroot-25d.png)
 - **Transitions:** a short sweep / grow (220 ms) when the map opens a folder or goes up; it redraws only while it moves. View → Smooth transitions turns it off.
 
@@ -100,12 +102,12 @@ This page explains every feature of DiskRoot 0.2: **what it does, how to use it,
 - Click the strip's text (whole drives) for **Where every GB is**. An SSD with less than 10% free gets a "nearly full" warning.
 
 ### Home (toolbar Home, Ctrl+H)
-- **A page of its own** (not a dialog): Home again, Esc or "Back to the map" returns. A disc of the drive (this scan by category, the rest of the used space, free), four answers you can click (*Where is the space going? What can I safely delete? When does it fill up? Is the drive itself OK?*), then what changed, the top ways to get space back and the biggest items.
+- **A page of its own** (not a dialog): Home again, Esc or the Storage overview tab returns. It opens with one sentence on **why the drive is full** (main kinds, biggest place, what's labelled safe), a **growth alarm** when the drive grew by 1 GB and 1% since the previous scan (with where), and "What doesn't show up as folders?" (hibernation, page and swap files). A disc of the drive (this scan by category, the rest of the used space, free), four answers you can click (*Where is the space going? What can I safely delete? When does it fill up? Is the drive itself OK?*), then what changed, the top ways to get space back and the biggest items.
 - **What it does:** the drive at a glance: used / free with a bar, the "full in ~N days" forecast, drive health, the top 3 changes since the previous scan, the top ways to get space back (and what compressing old data could save), and the 5 biggest items. Each opens its detail with one click (the tree, What changed, Save space, Size history, Drive health, Where every GB is). It opens when DiskRoot starts with a remembered scan ("Show this when DiskRoot starts" turns that off).
 - **Underneath:** built on a worker thread from a cheap copy of the scan (its big parts are shared, not copied), like Save space now: about 0.2 s on a whole 1.7M-file drive that no longer freezes the window.
 
 ### Keyboard and screen readers
-- **Help → Keyboard shortcuts** lists them: Ctrl+K, F, Ctrl+B, Ctrl+J, F5, Ctrl+F5, Ctrl+H, Ctrl+F, arrows, Enter, Backspace, Space / Ctrl+click to mark, Delete, Esc.
+- **Help → Keyboard shortcuts** lists them: Ctrl+K, F, Ctrl+B, Ctrl+J, F5, Ctrl+F5, Ctrl+H, Ctrl+1…6, Ctrl+Shift+D, Ctrl+F, arrows, Enter, Backspace, Space / Ctrl+click to mark, Delete, Esc.
 - Tree rows, the map ("Sunburst map of C:\. The biggest items are listed below it and in the tree") and every legend entry ("AI & data: 639 GB (42%)") have names for screen readers (checked with Windows UI Automation).
 
 ---
@@ -149,7 +151,7 @@ Windows, Program Files, ProgramData, user profile roots, the Recycle Bin, NTFS m
 - **What it does:** after a rescan, lists the folders that grew or shrank, e.g. `projects\app\node_modules +612 MB`, and shows a **Change** column in the tree.
 - **Underneath:** the two folder-size lists are compared. DiskRoot reports the deepest folder where a change really happened (at least 1 MB or 0.1% of the total), not every parent above it.
 
-### Size history (View → Size history)
+### Size history (Drive status → Size history)
 - **What it does:** a chart of the drive's used space (or a folder's size) over time, **what grew** in the last day, week or month (the folders where it really happened, like What changed), and for drives a forecast: "At the pace of the last 21 days (+1.2 GB a day), C: would be full in about 40–70 days." The details pane shows a small chart for the selected folder and "+2.1 GB in 7 days". **Clear history** deletes it.
 - **Forecast, honestly:** only for whole drives, only after at least a week of scans (on at least 4 days). It uses the drive's free space at the last scan of each day over up to 60 days, which is exact and the same for Fast scan and folder walk. Rare sudden jumps (one big download) are left out of the pace and the sentence says so; the trend is a Theil-Sen slope (the median of all pairwise slopes), and the range comes from its quartiles. Never an exact date. "Isn't filling up" when used space is flat or shrinking; "more than 2 years" when it's far away.
 - **Underneath:** `<key>.hist` next to the remembered scan, written after every remembered scan (in the app and by scheduled scans). A full folder list of C: is ~39 MB, so the history keeps only folders of **1 MB or more** and, per scan, only those whose size changed. Measured on C: (307k folders, 26k of them ≥ 1 MB): 2.7 MB for the first scan, ~3 KB for each scan after; adding a scan takes ~13 ms, loading ~20 ms. Thinning keeps every scan for 2 days, the last of each day for 60 days and the last of each week after that, with a hard cap of 16 MB per root (a simulated month of 4-hourly scans on a C:-sized drive: 1.5 MB). Loaded with a strict, fuzz-tested loader.
@@ -167,8 +169,8 @@ Windows, Program Files, ProgramData, user profile roots, the Recycle Bin, NTFS m
 
 ## 5. Finding space
 
-### Largest files & file types (View menu)
-- The 100 biggest files on the drive, with a search box, and sizes per file extension. Click a file to show it in the tree. One pass over the scan, nothing is read from disk.
+### Large files (tab)
+- The 500 biggest files in the scan, with a search box, and sizes per file extension, each in its own scrolling list. Tick a file to mark it for Review; Explorer and Map per file. One pass over the scan, nothing is read from disk.
 
 ### Leftovers (View → Leftovers)
 Things that are often left behind, biggest first:
@@ -177,8 +179,13 @@ Things that are often left behind, biggest first:
 - **Possibly left over app data:** big folders in AppData or ProgramData that no installed or running program matches and that haven't changed for 90+ days. **These are hints only:** the evidence is shown, and they're never marked or labelled safe, because AppData can hold settings or saved games.
 - **Mark the downloads for review** marks only the Downloads items, for one confirmation.
 
-### Duplicate finder (View → Find duplicate files)
-- **What it does:** finds identical files and how much space the extra copies use. **Mark extra copies** keeps the original-looking copy of each set (not named "copy" or "(1)", not in a backup or Downloads folder) and marks the rest.
+### Duplicates & same names (tab)
+- **Identical files:** finds byte-for-byte copies and how much space the extra copies use. Per set, the copy to keep is suggested (not named "copy" or "(1)", not in a backup, old or Downloads folder); pick another, or a rule for every set (original-looking, newest, oldest, shortest path). Filter by name and kind (photos, videos, music, documents, archives). Tick copies, then **Delete N now…** (the usual confirmation), **Review N and remove…**, or **Mark N for later**.
+- **Same names:** files with the same name (ignoring case) in different folders, whatever is inside, at least a size you pick. Each file gets a contents line: "Contents A · identical to 1 other" or "different from the others", known from Verify now, from the identical-files search, or from a size no other file in the set has; otherwise "not compared yet". Sets are badged *has identical copies*, *different contents* or *same name*. Tick files to delete, review or mark for later.
+- **Compare side by side** (both tabs): one column per copy with name, folder, exact size in bytes, created, modified (local time), contents and status; values that differ are highlighted. Explorer, Map, and **Open** for photos, videos, music and documents (never programs, scripts or shortcuts).
+- **Verify now:** reads the files of the set in full again (BLAKE3) and says whether they still match, changed since the search, or couldn't be read. Online-only files are skipped.
+- **Marked for later:** files you aren't sure about, saved in `%LOCALAPPDATA%\DiskRoot\later.json` (path, size, when, why) and still there after a restart. Filter, tick, open the folder, take them off the list, or delete / review them. Ones that no longer exist are shown and can be taken off in one click.
+- **Similar folders** and **Past searches** (the last 10 searches per place, saved on this PC) are tabs of the same page.
 - **Underneath:** the only feature that reads file contents, and only when you start it:
   1. Files of the same size (from the scan; no file opened yet).
   2. Hardlinks (one file with several names) are recognised and never counted as copies.
@@ -200,11 +207,13 @@ Things that are often left behind, biggest first:
   1. **Refused right away:** protected places, folders containing them, the scan root, and names Windows could silently change into another file (ending in a dot or space, device names like `CON`, paths of 260+ characters).
   2. **When the dialog opens:** DiskRoot records the file identity (volume + file ID) of the item and of every folder up to the scan root.
   3. **When you confirm:** it re-opens every folder on the way and checks those identities again, and keeps the folders open so nothing can rename or swap them, until Windows has moved the item to the Recycle Bin.
-  4. **Logged:** recycled, cancelled or refused, with size and time (File → Deletion history).
+  4. **Logged:** recycled, deleted permanently, cancelled or refused, with size and time (the Activity tab).
+- **Delete permanently (optional, the confirmation for several items):** a tick that skips the Recycle Bin, off by default, plus a second tick "I understand this can't be undone". All the checks above still run; the item is then removed with Windows' shell without the undo flag and logged as "deleted permanently" (no Restore for it).
 - **Warnings that need a tick:** OneDrive folders (deleting also deletes in the cloud), Git repositories inside (unpushed work), very large deletes (10 GB+ or 50,000+ files), USB or network drives (may have no Recycle Bin), and **a running program that uses the place** (e.g. Spotify for its cache).
 
 ### Several at once
-- **Ctrl+click** or **Space** marks items; **Delete** reviews all marked items in one confirmation. Each item gets the full checks above, and items inside another marked folder are skipped.
+- **Ctrl+click** or **Space** marks items; **Delete** opens **Review marked** (a tab): every marked item with its safety label, ticked to delete or not, then one confirmation. Each item gets the full checks above, and items inside another marked folder are skipped. Only the items that were handled leave the marks.
+- **Activity (tab):** what you deleted and compressed through DiskRoot and your duplicate searches, with local times and what changed since your last visit. A deletion still in the Recycle Bin gets **Restore** (moved back from the bin, never over an existing file).
 
 ### Mark all (for sub-types)
 - **What it does:** on a sub-type in the Category view (right-click, or the button in the details pane), e.g. *node_modules* or *Build output*, marks **every place a "safe to clear" rule matched**, then you review them in one dialog.
@@ -238,7 +247,7 @@ All opt-in, and all done by Windows' own tools.
 - **What it does:** one window with two lists, worked out from the scan in well under a second (no file is opened):
   - **Compress:** folders and big files that haven't changed or arrived for 1 month, 3 months, 6 months (default) or a year and would save at least 100 MB, biggest saving first. The highest such folder is listed, not everything inside it. Each row shows the rough saving with Fast, the size on disk and the age of the newest file; **Compress…** opens the usual dialog with the suggested level (Maximum for things untouched for a year, otherwise Fast).
   - **Other ways:** caches and temporary files, build folders (`node_modules`, `target`, venvs) in projects not changed for 6 months, AI model stores, the Recycle Bin, the hibernation file, previous Windows and upgrade files, restore points, big files that won't compress and haven't changed for a year (move them), WSL/Docker disks (Compact…), OneDrive files kept on the PC, likely folder copies, installers in Downloads, duplicates, WinSxS and Compact OS. Each says how; some open the right tool or let you mark the safe places for the usual delete review.
-- **Use it:** **Save space** in the toolbar, or **View → Ways to save space…**. Nothing is changed or deleted from this window.
+- **Use it:** **Save space** in the toolbar. Nothing is changed or deleted from this window.
 - **Underneath:** `crates/session/src/savings.rs`. "Not changed" is when the newest file inside last changed **or arrived on this PC** (the later of last-modified and created): a download or unpacked dataset keeps its author's modified date, often years older than the download. Folders' own dates are ignored, and Windows doesn't keep reliable last-opened dates, so DiskRoot never says "unused". Both scanners read the arrival date at no extra cost; saved scans gained it in index format v3 (older ones still load, without it). Uses the same per-file rules as the Compress dialog, so both agree. A folder named "cache" inside your own files is never offered as safe. Estimates come from measured ratios per file type ([BENCHMARKS.md → Compression](BENCHMARKS.md#compression)); Fast is counted as 85% of Maximum's saving (measured median).
 
 ### Scheduled scans
@@ -248,24 +257,24 @@ All opt-in, and all done by Windows' own tools.
 - **Underneath:** a Windows Task Scheduler task for your account (`DiskRoot scheduled scan (<you>)`), least privilege, created without admin. It runs `diskroot.exe --scheduled-scan`: no window, Windows' background mode (low CPU, disk and memory priority), one run at a time, at most 1 hour, not on battery unless you allow it. Each run is a normal read-only folder walk (never Fast scan: that needs admin and stays something you start in the window), saves the result like the app does, appends one line to `%LOCALAPPDATA%\DiskRoot\scheduled-scans.jsonl`, and exits, so nothing stays in memory between runs. Measured on C: (1.68M files): 5.9–6.4 s, 265 MB peak memory while it runs, 0 between runs; each run saves about 44 MB (compressed). The "what changed while you were away" baseline is a second name (hardlink) of the snapshot, so keeping it writes nothing. The recommended interval also keeps DiskRoot's own SSD writes under about 1 GB a day (every 2 h for C:, about 0.5 GB a day). Turning it off, or uninstalling DiskRoot, removes the task.
 - **Warnings (in the same dialog):** after a background scan, a Windows notification when a scanned drive has less free space than you chose (default 10 GB, or never) or when what's scanned grew by more than N GB in a day (default never), naming the folder that grew. At most one per reason per day (`%LOCALAPPDATA%\DiskRoot\warnings.json`). The scan shows it for ~10 s with its own icon and then exits: no tray icon stays, nothing keeps running. The next time you open DiskRoot it repeats the warning.
 
-### Drive health (View → Drive health, or Home → "Is the drive itself OK?"): a page
+### Drive health (Drive status tab, or Home → "Is the drive itself OK?")
 - **What it does:** for every drive, what it reports about itself, in plain words: "Good: 1% of rated life used", data written and read, powered-on hours, temperature (and time spent too hot), spare blocks, media errors, unsafe shutdowns, TRIM support, and whether Windows sends TRIM. Problems become one sentence ("Back up now. The drive has switched itself to read-only."). The drive strip at the bottom warns when an SSD has less than 10% free (SSDs get slower and wear faster when nearly full). Also `droot health [--json]`.
 - **Underneath:** NVMe drives' standard SMART / health log (log page 2) through `IOCTL_STORAGE_QUERY_PROPERTY`, with the disk opened with **no access rights** (it can't read a single sector), so no admin is needed (measured on Windows 11). Model, firmware, bus, SSD or not (seek penalty) and TRIM support come from the same kind of storage queries; Windows' TRIM setting from the registry (`DisableDeleteNotification`). SATA and USB drives' SMART needs admin and comes in a later version; until then they say so. "Rated life used" is the drive's own estimate; "written" is what Windows sent to it (the flash may receive a bit more or less).
 - **Over time:** DiskRoot keeps one small note per drive per day (`%LOCALAPPDATA%\DiskRoot\health.jsonl`: data written/read, % used, hours, temperature, errors), taken when it scans, when you open Drive health, and by scheduled scans. From it: **writes per day** (last 30 days, with a small chart) and a **life estimate**. The drive reports wear in whole percent, so the estimate waits until that number moves (then a range like "roughly 5–16 years") and otherwise says how long it hasn't moved ("Wear hasn't moved in 40 days: more than 11 years of rated life left"); before a month: "too early to tell". Never a date.
 - **What you'd lose:** with a whole drive scanned, Drive health lists what on it can't be downloaded or rebuilt again (documents, photos/videos/music, your code projects, datasets you marked as yours) with sizes, and says to keep a copy; in warning colour when the drive's health isn't Good. DiskRoot can't see your other backups, so it says "unless you have a copy somewhere else". OneDrive folders are their own category and not counted.
 - **Weekly report (Scheduled scans, off by default):** once a week, one notification: growth of what's scanned, writes per day and each drive's health.
 
-### Who's writing (View → Who's writing)
+### Who's writing (Drive status → Who's writing)
 - **What it does:** the programs writing right now (every 2 s while the window is open), with totals split into "while you used the PC" and "while idle" (no key or mouse for 5 minutes), next to each drive's own write counter. **While you were away:** each scheduled scan first measures 30 s of writes, so programs that write while nobody uses the PC (like the AMD driver bug of Nov 2026) show up with their average idle rate and "≈ N GB a day". **Folders changed most often:** with live updates on, how many changes Windows reported per folder while DiskRoot was open. Also `droot writes [--secs N] [--json]`.
 - **Underneath:** one `NtQuerySystemInformation(SystemProcessInformation)` call lists every process with its bytes written since it started (no process is opened; the buffer is parsed with every offset checked). It counts all writes a program makes (files, pipes, some network), so it's called "writes" and shown beside the drive counter (`IOCTL_DISK_PERFORMANCE` on a no-access handle). Idle from `GetLastInputInfo`. All without admin. The scheduled-scan log keeps only the top 5 programs of each 30-s sample. Tested with a fake writer (2 MB/s to a temp file): it topped the list at 2.00 MB/s, while the drive counter showed far less, because rewriting the same small file mostly stays in Windows' memory cache; that's why both are shown.
 - **Idle-write warning (Scheduled scans, on by default when scheduled scans are on):** a notification when a program keeps writing while the PC is idle at a pace of more than 10 GB a day (5/20/50 or never), in **two background checks in a row** (so a one-off update or backup doesn't warn) and at least **3x its usual idle pace**. Once a day per program.
 - **Known offenders:** a small list inside the app of programs and drive firmware known to wear SSDs fast, each checked against public reports (links shown on hover, with the date checked): AMD's `atieclxx.exe` (Nov 2026, fix in Adrenalin 26.11.1) and Samsung 990 PRO firmware 0B2QJXD7 (2023, fixed by 1B2QJXD7). They're marked in Who's writing, Drive health and warnings. DiskRoot explains what to do; it never stops services or changes firmware. New entries need sources: see docs/HELP-WANTED.md.
 - **Settings that write a lot (advice only):** hibernation file size (and `powercfg /h off` if you never hibernate), page file; DiskRoot changes nothing.
-- **Log files that keep growing:** View → Size history lists `.log`/`.etl` files (10 MB or more) that grew in each of the last 3+ scans (noted per scan in `<key>.logs.json`, last 8 scans, at most 300 files).
+- **Log files that keep growing:** Drive status → Size history lists `.log`/`.etl` files (10 MB or more) that grew in each of the last 3+ scans (noted per scan in `<key>.logs.json`, last 8 scans, at most 300 files).
 - **Compression write cost:** the Compress dialog says how much it writes to the SSD once (the compressed copy).
 
 ### DiskRoot's own memory and CPU
-- **What it does:** the status bar shows how much RAM and CPU DiskRoot itself uses right now ("DiskRoot 284 MB · 1% CPU"). Click it (or **Help → Memory and CPU…**) to see what holds the memory (names, sizes and dates, folder structure, categories) and to change how DiskRoot uses your PC.
+- **What it does:** with **View → Show resource use**, the top row shows how much RAM and CPU DiskRoot itself uses right now. Click it (or **Help → Memory and CPU…**) to see what holds the memory (names, sizes and dates, folder structure, categories) and to change how DiskRoot uses your PC.
 - **Free memory now:** closes the scan on screen. It stays saved on this PC and reopens in about a second from the start screen. Measured on a full C: drive (2 million items): 284 MB → 124 MB in the app (the rest is the window itself: graphics and fonts); the scan's own memory goes back to Windows completely (166 → 9 MB without a window).
 - **Free memory when minimized for 10 minutes:** the same, automatically.
 - **Scan gently:** the folder walk runs in Windows' background mode (low CPU, disk and memory priority). Measured on C:: another program's 2 GB read + hash took 3.0 s alone, 5.7 s during a normal scan and 3.0 s during a gentle one; the scan took about 8% longer.
@@ -273,7 +282,7 @@ All opt-in, and all done by Windows' own tools.
 
 ### Similar folders
 - **What it does:** lists folders that look like copies (same size, file count and names inside; contents aren't compared) and folders with similar names (same name ignoring case, separators, "- Copy" and versions anywhere; name families like `APALA`, `APALA_dev` next to each other).
-- **Use it:** **View → Similar folders…**; click a folder to show it in the tree. DiskRoot never deletes from this view.
+- **Use it:** Duplicates & same names → **Similar folders**; Explorer or Map per folder, or tick folders to review them for the Recycle Bin.
 - **Underneath:** `crates/session/src/similar.rs`, on the scan in memory (about 0.03 s for a 1.7M-item drive). Windows, Program Files, AppData and package/build caches are not looked into.
 
 ### Compact a WSL or Docker virtual disk (`.vhdx` files)
@@ -301,13 +310,19 @@ All opt-in, and all done by Windows' own tools.
 | Ctrl+K | Command palette: every command and folder |
 | F / Esc | Focus on the map / back |
 | Ctrl+B / Ctrl+J | Minimize or show the folder list / the Inspector |
+| Ctrl+H | Home |
+| Ctrl+1 … Ctrl+6 | Workspace tabs |
+| Ctrl+Shift+D | Dark / light theme |
 
 | File | What's in it |
 |---|---|
 | `%APPDATA%\DiskRoot\settings.json` | Theme, view choices, alerts, last path |
 | `%APPDATA%\DiskRoot\rules.json` | Your custom rules (if you made any) |
 | `%LOCALAPPDATA%\DiskRoot\cache\` | Remembered scans (File → Forget remembered scans deletes them) |
-| `%LOCALAPPDATA%\DiskRoot\deletions.log` | Deletion history |
+| `%LOCALAPPDATA%\DiskRoot\deletions.log`, `activity.log` | Deletion history and other actions (Activity) |
+| `%LOCALAPPDATA%\DiskRoot\duplicates\` | Saved duplicate searches and fingerprints of unchanged files |
+| `%LOCALAPPDATA%\DiskRoot\later.json` | Files you marked for later |
+| `%LOCALAPPDATA%\DiskRoot\crashes\` | Bug reports, if DiskRoot ever hit one (no file names from your drive) |
 | `Documents\DiskRoot\` | CSV exports and cleanup scripts you asked for |
 
 Nothing else is written, and nothing leaves your PC.

@@ -22,6 +22,7 @@
 | v0.5.1 | Fixes from a full audit: compressed saved scans, hardlinks only where reliable, admin warning, honest numbers | Released (unsigned) |
 | v0.6.0 / 0.6.1 | New name DiskRoot (`droot`), new logo | Released (unsigned) |
 | v0.7.0 | Studio window (map-first, docks, Focus, Ctrl+K), map colours Size / Growth / Reclaimable, optional 2.5D map, transitions, Studio look, runs without a graphics driver (own CPU renderer), speed guard | Released (unsigned) |
+| v0.7.1 | Workspace tabs (Duplicates & same names, Large files, Drive status, Review, Activity), duplicate manager (compare side by side, Verify now, mark for later, optional permanent delete), Restore from Activity, start screen cards, why-is-it-full / growth alarm / hidden space on Home, Cancel on every scan, crash reports, Ctrl+Shift+D theme | Released (unsigned) |
 | 1.0 | Signed, tested on more hardware | Planned |
 
 ## Done

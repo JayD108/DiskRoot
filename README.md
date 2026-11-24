@@ -66,8 +66,8 @@ What that means on a real PC (the developer's laptop: a 1.5 TB drive with 1.7 mi
 <b>Home:</b> the drive at a glance, in four answers you can click.
 </td>
 <td valign="top">
-<img src="docs/screenshots/diskroot-dark.png" alt="Sunburst coloured by how long ago files changed">
-<b>Coloured by age:</b> what hasn't been touched in years stands out.
+<img src="docs/screenshots/diskroot-duplicates.png" alt="Duplicates and same names: two identical copies compared side by side, with folder, exact size, dates and verified BLAKE3 contents">
+<b>Duplicates, compared before you delete:</b> folder, exact size, dates and contents side by side. Delete, review, or mark for later.
 </td>
 </tr>
 </table>
@@ -77,7 +77,7 @@ What that means on a real PC (the developer's laptop: a 1.5 TB drive with 1.7 mi
 | | |
 |---|---|
 | 🔎 **Know what everything is** | Every file gets a category (*Apps & Games, Dev stuff, AI & data, Media, System, Temp & caches…*) and a label: **safe to clear**, **check first** or **don't delete by hand**. It recognises code projects, AI models, datasets, and which program or Steam/Epic game a folder belongs to. |
-| 🧹 **Get space back, safely** | **Save space** lists caches, old build folders, model stores, Recycle Bin, hibernation file, previous Windows, WSL/Docker disks, duplicates, and what to compress. Deleting goes to the Recycle Bin, after you confirm; Windows and system folders are locked. |
+| 🧹 **Get space back, safely** | **Save space** lists caches, old build folders, model stores, Recycle Bin, hibernation file, previous Windows, WSL/Docker disks, duplicates, and what to compress. Deleting goes to the Recycle Bin after you confirm (permanently only if you tick that); Windows and system folders are locked. |
 | 💚 **Drive health** | The SSD's own report in plain words: rated life used, data written, temperature, errors. Writes per day, an honest life estimate, and **which programs write to your drive**, also while idle. |
 | 🕰️ **Keep watch** | Optional **scheduled scans** (no admin, no window: scan and exit), **what changed while you were away**, and *"C: would be full in about 40–70 days"*. |
 | 🗜️ **Built-in compression** | Windows' own file compression on many files at once (about 5–9× faster than `compact.exe` in our test). Same files, less space, undoable. |
@@ -89,9 +89,11 @@ What that means on a real PC (the developer's laptop: a 1.5 TB drive with 1.7 mi
 - **Where every GB is:** the drive's used space next to what the scan counted, the folders a normal scan can't read, and what the rest is.
 - **Fast scan:** with admin, a short-lived helper reads the drive's file table directly: a whole NTFS drive in 1–2 s. The window itself never needs admin.
 - **Instant reopen:** your last scan opens in under a second; **What changed** points at the exact folders that grew or shrank.
-- Largest files and types, duplicate finder, similar folders (`project`, `project_v2`, `project - Copy`), leftovers of uninstalled programs, live updates while open, size alerts.
+- **Duplicates & same names:** identical files (BLAKE3) and files that only share a name, compared side by side (folder, exact size, created, modified, contents), then deleted, reviewed or **marked for later** (kept across restarts).
+- **Drive status, Large files, Review marked, Activity:** each a tab of its own; Activity can **restore** what's still in the Recycle Bin.
+- Similar folders (`project`, `project_v2`, `project - Copy`), leftovers of uninstalled programs, live updates while open, size alerts, and a warning when a drive grows suddenly.
 - **Teach DiskRoot:** right-click a folder → *This is…* (my project, a dataset, a game…), or write your own rules.
-- **Studio window:** the map in the middle, a folder list and an Inspector you can resize or minimize, Focus mode, breadcrumbs, notices. Studio look (dark or Daylight) or the Classic look.
+- **Studio window:** workspace tabs (Storage overview, Duplicates, Large files, Drive status, Review, Activity), the map in the middle, a folder list and an Inspector you can resize or minimize, Focus mode, breadcrumbs, notices. Studio look (dark or Daylight, **Ctrl+Shift+D**) or the Classic look.
 - Its own RAM and CPU at the top, free its memory with one click, gentle scanning, screen-reader names for the map and the palette, a six-step guided tour.
 
 Every feature, with what happens underneath: [FEATURES-AND-DEVELOPMENT.md](docs/FEATURES-AND-DEVELOPMENT.md).
@@ -99,9 +101,9 @@ Every feature, with what happens underneath: [FEATURES-AND-DEVELOPMENT.md](docs/
 
 ### Keyboard
 
-| <kbd>Ctrl</kbd>+<kbd>K</kbd> | <kbd>F5</kbd> | <kbd>Ctrl</kbd>+<kbd>F5</kbd> | <kbd>Ctrl</kbd>+<kbd>H</kbd> | <kbd>F</kbd> | <kbd>Ctrl</kbd>+<kbd>B</kbd> / <kbd>J</kbd> | <kbd>Ctrl</kbd>+<kbd>F</kbd> |
-|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| find anything | scan | fast scan | Home | focus the map | hide list / Inspector | filter by name |
+| <kbd>Ctrl</kbd>+<kbd>K</kbd> | <kbd>F5</kbd> | <kbd>Ctrl</kbd>+<kbd>F5</kbd> | <kbd>Ctrl</kbd>+<kbd>H</kbd> | <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>6</kbd> | <kbd>F</kbd> | <kbd>Ctrl</kbd>+<kbd>B</kbd> / <kbd>J</kbd> | <kbd>Ctrl</kbd>+<kbd>F</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> |
+|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| find anything | scan | fast scan | Home | tabs | focus the map | hide list / Inspector | filter by name | dark / light |
 
 ## Measured and safe
 
@@ -130,9 +132,9 @@ Method: [BENCHMARKS.md](docs/BENCHMARKS.md)
 |---|---|
 | 🌐 **Offline** | No network code at all. Measured: zero connections during a full scan. No accounts, no telemetry. |
 | 👀 **Read-only scanning** | A scan never changes your files. DiskRoot only saves its own scans in `%LOCALAPPDATA%\DiskRoot`. |
-| ✋ **Nothing without your OK** | Delete → Recycle Bin after you confirm, re-checked on disk. Compress is undoable. Windows and Program Files are locked. |
+| ✋ **Nothing without your OK** | Delete → Recycle Bin after you confirm, re-checked on disk (permanent delete only if you tick it, twice). Compress is undoable. Windows and Program Files are locked. |
 | 🔐 **Least privilege** | The window doesn't need admin. Only a short-lived, locked-down helper reads the raw drive, after the Windows prompt. |
-| 🧪 **Tested every release** | 150 tests, 2 million fuzz rounds per file parser, and a real install / upgrade / uninstall on a clean Windows machine. |
+| 🧪 **Tested every release** | 164 tests, 2 million fuzz rounds per file parser, and a real install / upgrade / uninstall on a clean Windows machine. |
 
 </td>
 </tr>
@@ -145,7 +147,8 @@ Details: [SECURITY-AND-PRIVACY.md](docs/SECURITY-AND-PRIVACY.md) · report a pro
 1. **[Download `diskroot-setup.exe`](https://github.com/JayD108/DiskRoot/releases/latest/download/diskroot-setup.exe)** and run it.
 2. Open **DiskRoot**, pick a drive, press **Scan** (F5), or **Fast scan** (Ctrl+F5) for a whole drive.
 3. Click anything: the Inspector explains it. Press **Save space** for ways to get space back.
-4. Want it to keep watch? **View → Scheduled scans.**
+4. Found copies? The **Duplicates & same names** tab compares them before anything is deleted.
+5. Want it to keep watch? **View → Scheduled scans.**
 
 <details>
 <summary>What the installer puts on your PC · portable use · silent install · upgrading</summary>
@@ -190,7 +193,7 @@ No. DiskRoot has no network code: no accounts, no telemetry, no update checks. W
 <details>
 <summary><b>Can it delete something important by accident?</b></summary>
 
-Scanning only reads. Deleting is always your choice: it goes to the Recycle Bin after a confirmation, each item is re-checked on disk first, and Windows and Program Files are locked, even under other spellings of the path.
+Scanning only reads. Deleting is always your choice: it goes to the Recycle Bin after a confirmation, each item is re-checked on disk first, and Windows and Program Files are locked, even under other spellings of the path. Deleting permanently (skipping the Recycle Bin) only happens if you tick it in the confirmation and tick again that you understand it can't be undone.
 </details>
 
 <details>

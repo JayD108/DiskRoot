@@ -175,9 +175,9 @@ Size alerts are checked after every scan and every live update. Each alert store
 3. **Recycle** (when you confirm):
    - Re-open every folder on the way, from the top down, and compare identities. Keep them **open without delete-sharing**, so none of them can be renamed, deleted or swapped for a junction until the move is done.
    - Check again that the item isn't Windows or Program Files by identity, that it still exists, is the same type, and no folder on its path became a link since the scan.
-   - Let Windows move it to the Recycle Bin.
+   - Let Windows move it to the Recycle Bin (or, only when you ticked "Delete permanently" and confirmed it, delete it without the Recycle Bin: same checks, no undo flag).
    - Release the folders.
-4. **Log** the result (recycled, cancelled or refused) in `deletions.log`, and update the tree and the category totals.
+4. **Log** the result (recycled, deleted permanently, cancelled or refused) in `deletions.log`, and update the tree, the category totals, the duplicate sets on screen and the "marked for later" list.
 
 ## 8. Windows' own tools
 
